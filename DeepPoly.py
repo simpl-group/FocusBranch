@@ -45,7 +45,7 @@ class AbstractElement:
                              torch.bmm(urp_pos, inputs.bounds.u) + torch.bmm(urp_neg, inputs.bounds.l) + urp.b)
 
     def backsubstitution(self, require_rp=False):
-        if self.bounds is not None:
+        if self.parent is None:
             return
 
         lrp_W, lrp_b, urp_W, urp_b = self.lrp.W, self.lrp.b, self.urp.W, self.urp.b
