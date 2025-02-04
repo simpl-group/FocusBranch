@@ -80,25 +80,30 @@ def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
     ae = DeepPoly.AbstractElement(bounds1)
 
     output = dp_net(ae)
-    lrp, _ = output.backsubstitution(require_rp=True)
+    lrp, urp = output.backsubstitution(require_rp=True)
     initial_lb = output.bounds.l.reshape(-1)  # (batch,)
     lsaliency = lrp.W.transpose(2, 1)  # (batch, x1_neurons, 1)
     bounds2 = compute_x1_bounds_with_saliency(x0, dp_head.W, dp_head.b, eps, lsaliency, False)
+
+    ae.bounds = bounds2
+    output.compute_bounds(lrp, urp, ae)
+    sound_lb = output.bounds.l.reshape(-1)
+
     ae2 = DeepPoly.AbstractElement(bounds2)
     output2 = dp_net(ae2)
     output2.backsubstitution()
-    new_lb = output2.bounds.l.reshape(-1)
+    lb_not_sound = output2.bounds.l.reshape(-1)
+
+    print("Initial lower bounds:\t", initial_lb.tolist())
+    print("New sound lower bounds:\t", sound_lb.tolist())
+    print("Lower bounds not sound:\t", lb_not_sound.tolist())
     
-    bounds3 = compute_x1_bounds_with_saliency(x0, dp_head.W, dp_head.b, eps, lsaliency, True)
-    ae3 = DeepPoly.AbstractElement(bounds3)
-    output3 = dp_net(ae3)
-    output3.backsubstitution()
-    coll_lb = output3.bounds.l.reshape(-1)
-    print(initial_lb)
-    print(new_lb)
-    print(coll_lb)
-    assert all(coll_lb >= new_lb)
-    return all(new_lb > 0)
+    # bounds3 = compute_x1_bounds_with_saliency(x0, dp_head.W, dp_head.b, eps, lsaliency, True)
+    # ae3 = DeepPoly.AbstractElement(bounds3)
+    # output3 = dp_net(ae3)
+    # output3.backsubstitution()
+    # coll_lb = output3.bounds.l.reshape(-1)
+    return all(sound_lb > 0)
 
 def get_args():
     parser = argparse.ArgumentParser(
