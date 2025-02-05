@@ -35,37 +35,37 @@ class AbstractElement:
     def from_relational_polyhedra(cls, lrp: RelationalPolyhedra, urp: RelationalPolyhedra, parent: Self) -> Self:
         return cls(None, parent, lrp, urp)
 
-    def compute_bounds(self, lrp: RelationalPolyhedra, urp: RelationalPolyhedra, inputs: Self) -> Self:
+    def compute_bounds(self, lrp: RelationalPolyhedra, urp: RelationalPolyhedra, init_bounds: Bounds) -> Self:
         lrp_pos = torch.where(lrp.W > 0, lrp.W, torch.zeros_like(lrp.W))
         lrp_neg = torch.where(lrp.W < 0, lrp.W, torch.zeros_like(lrp.W))
         urp_pos = torch.where(urp.W > 0, urp.W, torch.zeros_like(urp.W))
         urp_neg = torch.where(urp.W < 0, urp.W, torch.zeros_like(urp.W))
 
-        self.bounds = Bounds(torch.bmm(lrp_pos, inputs.bounds.l) + torch.bmm(lrp_neg, inputs.bounds.u) + lrp.b,
-                             torch.bmm(urp_pos, inputs.bounds.u) + torch.bmm(urp_neg, inputs.bounds.l) + urp.b)
+        self.bounds = Bounds(torch.bmm(lrp_pos, init_bounds.l) + torch.bmm(lrp_neg, init_bounds.u) + lrp.b,
+                             torch.bmm(urp_pos, init_bounds.u) + torch.bmm(urp_neg, init_bounds.l) + urp.b)
 
     def backsubstitution(self, require_rp=False):
         if self.parent is None:
             return
 
         lrp_W, lrp_b, urp_W, urp_b = self.lrp.W, self.lrp.b, self.urp.W, self.urp.b
-        parent = self.parent
+        current = self.parent
 
-        while parent.parent is not None:
+        while current.parent is not None:
             lrp_posW = torch.where(lrp_W > 0, lrp_W, torch.zeros_like(lrp_W))
             lrp_negW = torch.where(lrp_W < 0, lrp_W, torch.zeros_like(lrp_W))
             urp_posW = torch.where(urp_W > 0, urp_W, torch.zeros_like(urp_W))
             urp_negW = torch.where(urp_W < 0, urp_W, torch.zeros_like(urp_W))
 
-            lrp_b = torch.bmm(lrp_posW, parent.lrp.b) + torch.bmm(lrp_negW, parent.urp.b) + lrp_b
-            urp_b = torch.bmm(urp_posW, parent.urp.b) + torch.bmm(urp_negW, parent.lrp.b) + urp_b
-            lrp_W = torch.bmm(lrp_posW, parent.lrp.W) + torch.bmm(lrp_negW, parent.urp.W)
-            urp_W = torch.bmm(urp_posW, parent.urp.W) + torch.bmm(urp_negW, parent.lrp.W)
+            lrp_b = torch.bmm(lrp_posW, current.lrp.b) + torch.bmm(lrp_negW, current.urp.b) + lrp_b
+            urp_b = torch.bmm(urp_posW, current.urp.b) + torch.bmm(urp_negW, current.lrp.b) + urp_b
+            lrp_W = torch.bmm(lrp_posW, current.lrp.W) + torch.bmm(lrp_negW, current.urp.W)
+            urp_W = torch.bmm(urp_posW, current.urp.W) + torch.bmm(urp_negW, current.lrp.W)
 
-            parent = parent.parent
+            current = current.parent
         
         lrp_wrt_inputs, urp_wrt_inputs = RelationalPolyhedra(lrp_W, lrp_b), RelationalPolyhedra(urp_W, urp_b)
-        self.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs, parent)
+        self.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs, current.bounds)
         if require_rp:
             return lrp_wrt_inputs, urp_wrt_inputs
 

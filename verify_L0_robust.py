@@ -85,8 +85,7 @@ def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
     lsaliency = lrp.W.transpose(2, 1)  # (batch, x1_neurons, 1)
     bounds2 = compute_x1_bounds_with_saliency(x0, dp_head.W, dp_head.b, eps, lsaliency, False)
 
-    ae.bounds = bounds2
-    output.compute_bounds(lrp, urp, ae)
+    output.compute_bounds(lrp, urp, bounds2)
     sound_lb = output.bounds.l.reshape(-1)
 
     ae2 = DeepPoly.AbstractElement(bounds2)
