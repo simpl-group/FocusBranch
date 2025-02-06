@@ -35,7 +35,7 @@ class AbstractElement:
     def from_relational_polyhedra(cls, lrp: RelationalPolyhedra, urp: RelationalPolyhedra, parent: Self) -> Self:
         return cls(None, parent, lrp, urp)
 
-    def compute_bounds(self, lrp: RelationalPolyhedra, urp: RelationalPolyhedra, init_bounds: Bounds) -> Self:
+    def compute_bounds(self, lrp: RelationalPolyhedra, urp: RelationalPolyhedra, init_bounds: Self):
         lrp_pos = torch.where(lrp.W > 0, lrp.W, torch.zeros_like(lrp.W))
         lrp_neg = torch.where(lrp.W < 0, lrp.W, torch.zeros_like(lrp.W))
         urp_pos = torch.where(urp.W > 0, urp.W, torch.zeros_like(urp.W))
@@ -65,9 +65,10 @@ class AbstractElement:
             current = current.parent
         
         lrp_wrt_inputs, urp_wrt_inputs = RelationalPolyhedra(lrp_W, lrp_b), RelationalPolyhedra(urp_W, urp_b)
-        self.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs, current.bounds)
         if require_rp:
             return lrp_wrt_inputs, urp_wrt_inputs
+        else:
+            self.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs, current.bounds)
 
 # Abstract Transformer
 class AffineAT(nn.Module):
@@ -120,9 +121,12 @@ class AffineAT(nn.Module):
         instance.b = torch.zeros(batch_size, 1, 1)
         return instance
 
-    def forward(self, ae: AbstractElement):
+    def forward(self, parent: AbstractElement) -> AbstractElement:
         rp = RelationalPolyhedra(self.W, self.b)
-        return AbstractElement.from_relational_polyhedra(rp, rp, ae)
+        return AbstractElement.from_relational_polyhedra(rp, rp, parent)
+    
+    def __call__(self, parent: AbstractElement) -> AbstractElement:
+        return self.forward(parent)
 
 class ActivationAT(nn.Module):
     def __init__(self):
@@ -136,6 +140,9 @@ class ActivationAT(nn.Module):
         ae.backsubstitution()
         lrp, urp = self.compute_rp(ae.bounds)
         return AbstractElement.from_relational_polyhedra(lrp, urp, ae)
+    
+    def __call__(self, ae: AbstractElement) -> AbstractElement:
+        return self.forward(ae)
 
 class ReLUAT(ActivationAT):
     def __init__(self):
