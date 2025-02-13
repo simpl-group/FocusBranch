@@ -35,7 +35,7 @@ class AbstractElement:
     def from_relational_polyhedra(cls, lrp: RelationalPolyhedra, urp: RelationalPolyhedra, parent: Self) -> Self:
         return cls(None, parent, lrp, urp)
 
-    def compute_bounds(self, lrp: RelationalPolyhedra, urp: RelationalPolyhedra, init_bounds: Self):
+    def compute_bounds(self, lrp: RelationalPolyhedra, urp: RelationalPolyhedra, init_bounds: Bounds):
         lrp_pos = torch.where(lrp.W > 0, lrp.W, torch.zeros_like(lrp.W))
         lrp_neg = torch.where(lrp.W < 0, lrp.W, torch.zeros_like(lrp.W))
         urp_pos = torch.where(urp.W > 0, urp.W, torch.zeros_like(urp.W))
@@ -71,8 +71,18 @@ class AbstractElement:
             self.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs, current.bounds)
 
 # Abstract Transformer
-class AffineAT(nn.Module):
-    def __init__(self, layer:nn.Linear, batch_size: int):
+class AbstractTransformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, parent: AbstractElement) -> AbstractElement:
+        raise NotImplementedError("Subclasses must implement forward method.")
+    
+    def __call__(self, parent: AbstractElement) -> AbstractElement:
+        return self.forward(parent)
+
+class AffineAT(AbstractTransformer):
+    def __init__(self, layer: nn.Linear, batch_size: int):
         super().__init__()
         self.W = layer.weight.detach().unsqueeze(0).expand(batch_size, -1, -1)
         self.b = layer.bias.detach().reshape(1, -1, 1).expand(batch_size, -1, -1)
@@ -110,7 +120,7 @@ class AffineAT(nn.Module):
         return instance
 
     @classmethod
-    def Verifier(cls, true_labels: torch.Tensor, target_label: int, num_labels=10) -> Self:
+    def Marginal(cls, true_labels: torch.Tensor, target_label: int, num_labels=10) -> Self:
         instance = cls.__new__(cls)
         super(AffineAT, instance).__init__()
         batch_size = true_labels.shape[0]
@@ -124,11 +134,8 @@ class AffineAT(nn.Module):
     def forward(self, parent: AbstractElement) -> AbstractElement:
         rp = RelationalPolyhedra(self.W, self.b)
         return AbstractElement.from_relational_polyhedra(rp, rp, parent)
-    
-    def __call__(self, parent: AbstractElement) -> AbstractElement:
-        return self.forward(parent)
 
-class ActivationAT(nn.Module):
+class ActivationAT(AbstractTransformer):
     def __init__(self):
         super().__init__()
 
@@ -140,9 +147,6 @@ class ActivationAT(nn.Module):
         ae.backsubstitution()
         lrp, urp = self.compute_rp(ae.bounds)
         return AbstractElement.from_relational_polyhedra(lrp, urp, ae)
-    
-    def __call__(self, ae: AbstractElement) -> AbstractElement:
-        return self.forward(ae)
 
 class ReLUAT(ActivationAT):
     def __init__(self):
@@ -184,7 +188,7 @@ class ReLUAT(ActivationAT):
         return lrp, urp
 
 class SequentialAT(nn.Sequential):
-    def __init__(self, layers):
+    def __init__(self, layers: AbstractTransformer):
         super().__init__(*layers)
 
     @classmethod
