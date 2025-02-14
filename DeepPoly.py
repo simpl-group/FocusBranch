@@ -46,9 +46,6 @@ class AbstractElement:
                       torch.bmm(urp_pos, init_bounds.u) + torch.bmm(urp_neg, init_bounds.l) + urp.b)
 
     def backsubstitution(self, compute_bounds=True):
-        if self.parent is None:
-            return
-
         lrp_W, lrp_b, urp_W, urp_b = self.lrp.W, self.lrp.b, self.urp.W, self.urp.b
         current = self.parent
 
@@ -145,7 +142,8 @@ class ActivationAT(AbstractTransformer):
         raise NotImplementedError("Subclasses must implement compute_rp method.")
     
     def forward(self, parent: AbstractElement) -> AbstractElement:
-        parent.backsubstitution()
+        if parent.bounds is None:
+            parent.backsubstitution()
         lrp, urp = self.compute_rp(parent.bounds)
         return AbstractElement.from_relational_polyhedra(lrp, urp, parent)
 

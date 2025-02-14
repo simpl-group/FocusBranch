@@ -86,6 +86,26 @@ def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
     
     return all(new_lb > 0)
 
+def Linf_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
+              true_labels: torch.Tensor, target_label: int, collective=False) -> bool:
+    net_head = net[0]
+    if isinstance(net_head, Normalization):
+        net.pop(0)
+        mean = net_head.mean
+        sigma = net_head.sigma
+        x0 = (x0 - mean) / sigma
+        L, U = (0 - mean) / sigma, (1 - mean) / sigma
+    else:
+        L, U = 0, 1
+    x0 = x0.reshape(x0.shape[0], -1, 1)
+    dp_net = DeepPoly.SequentialAT.from_sequential(net, x0)
+    dp_net.append(DeepPoly.AffineAT.Marginal(true_labels, target_label))
+    ae = DeepPoly.AbstractElement(bounds=DeepPoly.Bounds((x0-eps).clamp(L, U), (x0+eps).clamp(L, U)))
+    output = dp_net(ae=ae)
+    output.backsubstitution()
+    print("Initial lower bounds:\t", output.bounds.l.reshape(-1).tolist())
+    return all(output.bounds.l > 0)
+
 def get_args():
     parser = argparse.ArgumentParser(
         description="Verufy L0 robustness of a neural network.",
