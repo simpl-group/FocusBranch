@@ -69,17 +69,17 @@ def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
     dp_net.append(DeepPoly.AffineAT.Marginal(true_labels, target_label))
     output = dp_net(ae=ae1)
 
-    lrp, urp = output.backsubstitution(require_rp=True)
-    output.compute_bounds(lrp, urp, ae1.bounds)
-    initial_lb = output.bounds.l.reshape(-1)  # (batch,)
+    lrp, urp = output.backsubstitution(compute_bounds=False)
+    initial_bounds = DeepPoly.AbstractElement.compute_bounds(lrp, urp, ae1.bounds)
+    initial_lb = initial_bounds.l.reshape(-1)  # (batch,)
 
     ae0 = DeepPoly.AbstractElement()
     ae1.parent = ae0
-    lrp_wrt_x0, urp_wrt_x0 = output.backsubstitution(require_rp=True)
-    coeffiencts_x0 = lrp_wrt_x0.W.transpose(2, 1)  # (batch, x0_neurons, 1)
+    lrp_wrt_x0, urp_wrt_x0 = output.backsubstitution(compute_bounds=False)
+    coeffiencts_x0 = lrp_wrt_x0.W.transpose(2, 1)  # (batch, d0, 1)
     ae0.bounds = compute_x0_bounds(x0, coeffiencts_x0, eps, (L, U))
-    output.compute_bounds(lrp_wrt_x0, urp_wrt_x0, ae0.bounds)
-    new_lb = output.bounds.l.reshape(-1)
+    new_bounds = DeepPoly.AbstractElement.compute_bounds(lrp_wrt_x0, urp_wrt_x0, ae0.bounds)
+    new_lb = new_bounds.l.reshape(-1)
 
     print("Initial lower bounds:\t", initial_lb.tolist())
     print("New sound lower bounds:\t", new_lb.tolist())
@@ -110,6 +110,8 @@ def get_args():
     parser.add_argument("-t", "--target-label", type=int, required=True)
     parser.add_argument("-b", "--batch-size", type=int, required=True)
     parser.add_argument("-c", "--collective", action="store_true")
+    parser.add_argument("-s", "--shuffle", action="store_true")
+    parser.add_argument("-d", "--models-dir", type=str, default="models")
 
     args = parser.parse_args()
     return args

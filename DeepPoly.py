@@ -35,16 +35,17 @@ class AbstractElement:
     def from_relational_polyhedra(cls, lrp: RelationalPolyhedra, urp: RelationalPolyhedra, parent: Self) -> Self:
         return cls(None, parent, lrp, urp)
 
-    def compute_bounds(self, lrp: RelationalPolyhedra, urp: RelationalPolyhedra, init_bounds: Bounds):
+    @staticmethod
+    def compute_bounds(lrp: RelationalPolyhedra, urp: RelationalPolyhedra, init_bounds: Bounds) -> Bounds:
         lrp_pos = torch.where(lrp.W > 0, lrp.W, torch.zeros_like(lrp.W))
         lrp_neg = torch.where(lrp.W < 0, lrp.W, torch.zeros_like(lrp.W))
         urp_pos = torch.where(urp.W > 0, urp.W, torch.zeros_like(urp.W))
         urp_neg = torch.where(urp.W < 0, urp.W, torch.zeros_like(urp.W))
 
-        self.bounds = Bounds(torch.bmm(lrp_pos, init_bounds.l) + torch.bmm(lrp_neg, init_bounds.u) + lrp.b,
-                             torch.bmm(urp_pos, init_bounds.u) + torch.bmm(urp_neg, init_bounds.l) + urp.b)
+        return Bounds(torch.bmm(lrp_pos, init_bounds.l) + torch.bmm(lrp_neg, init_bounds.u) + lrp.b,
+                      torch.bmm(urp_pos, init_bounds.u) + torch.bmm(urp_neg, init_bounds.l) + urp.b)
 
-    def backsubstitution(self, require_rp=False):
+    def backsubstitution(self, compute_bounds=True):
         if self.parent is None:
             return
 
@@ -65,10 +66,10 @@ class AbstractElement:
             current = current.parent
         
         lrp_wrt_inputs, urp_wrt_inputs = RelationalPolyhedra(lrp_W, lrp_b), RelationalPolyhedra(urp_W, urp_b)
-        if require_rp:
-            return lrp_wrt_inputs, urp_wrt_inputs
+        if compute_bounds:
+            self.bounds = AbstractElement.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs, current.bounds)
         else:
-            self.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs, current.bounds)
+            return lrp_wrt_inputs, urp_wrt_inputs
 
 # Abstract Transformer
 class AbstractTransformer(nn.Module):
@@ -143,10 +144,10 @@ class ActivationAT(AbstractTransformer):
     def compute_rp(bounds: Bounds) -> (RelationalPolyhedra):
         raise NotImplementedError("Subclasses must implement compute_rp method.")
     
-    def forward(self, ae: AbstractElement) -> AbstractElement:
-        ae.backsubstitution()
-        lrp, urp = self.compute_rp(ae.bounds)
-        return AbstractElement.from_relational_polyhedra(lrp, urp, ae)
+    def forward(self, parent: AbstractElement) -> AbstractElement:
+        parent.backsubstitution()
+        lrp, urp = self.compute_rp(parent.bounds)
+        return AbstractElement.from_relational_polyhedra(lrp, urp, parent)
 
 class ReLUAT(ActivationAT):
     def __init__(self):
