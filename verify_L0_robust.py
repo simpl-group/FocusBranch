@@ -116,10 +116,10 @@ def get_args():
 
 if __name__ == "__main__":
     args = get_args()
-    net = get_network(args.net)
+    net = get_network(args.net, args.models_dir)
     transform = torchvision.transforms.ToTensor()
     test_dataset = MNIST(root='./data/test', train=False, transform=transform, download=True)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=True, num_workers=2)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=args.shuffle, num_workers=2)
     for images, labels in test_loader:
         pred_labels = net(images).argmax(1)
         if all(pred_labels == labels) and all(pred_labels != args.target_label):
