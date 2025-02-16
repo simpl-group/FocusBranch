@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from typing import Self, Optional
+from typing import Self, Optional, Tuple
 
 torch.set_default_dtype(torch.float32)
 
@@ -23,17 +23,27 @@ class Bounds:
         return cls(other.l.clone(), other.u.clone())
 
 class AbstractElement:
-    def __init__(self, bounds: Optional[Bounds]=None, parent: Optional[Self]=None,
-                 lrp: Optional[RelationalPolyhedra]=None, urp: Optional[RelationalPolyhedra]=None):
-        self.bounds = bounds
+    init_bounds = None
+    def __init__(self,
+                 lrp: Optional[RelationalPolyhedra]=None,
+                 urp: Optional[RelationalPolyhedra]=None,
+                 parent: Optional[Self]=None
+                 ):
         # Lower and upper Relational Polyhedra
         self.lrp = lrp
         self.urp = urp
         self.parent = parent
 
     @classmethod
-    def from_relational_polyhedra(cls, lrp: RelationalPolyhedra, urp: RelationalPolyhedra, parent: Self) -> Self:
-        return cls(None, parent, lrp, urp)
+    def from_input(cls, init_bounds: Bounds) -> Self:
+        cls.init_bounds = init_bounds
+        batch_size, d, _ = init_bounds.l.shape
+        rp = RelationalPolyhedra(torch.eye(d).expand(batch_size, -1, -1), torch.zeros_like(init_bounds.l))
+        return cls(rp, rp, parent=None)
+    
+    def get_bounds(self) -> Bounds:
+        lrp_wrt_inputs, urp_wrt_inputs = self.backsubstitution()
+        return AbstractElement.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs, AbstractElement.init_bounds)
 
     @staticmethod
     def compute_bounds(lrp: RelationalPolyhedra, urp: RelationalPolyhedra, init_bounds: Bounds) -> Bounds:
@@ -45,28 +55,24 @@ class AbstractElement:
         return Bounds(torch.bmm(lrp_pos, init_bounds.l) + torch.bmm(lrp_neg, init_bounds.u) + lrp.b,
                       torch.bmm(urp_pos, init_bounds.u) + torch.bmm(urp_neg, init_bounds.l) + urp.b)
 
-    def backsubstitution(self, compute_bounds=True):
+    def backsubstitution(self) -> Tuple[RelationalPolyhedra]:
         lrp_W, lrp_b, urp_W, urp_b = self.lrp.W, self.lrp.b, self.urp.W, self.urp.b
-        current = self.parent
+        prev = self.parent
 
-        while current.parent is not None:
+        while prev is not None:
             lrp_posW = torch.where(lrp_W > 0, lrp_W, torch.zeros_like(lrp_W))
             lrp_negW = torch.where(lrp_W < 0, lrp_W, torch.zeros_like(lrp_W))
             urp_posW = torch.where(urp_W > 0, urp_W, torch.zeros_like(urp_W))
             urp_negW = torch.where(urp_W < 0, urp_W, torch.zeros_like(urp_W))
 
-            lrp_b = torch.bmm(lrp_posW, current.lrp.b) + torch.bmm(lrp_negW, current.urp.b) + lrp_b
-            urp_b = torch.bmm(urp_posW, current.urp.b) + torch.bmm(urp_negW, current.lrp.b) + urp_b
-            lrp_W = torch.bmm(lrp_posW, current.lrp.W) + torch.bmm(lrp_negW, current.urp.W)
-            urp_W = torch.bmm(urp_posW, current.urp.W) + torch.bmm(urp_negW, current.lrp.W)
+            lrp_b = torch.bmm(lrp_posW, prev.lrp.b) + torch.bmm(lrp_negW, prev.urp.b) + lrp_b
+            urp_b = torch.bmm(urp_posW, prev.urp.b) + torch.bmm(urp_negW, prev.lrp.b) + urp_b
+            lrp_W = torch.bmm(lrp_posW, prev.lrp.W) + torch.bmm(lrp_negW, prev.urp.W)
+            urp_W = torch.bmm(urp_posW, prev.urp.W) + torch.bmm(urp_negW, prev.lrp.W)
 
-            current = current.parent
+            prev = prev.parent
         
-        lrp_wrt_inputs, urp_wrt_inputs = RelationalPolyhedra(lrp_W, lrp_b), RelationalPolyhedra(urp_W, urp_b)
-        if compute_bounds:
-            self.bounds = AbstractElement.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs, current.bounds)
-        else:
-            return lrp_wrt_inputs, urp_wrt_inputs
+        return RelationalPolyhedra(lrp_W, lrp_b), RelationalPolyhedra(urp_W, urp_b)
 
 # Abstract Transformer
 class AbstractTransformer(nn.Module):
@@ -76,8 +82,8 @@ class AbstractTransformer(nn.Module):
     def forward(self, parent: AbstractElement) -> AbstractElement:
         raise NotImplementedError("Subclasses must implement forward method.")
     
-    def __call__(self, parent: AbstractElement) -> AbstractElement:
-        return self.forward(parent)
+    def __call__(self, ae: AbstractElement) -> AbstractElement:
+        return self.forward(ae)
 
 class AffineAT(AbstractTransformer):
     def __init__(self, layer: nn.Linear, batch_size: int):
@@ -117,21 +123,15 @@ class AffineAT(AbstractTransformer):
         instance.b = b.reshape(1, -1, 1).expand(batch_size, -1, -1)
         return instance
 
-    @classmethod
-    def Marginal(cls, true_labels: torch.Tensor, target_label: int, num_labels=10) -> Self:
-        instance = cls.__new__(cls)
-        super(AffineAT, instance).__init__()
+    def make_marginal(self, true_labels: torch.Tensor, target_label: int) -> Self:
         batch_size = true_labels.shape[0]
-        W = torch.zeros(batch_size, num_labels)
-        W[torch.arange(batch_size), true_labels] = 1
-        W[torch.arange(batch_size), target_label] = -1
-        instance.W = W.unsqueeze(1)
-        instance.b = torch.zeros(batch_size, 1, 1)
-        return instance
+        batch_idx = torch.arange(batch_size, device=self.W.device)
+        self.W = (self.W[batch_idx, true_labels, :] - self.W[:, target_label, :]).unsqueeze(1)
+        self.b = (self.b[batch_idx, true_labels, :] - self.b[:, target_label, :]).unsqueeze(1)
 
     def forward(self, parent: AbstractElement) -> AbstractElement:
         rp = RelationalPolyhedra(self.W, self.b)
-        return AbstractElement.from_relational_polyhedra(rp, rp, parent)
+        return AbstractElement(rp, rp, parent)
 
 class ActivationAT(AbstractTransformer):
     def __init__(self):
@@ -142,10 +142,8 @@ class ActivationAT(AbstractTransformer):
         raise NotImplementedError("Subclasses must implement compute_rp method.")
     
     def forward(self, parent: AbstractElement) -> AbstractElement:
-        if parent.bounds is None:
-            parent.backsubstitution()
-        lrp, urp = self.compute_rp(parent.bounds)
-        return AbstractElement.from_relational_polyhedra(lrp, urp, parent)
+        lrp, urp = self.compute_rp(parent.get_bounds())
+        return AbstractElement(lrp, urp, parent)
 
 class ReLUAT(ActivationAT):
     def __init__(self):
@@ -191,9 +189,9 @@ class SequentialAT(nn.Sequential):
         super().__init__(*layers)
 
     @classmethod
-    def from_sequential(cls, network: nn.Sequential, x: torch.Tensor):
+    def from_sequential(cls, seq_net: nn.Sequential, x: torch.Tensor, true_labels: torch.Tensor, target_label: int):
         layers = []
-        for layer in network.children():
+        for layer in seq_net:
             if isinstance(layer, nn.Linear):
                 layers.append(AffineAT(layer, x.shape[0]))
             elif isinstance(layer, nn.Conv2d):
@@ -207,6 +205,10 @@ class SequentialAT(nn.Sequential):
             else:
                 raise NotImplementedError(f"No DeepPoly AT for layer {layer}")
             x = layer(x)
+        
+        lastAT = layers[-1]
+        assert isinstance(lastAT, AffineAT)
+        lastAT.make_marginal(true_labels, target_label)
 
         return cls(layers)
 

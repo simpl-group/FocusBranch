@@ -75,7 +75,10 @@ def get_network(name: str, folder: str, device: str = "cpu") -> nn.Sequential:
     else:
         assert False, f"Invalid network name: {name}"
 
-    model.load_state_dict(torch.load(os.path.join(folder, f"{name}.pt"), map_location=torch.device(device)))
+    model.load_state_dict(
+        torch.load(os.path.join(folder, f"{name}.pt"), map_location=torch.device(device),
+                   weights_only=True)
+    )
     model.eval()
 
     return model

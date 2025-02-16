@@ -33,7 +33,7 @@ def compute_x1_bounds(x0: torch.Tensor, W: torch.Tensor, b: torch.Tensor, eps: i
     ubounds = center + W_udiff[:, :, :eps].sum(dim=-1, keepdim=True)
     return DeepPoly.Bounds(lbounds, ubounds)
 
-def compute_x0_bounds(x0: torch.Tensor, C: torch.Tensor, eps: int, pixel_value_range=(0, 1)) -> DeepPoly.Bounds:
+def x0_with_ltrigger(x0: torch.Tensor, C: torch.Tensor, eps: int, pixel_value_range=(0, 1)) -> torch.Tensor:
     batch = C.shape[0]
     d0 = C.shape[1]
     x0 = x0.reshape(batch, -1, 1)
@@ -44,11 +44,22 @@ def compute_x0_bounds(x0: torch.Tensor, C: torch.Tensor, eps: int, pixel_value_r
     CPP = (x0_udiff - x0_ldiff)  # <= 0  contribution per pixel
     pixel_idx_set = CPP.sort(dim=1).indices[:, :eps, :]
     mask = torch.ones((batch, d0, 1), dtype=torch.bool).scatter_(1, pixel_idx_set, False)
-    # return DeepPoly.Bounds(torch.where(mask, x0, torch.zeros_like(x0)),
-    #                        torch.where(mask, x0, torch.ones_like(x0)))  # same as below
-    x0_direction = torch.where(pos_C, torch.zeros_like(x0), torch.ones_like(x0))
-    x0_ = torch.where(mask, x0, x0_direction)
-    return DeepPoly.Bounds(x0_, x0_)
+    x0_direction = torch.where(pos_C, torch.full_like(x0, L), torch.full_like(x0, U))
+    return torch.where(mask, x0, x0_direction)
+
+def x0_with_utrigger(x0: torch.Tensor, C: torch.Tensor, eps: int, pixel_value_range=(0, 1)) -> torch.Tensor:
+    batch = C.shape[0]
+    d0 = C.shape[1]
+    x0 = x0.reshape(batch, -1, 1)
+    pos_C = C > 0
+    L, U = pixel_value_range
+    x0_ldiff = torch.where(~pos_C, C * (x0 - L), torch.zeros_like(C))
+    x0_udiff = torch.where(pos_C, C * (U - x0), torch.zeros_like(C))
+    CPP = (x0_udiff - x0_ldiff)  # >= 0  contribution per pixel
+    pixel_idx_set = CPP.sort(dim=1, descending=True).indices[:, :eps, :]
+    mask = torch.ones((batch, d0, 1), dtype=torch.bool).scatter_(1, pixel_idx_set, False)
+    x0_direction = torch.where(pos_C, torch.full_like(x0, U), torch.full_like(x0, L))  # pos->U; neg->L
+    return torch.where(mask, x0, x0_direction)
 
 def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
               true_labels: torch.Tensor, target_label: int, collective=False) -> bool:
@@ -61,30 +72,28 @@ def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
         L, U = (0 - mean) / sigma, (1 - mean) / sigma
     else:
         L, U = 0, 1
-    dp_net = DeepPoly.SequentialAT.from_sequential(net, x0)
+    dp_net = DeepPoly.SequentialAT.from_sequential(net, x0, true_labels, target_label)
     dp_head = dp_net.pop(0)  # get the first layer
     assert isinstance(dp_head, DeepPoly.AffineAT)  # the first layer must be affine
-    ae1 = dp_head(parent=None)
-    ae1.bounds = compute_x1_bounds(x0, dp_head.W, dp_head.b, eps, (L, U))
-    dp_net.append(DeepPoly.AffineAT.Marginal(true_labels, target_label))
+    init_x1_bounds = compute_x1_bounds(x0, dp_head.W, dp_head.b, eps, (L, U))
+    ae1 = DeepPoly.AbstractElement.from_input(init_bounds=init_x1_bounds)
     output = dp_net(ae=ae1)
 
-    lrp, urp = output.backsubstitution(compute_bounds=False)
-    initial_bounds = DeepPoly.AbstractElement.compute_bounds(lrp, urp, ae1.bounds)
-    initial_lb = initial_bounds.l.reshape(-1)  # (batch,)
+    initial_lb = output.get_bounds().l.reshape(-1)  # (batch,)
 
-    ae0 = DeepPoly.AbstractElement()
-    ae1.parent = ae0
-    lrp_wrt_x0, urp_wrt_x0 = output.backsubstitution(compute_bounds=False)
+    ae1.parent = dp_head(ae=None)
+    lrp_wrt_x0, _ = output.backsubstitution()
     coeffiencts_x0 = lrp_wrt_x0.W.transpose(2, 1)  # (batch, d0, 1)
-    ae0.bounds = compute_x0_bounds(x0, coeffiencts_x0, eps, (L, U))
-    new_bounds = DeepPoly.AbstractElement.compute_bounds(lrp_wrt_x0, urp_wrt_x0, ae0.bounds)
-    new_lb = new_bounds.l.reshape(-1)
+    x0_ = x0_with_ltrigger(x0, coeffiencts_x0, eps, (L, U))
+    new_lb_l = torch.bmm(lrp_wrt_x0.W, x0_) + lrp_wrt_x0.b
+    x0_ = x0_with_utrigger(x0, coeffiencts_x0, eps, (L, U))
+    new_lb_u = torch.bmm(lrp_wrt_x0.W, x0_) + lrp_wrt_x0.b
 
     print("Initial lower bounds:\t", initial_lb.tolist())
-    print("New sound lower bounds:\t", new_lb.tolist())
-    
-    return all(new_lb > 0)
+    print("x0 with ltrigger:\t", new_lb_l.reshape(-1).tolist())
+    print("x0 with utrigger:\t", new_lb_u.reshape(-1).tolist())
+
+    return all(new_lb_l > 0)
 
 def Linf_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
               true_labels: torch.Tensor, target_label: int, collective=False) -> bool:
@@ -98,13 +107,12 @@ def Linf_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
     else:
         L, U = 0, 1
     x0 = x0.reshape(x0.shape[0], -1, 1)
-    dp_net = DeepPoly.SequentialAT.from_sequential(net, x0)
-    dp_net.append(DeepPoly.AffineAT.Marginal(true_labels, target_label))
-    ae = DeepPoly.AbstractElement(bounds=DeepPoly.Bounds((x0-eps).clamp(L, U), (x0+eps).clamp(L, U)))
+    dp_net = DeepPoly.SequentialAT.from_sequential(net, x0, true_labels, target_label)
+    ae = DeepPoly.AbstractElement.from_input(init_bounds=DeepPoly.Bounds((x0-eps).clamp(L, U), (x0+eps).clamp(L, U)))
     output = dp_net(ae=ae)
-    output.backsubstitution()
-    print("Initial lower bounds:\t", output.bounds.l.reshape(-1).tolist())
-    return all(output.bounds.l > 0)
+    out_bounds = output.get_bounds()
+    print("Initial lower bounds:\t", out_bounds.l.reshape(-1).tolist())
+    return all(out_bounds.l > 0)
 
 def get_args():
     parser = argparse.ArgumentParser(
@@ -146,6 +154,7 @@ if __name__ == "__main__":
         pred_labels = net(images).argmax(1)
         if all(pred_labels == labels) and all(pred_labels != args.target_label):
             L0_robust(net, images, args.epsilon, pred_labels, args.target_label, args.collective)
+            # Linf_robust(net, images, 0.01, pred_labels, args.target_label, args.collective)
             exit(0)
         else:
             continue
