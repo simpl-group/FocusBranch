@@ -8,58 +8,48 @@ import DeepPoly
 
 DEVICE = "cpu"
 
-def compute_x1_bounds(x0: torch.Tensor, W: torch.Tensor, b: torch.Tensor, eps: int, pixel_value_range=(0, 1)) -> DeepPoly.Bounds:
+def compute_x1_diffs(x0: torch.Tensor, W: torch.Tensor, eps: int, pixel_value_range=(0, 1)) -> DeepPoly.Bounds:
     batch = x0.shape[0]
-    x0 = x0.reshape(batch, -1, 1)
-    center = torch.bmm(W, x0) + b  # (batch, d1, 1)
     # W.shape[-2] number of nuerons in x1
     X = x0.reshape(batch, 1, -1).expand(-1, W.shape[-2], -1)
     L, U = pixel_value_range
     WX_L = W * (X - L)  # (batch, d1, d0)
     WX_U = W * (U - X)
-    negW = W < 0
-    posW = W >= 0
 
-    W_ldiff = torch.zeros_like(W)
-    W_ldiff[posW] = -WX_L[posW]
-    W_ldiff[negW] = WX_U[negW]
-    W_ldiff = torch.sort(W_ldiff, dim=2, descending=False).values
-    lbounds = center + W_ldiff[:, :, :eps].sum(dim=-1, keepdim=True)
+    WX_ldiff = torch.where(W > 0, -WX_L, WX_U)
+    WX_ldiff_sorted = WX_ldiff.sort(dim=2, descending=False).values
+    ldiff = WX_ldiff_sorted[:, :, :eps].sum(dim=-1, keepdim=True)
 
-    W_udiff = torch.zeros_like(W)
-    W_udiff[posW] = WX_U[posW]
-    W_udiff[negW] = -WX_L[negW]
-    W_udiff = torch.sort(W_udiff, dim=2, descending=True).values
-    ubounds = center + W_udiff[:, :, :eps].sum(dim=-1, keepdim=True)
-    return DeepPoly.Bounds(lbounds, ubounds)
+    WX_udiff = torch.where(W < 0, -WX_L, WX_U)
+    WX_udiff_sorted = WX_udiff.sort(dim=2, descending=True).values
+    udiff = WX_udiff_sorted[:, :, :eps].sum(dim=-1, keepdim=True)
+    return DeepPoly.Bounds(ldiff, udiff)
 
 def x0_with_ltrigger(x0: torch.Tensor, C: torch.Tensor, eps: int, pixel_value_range=(0, 1)) -> torch.Tensor:
-    batch = C.shape[0]
-    d0 = C.shape[1]
-    x0 = x0.reshape(batch, -1, 1)
-    pos_C = C > 0
+    batch, d0, _ = x0.shape
     L, U = pixel_value_range
-    x0_ldiff = torch.where(pos_C, C * (x0 - L), torch.zeros_like(C))
-    x0_udiff = torch.where(~pos_C, C * (U - x0), torch.zeros_like(C))
-    CPP = (x0_udiff - x0_ldiff)  # <= 0  contribution per pixel
+    CPP = torch.where(C > 0, -C * (x0 - L), C * (U - x0))  # <= 0  contribution per pixel
     pixel_idx_set = CPP.sort(dim=1).indices[:, :eps, :]
     mask = torch.ones((batch, d0, 1), dtype=torch.bool).scatter_(1, pixel_idx_set, False)
-    x0_direction = torch.where(pos_C, torch.full_like(x0, L), torch.full_like(x0, U))
+    x0_direction = torch.where(C > 0, L, U)
     return torch.where(mask, x0, x0_direction)
 
 def x0_with_utrigger(x0: torch.Tensor, C: torch.Tensor, eps: int, pixel_value_range=(0, 1)) -> torch.Tensor:
-    batch = C.shape[0]
-    d0 = C.shape[1]
-    x0 = x0.reshape(batch, -1, 1)
-    pos_C = C > 0
+    batch, d0, _ = x0.shape
     L, U = pixel_value_range
-    x0_ldiff = torch.where(~pos_C, C * (x0 - L), torch.zeros_like(C))
-    x0_udiff = torch.where(pos_C, C * (U - x0), torch.zeros_like(C))
-    CPP = (x0_udiff - x0_ldiff)  # >= 0  contribution per pixel
+    CPP = torch.where(C < 0, -C * (x0 - L), C * (U - x0))  # >= 0  contribution per pixel
     pixel_idx_set = CPP.sort(dim=1, descending=True).indices[:, :eps, :]
     mask = torch.ones((batch, d0, 1), dtype=torch.bool).scatter_(1, pixel_idx_set, False)
-    x0_direction = torch.where(pos_C, torch.full_like(x0, U), torch.full_like(x0, L))  # pos->U; neg->L
+    x0_direction = torch.where(C < 0, L, U)  # pos->U; neg->L
     return torch.where(mask, x0, x0_direction)
+
+def compute_x0_diffs(x0: torch.Tensor, C: torch.Tensor, eps: int, pixel_value_range=(0, 1)) -> DeepPoly.Bounds:
+    L, U = pixel_value_range
+    CPP_l = torch.where(C > 0, -C * (x0 - L), C * (U - x0))  # <= 0  contribution per pixel
+    CPP_u = torch.where(C < 0, -C * (x0 - L), C * (U - x0))  # >= 0  contribution per pixel
+    ldiff = CPP_l.sort(dim=1, descending=False).values[:, :eps, :].sum(dim=1, keepdim=True)
+    udiff = CPP_u.sort(dim=1, descending=True).values[:, :eps, :].sum(dim=1, keepdim=True)
+    return DeepPoly.Bounds(ldiff, udiff)
 
 def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
               true_labels: torch.Tensor, target_label: int, collective=False) -> bool:
@@ -75,7 +65,9 @@ def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
     dp_net = DeepPoly.SequentialAT.from_sequential(net, x0, true_labels, target_label)
     dp_head = dp_net.pop(0)  # get the first layer
     assert isinstance(dp_head, DeepPoly.AffineAT)  # the first layer must be affine
-    init_x1_bounds = compute_x1_bounds(x0, dp_head.W, dp_head.b, eps, (L, U))
+    x0 = x0.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
+    x1_center = torch.bmm(dp_head.W, x0) + dp_head.b  # (batch, d1, 1)
+    init_x1_bounds = compute_x1_diffs(x0, dp_head.W, eps, (L, U)) + x1_center
     ae1 = DeepPoly.AbstractElement.from_input(init_bounds=init_x1_bounds)
     output = dp_net(ae=ae1)
 
@@ -84,16 +76,14 @@ def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
     ae1.parent = dp_head(ae=None)
     lrp_wrt_x0, _ = output.backsubstitution()
     coeffiencts_x0 = lrp_wrt_x0.W.transpose(2, 1)  # (batch, d0, 1)
-    x0_ = x0_with_ltrigger(x0, coeffiencts_x0, eps, (L, U))
-    new_lb_l = torch.bmm(lrp_wrt_x0.W, x0_) + lrp_wrt_x0.b
-    x0_ = x0_with_utrigger(x0, coeffiencts_x0, eps, (L, U))
-    new_lb_u = torch.bmm(lrp_wrt_x0.W, x0_) + lrp_wrt_x0.b
+    x0_center = torch.bmm(lrp_wrt_x0.W, x0) + lrp_wrt_x0.b
+    new_lb = compute_x0_diffs(x0, coeffiencts_x0, eps, (L, U)) + x0_center
 
     print("Initial lower bounds:\t", initial_lb.tolist())
-    print("x0 with ltrigger:\t", new_lb_l.reshape(-1).tolist())
-    print("x0 with utrigger:\t", new_lb_u.reshape(-1).tolist())
+    print("x0 with ltrigger:\t", new_lb.l.reshape(-1).tolist())
+    print("x0 with utrigger:\t", new_lb.u.reshape(-1).tolist())
 
-    return all(new_lb_l > 0)
+    return all(new_lb.l > 0)
 
 def Linf_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
               true_labels: torch.Tensor, target_label: int, collective=False) -> bool:

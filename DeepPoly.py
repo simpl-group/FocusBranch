@@ -22,6 +22,12 @@ class Bounds:
     def clone(cls, other: Self) -> Self:
         return cls(other.l.clone(), other.u.clone())
 
+    def __add__(self, c: torch.Tensor) -> Self:
+        return Bounds(self.l + c, self.u + c)
+
+    def __radd__(self, c: torch.Tensor) -> Self:
+        return self.__add__(c)
+
 class AbstractElement:
     init_bounds = None
     def __init__(self,
@@ -47,10 +53,10 @@ class AbstractElement:
 
     @staticmethod
     def compute_bounds(lrp: RelationalPolyhedra, urp: RelationalPolyhedra, init_bounds: Bounds) -> Bounds:
-        lrp_pos = torch.where(lrp.W > 0, lrp.W, torch.zeros_like(lrp.W))
-        lrp_neg = torch.where(lrp.W < 0, lrp.W, torch.zeros_like(lrp.W))
-        urp_pos = torch.where(urp.W > 0, urp.W, torch.zeros_like(urp.W))
-        urp_neg = torch.where(urp.W < 0, urp.W, torch.zeros_like(urp.W))
+        lrp_pos = torch.where(lrp.W > 0, lrp.W, 0)
+        lrp_neg = torch.where(lrp.W < 0, lrp.W, 0)
+        urp_pos = torch.where(urp.W > 0, urp.W, 0)
+        urp_neg = torch.where(urp.W < 0, urp.W, 0)
 
         return Bounds(torch.bmm(lrp_pos, init_bounds.l) + torch.bmm(lrp_neg, init_bounds.u) + lrp.b,
                       torch.bmm(urp_pos, init_bounds.u) + torch.bmm(urp_neg, init_bounds.l) + urp.b)
@@ -60,10 +66,10 @@ class AbstractElement:
         prev = self.parent
 
         while prev is not None:
-            lrp_posW = torch.where(lrp_W > 0, lrp_W, torch.zeros_like(lrp_W))
-            lrp_negW = torch.where(lrp_W < 0, lrp_W, torch.zeros_like(lrp_W))
-            urp_posW = torch.where(urp_W > 0, urp_W, torch.zeros_like(urp_W))
-            urp_negW = torch.where(urp_W < 0, urp_W, torch.zeros_like(urp_W))
+            lrp_posW = torch.where(lrp_W > 0, lrp_W, 0)
+            lrp_negW = torch.where(lrp_W < 0, lrp_W, 0)
+            urp_posW = torch.where(urp_W > 0, urp_W, 0)
+            urp_negW = torch.where(urp_W < 0, urp_W, 0)
 
             lrp_b = torch.bmm(lrp_posW, prev.lrp.b) + torch.bmm(lrp_negW, prev.urp.b) + lrp_b
             urp_b = torch.bmm(urp_posW, prev.urp.b) + torch.bmm(urp_negW, prev.lrp.b) + urp_b
