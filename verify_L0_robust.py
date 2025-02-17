@@ -83,7 +83,20 @@ def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
     print("x0 with ltrigger:\t", new_lb.l.reshape(-1).tolist())
     print("x0 with utrigger:\t", new_lb.u.reshape(-1).tolist())
 
-    return all(new_lb.l > 0)
+    if not collective:
+        return all(new_lb.l > 0)
+    if any(new_lb.l > 0):
+        print("Collectively Safe")
+        return True
+    if (new_lb.u > 0).sum() < 2:
+        print("UNK")
+        return False
+    return check_unsat(x0.squeeze(2).tolist(), coeffiencts_x0.squeeze(2).tolist(),
+                       lrp_wrt_x0.b.flatten().tolist(), eps, (L, U))
+
+def check_unsat(x0: list, coeffiencts_x0: list, b: list, eps: int, pixel_value_range=(0, 1)) -> bool:
+    print("UNK")
+    return False
 
 def Linf_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
               true_labels: torch.Tensor, target_label: int, collective=False) -> bool:
