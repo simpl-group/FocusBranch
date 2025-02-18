@@ -52,23 +52,10 @@ def compute_x0_diffs(x0: torch.Tensor, C: torch.Tensor, eps: int, pixel_value_ra
     udiff = CPP_u.sort(dim=1, descending=True).values[:, :eps, :].sum(dim=1, keepdim=True)
     return DeepPoly.Bounds(ldiff, udiff)
 
-def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
-              true_labels: torch.Tensor, target_label: int, collective=False) -> bool:
-    net_head = net[0]
-    if isinstance(net_head, Normalization):
-        net.pop(0)
-        mean = net_head.mean
-        sigma = net_head.sigma
-        x0 = (x0 - mean) / sigma
-        L, U = (0 - mean) / sigma, (1 - mean) / sigma
-    else:
-        L, U = 0, 1
-    dp_net = DeepPoly.SequentialAT.from_sequential(net, x0, true_labels, target_label)
-    dp_head = dp_net.pop(0)  # get the first layer
-    assert isinstance(dp_head, DeepPoly.AffineAT)  # the first layer must be affine
-    x0_ = x0.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-    x1_center = torch.bmm(dp_head.W, x0_) + dp_head.b  # (batch, d1, 1)
-    init_x1_bounds = compute_x1_diffs(x0_, dp_head.W, eps, (L, U)) + x1_center
+def L0_robust(dp_net: DeepPoly.SequentialAT, dp_head: DeepPoly.AffineAT, x0: torch.Tensor,
+              eps: int, pixel_value_range=(0, 1), collective=False) -> bool:
+    x1_center = torch.bmm(dp_head.W, x0) + dp_head.b  # (batch, d1, 1)
+    init_x1_bounds = compute_x1_diffs(x0, dp_head.W, eps, pixel_value_range) + x1_center
     ae1 = DeepPoly.AbstractElement.from_input(init_bounds=init_x1_bounds)
     output = dp_net(ae=ae1)
 
@@ -77,8 +64,8 @@ def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
     ae1.parent = dp_head(ae=None)
     lrp_wrt_x0, _ = output.backsubstitution()
     coeffiencts_x0 = lrp_wrt_x0.W.transpose(2, 1)  # (batch, d0, 1)
-    x0_center = torch.bmm(lrp_wrt_x0.W, x0_) + lrp_wrt_x0.b
-    new_lb = compute_x0_diffs(x0_, coeffiencts_x0, eps, (L, U)) + x0_center
+    x0_center = torch.bmm(lrp_wrt_x0.W, x0) + lrp_wrt_x0.b
+    new_lb = compute_x0_diffs(x0, coeffiencts_x0, eps, pixel_value_range) + x0_center
 
     print("Initial lower bounds:\t", initial_lb.tolist())
     print("x0 with ltrigger:\t", new_lb.l.reshape(-1).tolist())
@@ -92,24 +79,14 @@ def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
     if (new_lb.u > 0).sum() < 2:
         print("UNK")
         return False
-    return check_unsat(x0_.squeeze(2).tolist(), coeffiencts_x0.squeeze(2).tolist(),
+    return check_unsat(x0.squeeze(2).tolist(), coeffiencts_x0.squeeze(2).tolist(),
                        lrp_wrt_x0.b.flatten().tolist(), eps, (L, U))
 
-def Linf_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
-              true_labels: torch.Tensor, target_label: int, collective=False) -> bool:
-    net_head = net[0]
-    if isinstance(net_head, Normalization):
-        net.pop(0)
-        mean = net_head.mean
-        sigma = net_head.sigma
-        x0 = (x0 - mean) / sigma
-        L, U = (0 - mean) / sigma, (1 - mean) / sigma
-    else:
-        L, U = 0, 1
-    x0 = x0.reshape(x0.shape[0], -1, 1)
-    dp_net = DeepPoly.SequentialAT.from_sequential(net, x0, true_labels, target_label)
-    ae = DeepPoly.AbstractElement.from_input(init_bounds=DeepPoly.Bounds((x0-eps).clamp(L, U), (x0+eps).clamp(L, U)))
-    output = dp_net(ae=ae)
+def Linf_robust(dp_net: DeepPoly.SequentialAT, dp_head: DeepPoly.AffineAT, x0: torch.Tensor,
+                eps: float, collective=False) -> bool:
+    ae = DeepPoly.AbstractElement.from_input(
+        init_bounds=DeepPoly.Bounds((x0-eps).clamp(L, U), (x0+eps).clamp(L, U)))
+    output = dp_net(dp_head(ae))
     out_bounds = output.get_bounds()
     print("Initial lower bounds:\t", out_bounds.l.reshape(-1).tolist())
     return all(out_bounds.l > 0)
@@ -147,14 +124,33 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     net = get_network(args.net, args.models_dir)
+    x_ = torch.zeros(args.batch_size, 1, 28, 28)
+
+    if isinstance(net[0], Normalization):
+        net_head = net.pop(0)
+        dp_net = DeepPoly.SequentialAT.from_sequential(net, x_)
+        net.insert(0, net_head)
+        mean = net_head.mean
+        sigma = net_head.sigma
+        L, U = (0 - mean) / sigma, (1 - mean) / sigma
+    else:
+        L, U = 0, 1
+        dp_net = DeepPoly.SequentialAT.from_sequential(net, x_)
+    dp_head = dp_net.pop(0)  # get the first layer
+    assert isinstance(dp_head, DeepPoly.AffineAT)  # the first layer must be affine
+
     transform = torchvision.transforms.ToTensor()
     test_dataset = MNIST(root='./data/test', train=False, transform=transform, download=True)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=args.shuffle, num_workers=2)
     for images, labels in test_loader:
         pred_labels = net(images).argmax(1)
         if all(pred_labels == labels) and all(pred_labels != args.target_label):
-            L0_robust(net, images, args.epsilon, pred_labels, args.target_label, args.collective)
-            # Linf_robust(net, images, 0.01, pred_labels, args.target_label, args.collective)
+            if mean is not None:
+                images = (images - mean) / sigma
+            images = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
+            dp_net[-1].make_marginal(true_labels=pred_labels, target_label=args.target_label)
+            L0_robust(dp_net, dp_head, images, args.epsilon, (L, U), args.collective)
+            # Linf_robust(dp_net, dp_head, images, 0.01, args.collective)
             exit(0)
         else:
             continue

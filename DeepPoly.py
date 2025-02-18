@@ -107,6 +107,7 @@ class AffineAT(AbstractTransformer):
         super().__init__()
         self.W = weight
         self.b = bias
+        self.rp = RelationalPolyhedra(self.W, self.b)
     
     @staticmethod
     def expand(weight: torch.Tensor, bias: torch.Tensor, batch_size: int) -> Tuple[torch.Tensor]:
@@ -149,12 +150,12 @@ class AffineAT(AbstractTransformer):
     def make_marginal(self, true_labels: torch.Tensor, target_label: int) -> Self:
         batch_size = true_labels.shape[0]
         batch_idx = torch.arange(batch_size, device=self.W.device)
-        self.W = (self.W[batch_idx, true_labels, :] - self.W[:, target_label, :]).unsqueeze(1)
-        self.b = (self.b[batch_idx, true_labels, :] - self.b[:, target_label, :]).unsqueeze(1)
+        W = (self.W[batch_idx, true_labels, :] - self.W[:, target_label, :]).unsqueeze(1)
+        b = (self.b[batch_idx, true_labels, :] - self.b[:, target_label, :]).unsqueeze(1)
+        self.rp = RelationalPolyhedra(W, b)
 
     def forward(self, parent: AbstractElement) -> AbstractElement:
-        rp = RelationalPolyhedra(self.W, self.b)
-        return AbstractElement(rp, rp, parent)
+        return AbstractElement(self.rp, self.rp, parent)
 
 class ActivationAT(AbstractTransformer):
     def __init__(self):
@@ -212,7 +213,7 @@ class SequentialAT(nn.Sequential):
         super().__init__(*layers)
 
     @classmethod
-    def from_sequential(cls, seq_net: nn.Sequential, x: torch.Tensor, true_labels: torch.Tensor, target_label: int):
+    def from_sequential(cls, seq_net: nn.Sequential, x: torch.Tensor):
         layers = []
         for layer in seq_net:
             if isinstance(layer, nn.Linear):
@@ -231,7 +232,6 @@ class SequentialAT(nn.Sequential):
         
         lastAT = layers[-1]
         assert isinstance(lastAT, AffineAT)
-        lastAT.make_marginal(true_labels, target_label)
 
         return cls(layers)
 
