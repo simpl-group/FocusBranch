@@ -5,6 +5,7 @@ from torchvision.datasets import MNIST
 from torch.utils.data import DataLoader
 from networks import get_network, Normalization
 import DeepPoly
+from solver_check import check_unsat
 
 DEVICE = "cpu"
 
@@ -93,10 +94,6 @@ def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
         return False
     return check_unsat(x0_.squeeze(2).tolist(), coeffiencts_x0.squeeze(2).tolist(),
                        lrp_wrt_x0.b.flatten().tolist(), eps, (L, U))
-
-def check_unsat(x0: list, coeffiencts_x0: list, b: list, eps: int, pixel_value_range=(0, 1)) -> bool:
-    print("UNK")
-    return False
 
 def Linf_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
               true_labels: torch.Tensor, target_label: int, collective=False) -> bool:
