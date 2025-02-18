@@ -1,0 +1,76 @@
+import z3
+import gurobipy as gp
+from gurobipy import GRB
+
+
+def check_unsat(x0: list, coeffiencts_x0: list, b: list, eps: int, pixel_value_range=(0, 1)) -> bool:
+    return check_unsat_z3(x0, coeffiencts_x0, b, eps, pixel_value_range)
+
+def check_unsat_z3(x0: list, coeffiencts_x0: list, b: list, eps: int, pixel_value_range=(0, 1)) -> bool:
+    num_batch, num_pixel = len(x0), len(x0[0])
+    L, U = pixel_value_range
+    # controllers = [z3.Int(f'c{idx}') for idx in range(num_pixel)]
+    controllers = [z3.Bool(f'c{idx}') for idx in range(num_pixel)]
+    triggers = [z3.Real(f't{idx}') for idx in range(num_pixel)]
+    solver = z3.Solver()
+    solver.add(z3.PbEq([(b, 1) for b in controllers], eps))
+    # solver.add(z3.Sum(controllers) == eps)
+    for idx in range(num_pixel):
+        solver.add(z3.And(L <= triggers[idx], triggers[idx] <= U))
+        # solver.add(z3.Or(controllers[idx] == 0, controllers[idx] == 1))
+    for i in range(num_batch):
+        img = [z3.If(controllers[idx], triggers[idx], x0[i][idx]) for idx in range(num_pixel)]
+        # img = [controllers[idx] * triggers[idx] + (1 - controllers[idx]) * x0[i][idx] for idx in range(num_pixel)]
+        solver.add(z3.Sum([coeffiencts_x0[i][idx] * img[idx] for idx in range(num_pixel)]) + b[i] < 0)
+    result = solver.check()
+
+    if result == z3.unsat:
+        print("Collectively Safe")
+        return True
+    else:
+        print(f"{result}")
+        if result == z3.sat:
+            print("Solution found:")
+            model = solver.model()
+            for idx in range(num_pixel):
+                if model[controllers[idx]]:
+                    print(f"{idx}: {model[triggers[idx]]}")
+        return False
+  
+
+def check_unsat_gurobi(x0: list, coefficients_x0: list, b: list, eps: int, pixel_value_range=(0, 1)) -> bool:
+    num_batch, num_pixel = len(x0), len(x0[0])
+    L, U = pixel_value_range
+
+    # Create a new Gurobi model
+    model = gp.Model("check_unsat")
+
+    controllers = model.addVars(num_pixel, vtype=GRB.BINARY, name="c")
+    triggers = model.addVars(num_pixel, vtype=GRB.CONTINUOUS, lb=L, ub=U, name="t")
+
+    # l0=eps constraint
+    model.addConstr(gp.quicksum(controllers[idx] for idx in range(num_pixel)) == eps)
+
+    for i in range(num_batch):
+        img = [
+            controllers[idx] * triggers[idx] + (1 - controllers[idx]) * x0[i][idx]
+            for idx in range(num_pixel)
+        ]
+        model.addConstr(gp.quicksum(coefficients_x0[i][idx] * img[idx] for idx in range(num_pixel)) + b[i] < 0)
+
+    # Optimize the model
+    model.optimize()
+
+    # Check the result
+    if model.status == GRB.INFEASIBLE:
+        print("Collectively Safe")
+        return True
+    elif model.status == GRB.OPTIMAL:
+        print("Solution found:")
+        for idx in range(num_pixel):
+            if controllers[idx].x > 0.5:  # If the controller is active
+                print(f"{idx}: {triggers[idx].x}")
+        return False
+    else:
+        print(f"Solver status: {model.status}")
+        return False
