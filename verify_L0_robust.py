@@ -65,9 +65,9 @@ def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
     dp_net = DeepPoly.SequentialAT.from_sequential(net, x0, true_labels, target_label)
     dp_head = dp_net.pop(0)  # get the first layer
     assert isinstance(dp_head, DeepPoly.AffineAT)  # the first layer must be affine
-    x0 = x0.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-    x1_center = torch.bmm(dp_head.W, x0) + dp_head.b  # (batch, d1, 1)
-    init_x1_bounds = compute_x1_diffs(x0, dp_head.W, eps, (L, U)) + x1_center
+    x0_ = x0.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
+    x1_center = torch.bmm(dp_head.W, x0_) + dp_head.b  # (batch, d1, 1)
+    init_x1_bounds = compute_x1_diffs(x0_, dp_head.W, eps, (L, U)) + x1_center
     ae1 = DeepPoly.AbstractElement.from_input(init_bounds=init_x1_bounds)
     output = dp_net(ae=ae1)
 
@@ -76,8 +76,8 @@ def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
     ae1.parent = dp_head(ae=None)
     lrp_wrt_x0, _ = output.backsubstitution()
     coeffiencts_x0 = lrp_wrt_x0.W.transpose(2, 1)  # (batch, d0, 1)
-    x0_center = torch.bmm(lrp_wrt_x0.W, x0) + lrp_wrt_x0.b
-    new_lb = compute_x0_diffs(x0, coeffiencts_x0, eps, (L, U)) + x0_center
+    x0_center = torch.bmm(lrp_wrt_x0.W, x0_) + lrp_wrt_x0.b
+    new_lb = compute_x0_diffs(x0_, coeffiencts_x0, eps, (L, U)) + x0_center
 
     print("Initial lower bounds:\t", initial_lb.tolist())
     print("x0 with ltrigger:\t", new_lb.l.reshape(-1).tolist())
@@ -91,7 +91,7 @@ def L0_robust(net: torch.nn.Sequential, x0: torch.Tensor, eps: int,
     if (new_lb.u > 0).sum() < 2:
         print("UNK")
         return False
-    return check_unsat(x0.squeeze(2).tolist(), coeffiencts_x0.squeeze(2).tolist(),
+    return check_unsat(x0_.squeeze(2).tolist(), coeffiencts_x0.squeeze(2).tolist(),
                        lrp_wrt_x0.b.flatten().tolist(), eps, (L, U))
 
 def check_unsat(x0: list, coeffiencts_x0: list, b: list, eps: int, pixel_value_range=(0, 1)) -> bool:
