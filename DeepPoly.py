@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from typing import Self, Optional, Tuple, Union
+from typing import List, Self, Optional, Tuple, Union
 import warnings
 
 torch.set_default_dtype(torch.float32)
@@ -258,13 +258,13 @@ class ReLUAT(ActivationAT):
         return lrp, urp
 
 class SequentialAT(nn.Sequential):
-    def __init__(self, layers: AbstractTransformer):
+    def __init__(self, layers: List[AbstractTransformer]):
         super().__init__(*layers)
         assert isinstance(layers[0], AffineAT)
         assert isinstance(layers[-1], AffineAT)
 
-    @classmethod
-    def from_sequential(cls, seq_net: nn.Sequential, x: torch.Tensor):
+    @staticmethod
+    def parse_layers(seq_net: nn.Sequential, x: torch.Tensor) -> List[AbstractTransformer]:
         layers = []
         for layer in seq_net:
             if isinstance(layer, nn.Linear):
@@ -273,13 +273,16 @@ class SequentialAT(nn.Sequential):
                 layers.append(AffineAT.from_conv2d(layer, x.shape))
             elif isinstance(layer, nn.ReLU):
                 layers.append(ReLUAT())
-            elif isinstance(layer, nn.Sequential):  # check if this is needed
-                layers.append(cls.from_sequential(layer, x))
+            elif isinstance(layer, nn.Sequential):
+                layers += SequentialAT.parse_layers(layer, x)
             else:
                 warnings.warn(f"No Abstract Transformer for layer {layer}, skip for now", RuntimeWarning)
             x = layer(x)
+        return layers
 
-        return cls(layers)
+    @classmethod
+    def from_sequential(cls, seq_net: nn.Sequential, x: torch.Tensor) -> Self:
+        return cls(SequentialAT.parse_layers(seq_net, x))
 
     def __call__(self, bounded_in: BoundedInput) -> AbstractElement:
         ae = AbstractElement.from_bounded_input(bounded_in=bounded_in)
