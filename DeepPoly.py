@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from typing import Self, Optional, Tuple, Union
+import warnings
 
 torch.set_default_dtype(torch.float32)
 
@@ -49,8 +50,61 @@ class Bounds:
     def __rsub__(self, other: torch.Tensor) -> Self:
         return Bounds(other - self.l, other - self.u)
 
+class BoundedInput:
+    def __init__(self, x: torch.Tensor, eps, pixel_value_range=(0, 1)):
+        self.x = x
+        self.eps = eps
+        self.L, self.U = pixel_value_range
+        self.batch_size, self.num_features, _ = x.shape
+    
+    def compute_diff(self, rpW: torch.Tensor, lower: bool=True) -> torch.Tensor:
+        raise NotImplementedError
+    
+    def compute_bound(self, rp: RelationalPolyhedra, lower: bool=True) -> torch.Tensor:
+        center = torch.bmm(rp.W, self.x) + rp.b  # (batch, d1, 1)
+        diff = self.compute_diff(rp.W, lower=lower)
+        return center + diff
+
+    def compute_bounds(self, lrp: RelationalPolyhedra, urp: RelationalPolyhedra) -> Bounds:
+        lcenter = torch.bmm(lrp.W, self.x) + lrp.b  # (batch, d1, 1)
+        ucenter = torch.bmm(urp.W, self.x) + urp.b
+        ldiff = self.compute_diff(lrp.W, lower=True)
+        udiff = self.compute_diff(urp.W, lower=False)
+        return Bounds(lbounds=lcenter+ldiff, ubounds=ucenter+udiff)
+
+class L0BoundedInput(BoundedInput):
+    def __init__(self, x, eps: int, pixel_value_range=(0, 1)):
+        super().__init__(x, eps, pixel_value_range)
+
+    def compute_diff(self, rpW: torch.Tensor, lower: bool=True) -> torch.Tensor:
+        # rpW.shape[-2] number of nuerons in next layer
+        X = self.x.reshape(self.batch_size, 1, -1).expand(-1, rpW.shape[-2], -1)
+        WX_L = rpW * (X - self.L)  # (batch, d1, d0)
+        WX_U = rpW * (self.U - X)
+        if lower:
+            WX_ldiff = torch.where(rpW > 0, -WX_L, WX_U)
+            WX_ldiff_sorted = WX_ldiff.sort(dim=2, descending=False).values
+            diff = WX_ldiff_sorted[:, :, :self.eps].sum(dim=-1, keepdim=True)
+        else:
+            WX_udiff = torch.where(rpW < 0, -WX_L, WX_U)
+            WX_udiff_sorted = WX_udiff.sort(dim=2, descending=True).values
+            diff = WX_udiff_sorted[:, :, :self.eps].sum(dim=-1, keepdim=True)
+        return diff
+
+class LinfBoundedInput(BoundedInput):
+    def __init__(self, x: torch.Tensor, eps: float, pixel_value_range=(0, 1), bounds: Bounds=None):
+        super().__init__(x, eps, pixel_value_range)
+        if bounds is not None:
+            self.bounds = bounds
+        else:
+            self.bounds = Bounds((x-eps).clamp(self.L, self.U), (x+eps).clamp(self.L, self.U))
+
+    def compute_bounds(self, lrp: RelationalPolyhedra, urp: RelationalPolyhedra) -> Bounds:
+        return Bounds(torch.bmm(lrp.posW(), self.bounds.l) + torch.bmm(lrp.negW(), self.bounds.u) + lrp.b,
+                      torch.bmm(urp.posW(), self.bounds.u) + torch.bmm(urp.negW(), self.bounds.l) + urp.b)
+
 class AbstractElement:
-    init_bounds = None
+    bounded_in = None
     def __init__(self,
                  lrp: Optional[RelationalPolyhedra]=None,
                  urp: Optional[RelationalPolyhedra]=None,
@@ -62,20 +116,16 @@ class AbstractElement:
         self.parent = parent
 
     @classmethod
-    def from_input(cls, init_bounds: Bounds) -> Self:
-        cls.init_bounds = init_bounds
-        batch_size, d, _ = init_bounds.l.shape
-        rp = RelationalPolyhedra(torch.eye(d).expand(batch_size, -1, -1), torch.zeros_like(init_bounds.l))
+    def from_bounded_input(cls, bounded_in: BoundedInput) -> Self:
+        cls.bounded_in = bounded_in
+        rp = RelationalPolyhedra(
+            weight=torch.eye(bounded_in.num_features).expand(bounded_in.batch_size, -1, -1),
+            bias=torch.zeros_like(bounded_in.x))
         return cls(rp, rp, parent=None)
     
     def get_bounds(self) -> Bounds:
         lrp_wrt_inputs, urp_wrt_inputs = self.backsubstitution()
-        return AbstractElement.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs, AbstractElement.init_bounds)
-
-    @staticmethod
-    def compute_bounds(lrp: RelationalPolyhedra, urp: RelationalPolyhedra, init_bounds: Bounds) -> Bounds:
-        return Bounds(torch.bmm(lrp.posW(), init_bounds.l) + torch.bmm(lrp.negW(), init_bounds.u) + lrp.b,
-                      torch.bmm(urp.posW(), init_bounds.u) + torch.bmm(urp.negW(), init_bounds.l) + urp.b)
+        return AbstractElement.bounded_in.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs)
 
     def backsubstitution(self) -> Tuple[RelationalPolyhedra]:
         lrp, urp = self.lrp.clone(), self.urp.clone()
@@ -91,7 +141,6 @@ class AbstractElement:
         
         return lrp, urp
 
-# Abstract Transformer
 class AbstractTransformer(nn.Module):
     def __init__(self):
         super().__init__()
@@ -211,6 +260,8 @@ class ReLUAT(ActivationAT):
 class SequentialAT(nn.Sequential):
     def __init__(self, layers: AbstractTransformer):
         super().__init__(*layers)
+        assert isinstance(layers[0], AffineAT)
+        assert isinstance(layers[-1], AffineAT)
 
     @classmethod
     def from_sequential(cls, seq_net: nn.Sequential, x: torch.Tensor):
@@ -222,18 +273,14 @@ class SequentialAT(nn.Sequential):
                 layers.append(AffineAT.from_conv2d(layer, x.shape))
             elif isinstance(layer, nn.ReLU):
                 layers.append(ReLUAT())
-            elif isinstance(layer, nn.Flatten):
-                pass  #
             elif isinstance(layer, nn.Sequential):  # check if this is needed
                 layers.append(cls.from_sequential(layer, x))
             else:
-                raise NotImplementedError(f"No DeepPoly AT for layer {layer}")
+                warnings.warn(f"No Abstract Transformer for layer {layer}, skip for now", RuntimeWarning)
             x = layer(x)
-        
-        lastAT = layers[-1]
-        assert isinstance(lastAT, AffineAT)
 
         return cls(layers)
 
-    def __call__(self, ae: AbstractElement) -> AbstractElement:
+    def __call__(self, bounded_in: BoundedInput) -> AbstractElement:
+        ae = AbstractElement.from_bounded_input(bounded_in=bounded_in)
         return self.forward(ae)
