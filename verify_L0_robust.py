@@ -4,7 +4,7 @@ from torchvision.transforms import ToTensor
 from torchvision.datasets import MNIST
 from torch.utils.data import DataLoader
 from networks import get_network, Normalization
-from DeepPoly import SequentialAT, L0BoundedInput
+from AbstractInterpreter import SequentialAT, L0BoundedInput
 from solver_check import check_unsat
 
 DEVICE = "cpu"
