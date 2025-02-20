@@ -56,40 +56,67 @@ class BoundedInput:
         self.eps = eps
         self.L, self.U = pixel_value_range
         self.batch_size, self.num_features, _ = x.shape
+        self.batch_indices = torch.arange(self.batch_size).unsqueeze(1)
     
-    def compute_diff(self, rpW: torch.Tensor, lower: bool=True) -> torch.Tensor:
+    def compute_diff(self, rpW: torch.Tensor, sign: int=1) -> torch.Tensor:
         raise NotImplementedError
     
-    def compute_bound(self, rp: RelationalPolyhedra, lower: bool=True) -> torch.Tensor:
+    def compute_bound(self, rp: RelationalPolyhedra, sign: int=1) -> torch.Tensor:
         center = torch.bmm(rp.W, self.x) + rp.b  # (batch, d1, 1)
-        diff = self.compute_diff(rp.W, lower=lower)
+        diff = self.compute_diff(rp.W, sign=sign)
         return center + diff
 
     def compute_bounds(self, lrp: RelationalPolyhedra, urp: RelationalPolyhedra) -> Bounds:
         lcenter = torch.bmm(lrp.W, self.x) + lrp.b  # (batch, d1, 1)
         ucenter = torch.bmm(urp.W, self.x) + urp.b
-        ldiff = self.compute_diff(lrp.W, lower=True)
-        udiff = self.compute_diff(urp.W, lower=False)
+        ldiff = self.compute_diff(lrp.W, sign=-1)
+        udiff = self.compute_diff(urp.W, sign=1)
         return Bounds(lbounds=lcenter+ldiff, ubounds=ucenter+udiff)
 
 class L0BoundedInput(BoundedInput):
     def __init__(self, x, eps: int, pixel_value_range=(0, 1)):
         super().__init__(x, eps, pixel_value_range)
+        self.select_idx: torch.Tensor = torch.empty((self.batch_size, 0), dtype=torch.long)
+        """indices pre-selected before the ranking to compute the sum which is then added to the diff"""
+        self.ignore_idx: torch.Tensor = torch.empty((self.batch_size, 0), dtype=torch.long)
+        """indices to ignore while picking the top-epsilon values"""
 
-    def compute_diff(self, rpW: torch.Tensor, lower: bool=True) -> torch.Tensor:
-        # rpW.shape[-2] number of nuerons in next layer
-        X = self.x.reshape(self.batch_size, 1, -1).expand(-1, rpW.shape[-2], -1)
-        WX_L = rpW * (X - self.L)  # (batch, d1, d0)
-        WX_U = rpW * (self.U - X)
-        if lower:
-            WX_ldiff = torch.where(rpW > 0, -WX_L, WX_U)
-            WX_ldiff_sorted = WX_ldiff.sort(dim=2, descending=False).values
-            diff = WX_ldiff_sorted[:, :, :self.eps].sum(dim=-1, keepdim=True)
-        else:
-            WX_udiff = torch.where(rpW < 0, -WX_L, WX_U)
-            WX_udiff_sorted = WX_udiff.sort(dim=2, descending=True).values
-            diff = WX_udiff_sorted[:, :, :self.eps].sum(dim=-1, keepdim=True)
-        return diff
+    def include_idx(self, idx):
+        self.ignore_idx = torch.cat((self.ignore_idx, idx), dim=1)
+        self.select_idx = torch.cat((self.select_idx, idx), dim=1)
+        self.eps -= 1
+
+    def exclude_idx(self):
+        self.select_idx = self.select_idx[:, :-1]
+        self.eps += 1
+
+    def pop_idx(self):
+        self.ignore_idx = self.ignore_idx[:, :-1]
+    
+    def include_num(self):
+        return self.select_idx[0].numel()
+    
+    def exclude_num(self):
+        return self.ignore_idx[0].numel() - self.select_idx[0].numel()
+
+    def compute_diff(self, rpW: torch.Tensor, sign: int=1) -> torch.Tensor:
+        # rpW.shape[1] number of nuerons in next layer
+        X = self.x.reshape(self.batch_size, 1, -1).expand(-1, rpW.shape[1], -1)
+        WX_diff = torch.where(rpW * sign > 0, rpW * (self.U - X), rpW * (self.L - X))
+
+        indices = self.select_idx.unsqueeze(1).expand(-1, rpW.shape[1], -1)
+        WX_selected_sum = WX_diff.gather(dim=2, index=indices).sum(dim=-1, keepdim=True)
+        WX_diff[self.batch_indices, :, self.ignore_idx] = 0
+        
+        WX_diff_sorted = WX_diff.sort(dim=2, descending=(sign == 1)).values
+        return WX_diff_sorted[:, :, :self.eps].sum(dim=-1, keepdim=True) + WX_selected_sum
+    
+    def most_contributed_idx(self, rpW: torch.Tensor, sign: int=-1) -> torch.Tensor:
+        assert rpW.shape[1] == 1
+        X = self.x.reshape(self.batch_size, 1, -1)
+        WX_diff = sign * torch.where(rpW * sign > 0, rpW * (self.U - X), rpW * (self.L - X))
+        WX_diff[self.batch_indices, :, self.ignore_idx] = 0
+        return WX_diff.argmax(-1)
 
 class LinfBoundedInput(BoundedInput):
     def __init__(self, x: torch.Tensor, eps: float, pixel_value_range=(0, 1), bounds: Bounds=None):
@@ -242,8 +269,8 @@ class ReLUAT(ActivationAT):
         # Case 3b: lbound + ubound <= 0
         lrp.W = torch.where(crossing_nodes & (bounds.l + bounds.u <= 0), 0, lrp.W)
 
-        lrp.W.transpose_(2, 1)
-        urp.W.transpose_(2, 1)
+        lrp.W.transpose_(-1, -2)
+        urp.W.transpose_(-1, -2)
         return lrp, urp
 
 class SequentialAT(nn.Sequential):
