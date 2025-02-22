@@ -34,17 +34,18 @@ def L0_samplewise_lowerbound(dp_net: SequentialAT, bounded_in: L0BoundedInput, d
     lrp_wrt_x0, _ = output.backsubstitution()
     lb = bounded_x0.compute_bound(lrp_wrt_x0, -1).reshape(-1).tolist()
     if depth == 0:
-        print(f"({bounded_in.include_num()},{bounded_in.exclude_num()}):\t", lb)
+        print(f"({bounded_in.num_selected()},{bounded_in.num_ignored()}):\t", lb)
 
     if depth > 0 and bounded_in.eps > 0:
         idx = bounded_x0.most_contributed_idx(lrp_wrt_x0.W)
         # assume idx is selected
-        bounded_in.include_idx(idx)
+        bounded_in.select_idx(idx)
         L0_samplewise_lowerbound(dp_net=dp_net, bounded_in=bounded_in, depth=depth-1)
-        bounded_in.exclude_idx()
         # assume idx is not selected
+        bounded_in.undo_select(idx[0].numel())
+        bounded_in.ignore_idx(idx)
         L0_samplewise_lowerbound(dp_net=dp_net, bounded_in=bounded_in, depth=depth-1)
-        bounded_in.pop_idx()
+        bounded_in.undo_ignore(idx[0].numel())
 
 def Linf_robust(dp_net: SequentialAT, bounded_in: LinfBoundedInput, collective=False) -> bool:
     output = dp_net(bounded_in)
@@ -58,22 +59,11 @@ def Linf_robust(dp_net: SequentialAT, bounded_in: LinfBoundedInput, collective=F
 
 def get_args():
     parser = argparse.ArgumentParser(
-        description="Verufy L0 robustness of a neural network.",
+        description="Verify L0 robustness of a neural network.",
     )
     parser.add_argument("--net", type=str,
-        choices=[
-            "fc1",
-            "fc2",
-            "fc3",
-            "fc4",
-            "fc5",
-            "fc6",
-            "fc7",
-            "conv1",
-            "conv2",
-            "conv3",
-            "conv4",
-        ], required=True,
+        choices=["fc1", "fc2", "fc3", "fc4", "fc5", "fc6", "fc7",
+                 "conv1", "conv2", "conv3", "conv4"], required=True,
         help="Neural network architecture",
     )
     parser.add_argument("-0e", "--l0-epsilon", type=int, default=0, help="L0 norm bound.")
@@ -91,9 +81,8 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     torch.manual_seed(args.seed)
+    
     net = get_network(args.net, args.models_dir)
-    x_ = torch.zeros(args.batch_size, 1, 28, 28)
-
     net_head = net[0]
     if isinstance(net_head, Normalization):
         mean = net_head.mean
@@ -101,6 +90,8 @@ if __name__ == "__main__":
         L, U = (0 - mean) / sigma, (1 - mean) / sigma
     else:
         L, U = 0, 1
+    
+    x_ = torch.zeros(args.batch_size, 1, 28, 28)
     dp_net = SequentialAT.from_sequential(net, x_)
 
     test_dataset = MNIST(root='./data/test', train=False, transform=ToTensor(), download=True)
