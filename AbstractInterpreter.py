@@ -53,6 +53,7 @@ class Bounds:
 class BoundedInput:
     def __init__(self, x: torch.Tensor, eps, pixel_value_range=(0, 1)):
         self.x = x
+        self.device = x.device
         self.eps = eps
         self.L, self.U = pixel_value_range
         self.batch_size, self.num_features, _ = x.shape
@@ -76,9 +77,9 @@ class BoundedInput:
 class L0BoundedInput(BoundedInput):
     def __init__(self, x: torch.Tensor, eps: int, pixel_value_range=(0, 1)):
         super().__init__(x, eps, pixel_value_range)
-        self.selected_idx: torch.Tensor = torch.empty((self.batch_size, 0), dtype=torch.long)
+        self.selected_idx: torch.Tensor = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
         """indices pre-selected before the ranking to compute the sum which is then added to the diff"""
-        self.ignored_idx: torch.Tensor = torch.empty((self.batch_size, 0), dtype=torch.long)
+        self.ignored_idx: torch.Tensor = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
         """indices to ignore while picking the top-epsilon values"""
 
     def select_idx(self, idx: torch.Tensor):
@@ -97,8 +98,8 @@ class L0BoundedInput(BoundedInput):
     
     def clear_all_idx(self):
         self.eps += self.num_selected()
-        self.selected_idx = torch.empty((self.batch_size, 0), dtype=torch.long)
-        self.ignored_idx = torch.empty((self.batch_size, 0), dtype=torch.long)
+        self.selected_idx = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
+        self.ignored_idx = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
 
     def num_selected(self):
         return self.selected_idx[0].numel()
@@ -113,9 +114,10 @@ class L0BoundedInput(BoundedInput):
 
         indices = self.selected_idx.unsqueeze(1).expand(-1, rpW.shape[1], -1)
         WX_selected_sum = WX_diff.gather(dim=2, index=indices).sum(dim=-1, keepdim=True)
-        WX_diff[self.batch_indices, :, self.ignored_idx] = 0
+        if self.eps == 0:
+            return WX_selected_sum
         WX_diff[self.batch_indices, :, self.selected_idx] = 0
-        
+        WX_diff[self.batch_indices, :, self.ignored_idx] = 0
         WX_diff_sorted = WX_diff.sort(dim=2, descending=(sign == 1)).values
         return WX_diff_sorted[:, :, :self.eps].sum(dim=-1, keepdim=True) + WX_selected_sum
     

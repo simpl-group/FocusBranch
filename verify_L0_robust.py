@@ -7,7 +7,7 @@ from networks import get_network, Normalization
 from AbstractInterpreter import SequentialAT, L0BoundedInput, LinfBoundedInput
 from solver_check import check_unsat
 
-DEVICE = "cpu"
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 def L0_robust(dp_net: SequentialAT, bounded_in: L0BoundedInput, collective=False) -> bool:
     output = dp_net(bounded_in)
@@ -82,7 +82,7 @@ if __name__ == "__main__":
     args = get_args()
     torch.manual_seed(args.seed)
     
-    net = get_network(args.net, args.models_dir)
+    net = get_network(args.net, args.models_dir, device=DEVICE)
     net_head = net[0]
     if isinstance(net_head, Normalization):
         mean = net_head.mean
@@ -91,7 +91,7 @@ if __name__ == "__main__":
     else:
         L, U = 0, 1
     
-    x_ = torch.zeros(args.batch_size, 1, 28, 28)
+    x_ = torch.zeros(args.batch_size, 1, 28, 28).to(DEVICE)
     dp_net = SequentialAT.from_sequential(net, x_)
 
     test_dataset = MNIST(root='./data/test', train=False, transform=ToTensor(), download=True)
@@ -99,6 +99,7 @@ if __name__ == "__main__":
 
     if args.l0_epsilon > 0:
         for images, labels in test_loader:
+            images, labels = images.to(DEVICE), labels.to(DEVICE)
             pred_labels = net(images).argmax(1)
             if all(pred_labels == labels) and all(pred_labels != args.target_label):
                 if mean is not None:
