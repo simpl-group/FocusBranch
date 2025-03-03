@@ -66,12 +66,22 @@ class CNN(nn.Sequential):
 
         super().__init__(*layers)
 
+class FLN(nn.Sequential):  # Fully linear network
+    def __init__(self, input_size, hdims):
+        layers = [nn.Flatten()]
+        prev_fc_size = input_size * input_size
+        for d in hdims:
+            layers.append(nn.Linear(prev_fc_size, d))
+            prev_fc_size = d
+        super().__init__(*layers)
 
 def get_network(name: str, folder: str, device: str = "cpu") -> nn.Sequential:
     if name in fcn_spec:
         model = FCN(28, fcn_spec[name])
     elif name in cnn_spec:
-        model = CNN(28, *cnn_spec[name])  
+        model = CNN(28, *cnn_spec[name])
+    elif name == "fcbase":
+        model = FLN(28, [50, 50, 50, 10])
     else:
         assert False, f"Invalid network name: {name}"
 

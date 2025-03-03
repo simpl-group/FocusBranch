@@ -9,7 +9,7 @@ from solver_check import check_unsat
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-def L0_robust(dp_net: SequentialAT, bounded_in: L0BoundedInput, collective=False) -> bool:
+def L0_robust(dp_net: SequentialAT, bounded_in: L0BoundedInput) -> bool:
     output = dp_net(bounded_in)
     lrp_wrt_x0, _ = output.backsubstitution()
     new_lb = bounded_x0.compute_bounds(lrp_wrt_x0, lrp_wrt_x0)
@@ -17,8 +17,6 @@ def L0_robust(dp_net: SequentialAT, bounded_in: L0BoundedInput, collective=False
     print("x0 with ltrigger:\t", new_lb.l.reshape(-1).tolist())
     print("x0 with utrigger:\t", new_lb.u.reshape(-1).tolist())
 
-    if not collective:
-        return all(new_lb.l > 0)
     if any(new_lb.l > 0):
         print("Collectively Safe")
         return True
@@ -62,7 +60,7 @@ def get_args():
         description="Verify L0 robustness of a neural network.",
     )
     parser.add_argument("--net", type=str,
-        choices=["fc1", "fc2", "fc3", "fc4", "fc5", "fc6", "fc7",
+        choices=["fc1", "fc2", "fc3", "fc4", "fc5", "fc6", "fc7", "fcbase",
                  "conv1", "conv2", "conv3", "conv4"], required=True,
         help="Neural network architecture",
     )
@@ -84,9 +82,10 @@ if __name__ == "__main__":
     
     net = get_network(args.net, args.models_dir, device=DEVICE)
     net_head = net[0]
+    mean, sigma = None, None
     if isinstance(net_head, Normalization):
-        mean = net_head.mean
-        sigma = net_head.sigma
+        net.pop(0)
+        mean, sigma = net_head.mean, net_head.sigma
         L, U = (0 - mean) / sigma, (1 - mean) / sigma
     else:
         L, U = 0, 1
@@ -108,7 +107,7 @@ if __name__ == "__main__":
                 dp_net[-1].make_marginal(true_labels=pred_labels, target_label=args.target_label)
                 bounded_x0 = L0BoundedInput(x0, args.l0_epsilon, (L, U))
                 if args.collective:
-                    L0_robust(dp_net, bounded_x0, True)
+                    L0_robust(dp_net, bounded_x0)
                 else:
                     L0_samplewise_lowerbound(dp_net, bounded_x0, depth=args.depth)
                 exit(0)
