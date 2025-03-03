@@ -118,8 +118,9 @@ class L0BoundedInput(BoundedInput):
             return WX_selected_sum
         WX_diff[self.batch_indices, :, self.selected_idx] = 0
         WX_diff[self.batch_indices, :, self.ignored_idx] = 0
-        WX_diff_sorted = WX_diff.sort(dim=2, descending=(sign == 1)).values
-        return WX_diff_sorted[:, :, :self.eps].sum(dim=-1, keepdim=True) + WX_selected_sum
+
+        WX_tope_diff = WX_diff.topk(self.eps, dim=2, largest=(sign == 1), sorted=False).values
+        return WX_tope_diff.sum(dim=-1, keepdim=True) + WX_selected_sum
     
     def most_contributed_idx(self, rpW: torch.Tensor, sign: int=-1) -> torch.Tensor:
         assert rpW.shape[1] == 1
