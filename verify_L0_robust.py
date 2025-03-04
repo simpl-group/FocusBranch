@@ -23,9 +23,12 @@ def L0_robust(dp_net: SequentialAT, bounded_in: L0BoundedInput) -> bool:
     if (new_lb.u > 0).sum() < 2:
         print("UNK")
         return False
-    coeffiencts_x0 = lrp_wrt_x0.W.transpose(2, 1)
-    return check_unsat(bounded_in.x.squeeze(2).tolist(), coeffiencts_x0.squeeze(2).tolist(),
-                       lrp_wrt_x0.b.flatten().tolist(), bounded_in.eps, (bounded_in.L, bounded_in.U))
+    return check_unsat(x0=bounded_in.x.squeeze(2).cpu().numpy(),
+                       coefficients_x0=lrp_wrt_x0.W.squeeze(1).cpu().numpy(),
+                       b=lrp_wrt_x0.b.flatten().cpu().numpy(),
+                       eps=bounded_in.eps,
+                       selected_idx=None,
+                       pixel_value_range=(bounded_in.L, bounded_in.U))
 
 def L0_samplewise_lowerbound(dp_net: SequentialAT, bounded_in: L0BoundedInput, depth: int=1):
     output = dp_net(bounded_in)
