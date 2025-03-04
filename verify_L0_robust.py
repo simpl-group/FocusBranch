@@ -77,7 +77,7 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     torch.manual_seed(args.seed)
-    
+
     net = get_network(args.net, args.models_dir, device=DEVICE)
     net_head = net[0]
     mean, sigma = None, None
@@ -87,7 +87,7 @@ if __name__ == "__main__":
         L, U = (0 - mean) / sigma, (1 - mean) / sigma
     else:
         L, U = 0, 1
-    
+
     x_ = torch.zeros(args.batch_size, 1, 28, 28).to(DEVICE)
     dp_net = SequentialAT.from_sequential(net, x_)
 

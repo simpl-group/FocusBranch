@@ -10,17 +10,17 @@ class RelationalPolyhedra:
     def __init__(self, weight: torch.Tensor, bias: torch.Tensor):
         self.W = weight  # (batch_size, output_dim, input_dim)
         self.b = bias  # (batch_size, output_dim, 1)
-    
+
     @classmethod
     def clone(cls, other: Self) -> Self:
         return cls(other.W.clone(), other.b.clone())
-    
+
     def clone(self) -> Self:
         return RelationalPolyhedra(self.W.clone(), self.b.clone())
-    
+
     def posW(self) -> torch.Tensor:
         return self.W.clamp_min(0)
-    
+
     def negW(self) -> torch.Tensor:
         return self.W.clamp_max(0)
 
@@ -28,7 +28,7 @@ class Bounds:
     def __init__(self, lbounds: torch.Tensor, ubounds: torch.Tensor):
         self.l = lbounds  # (batch_size, features, 1)
         self.u = ubounds
-    
+
     @classmethod
     def clone(cls, other: Self) -> Self:
         return cls(other.l.clone(), other.u.clone())
@@ -59,10 +59,10 @@ class BoundedInput:
         self.L, self.U = pixel_value_range
         self.batch_size, self.num_features, _ = x.shape
         self.batch_indices = torch.arange(self.batch_size).unsqueeze(1)
-    
+
     def compute_diff(self, rpW: torch.Tensor, sign: int=1) -> torch.Tensor:
         raise NotImplementedError
-    
+
     def compute_bound(self, rp: RelationalPolyhedra, sign: int=1) -> torch.Tensor:
         center = torch.bmm(rp.W, self.x) + rp.b  # (batch, d1, 1)
         diff = self.compute_diff(rp.W, sign=sign)
@@ -112,7 +112,7 @@ class L0BoundedInput(BoundedInput):
 
     def num_selected(self):
         return self.selected_idx[0].numel()
-    
+
     def num_ignored(self):
         return self.ignored_idx[0].numel()
 
@@ -130,7 +130,7 @@ class L0BoundedInput(BoundedInput):
 
         WX_tope_diff = WX_diff.topk(self.eps, dim=2, largest=(sign == 1), sorted=False).values
         return WX_tope_diff.sum(dim=-1, keepdim=True) + WX_selected_sum
-    
+
     def most_contributed_idx(self, rpW: torch.Tensor, sign: int=-1) -> torch.Tensor:
         assert rpW.shape[1] == 1
         X = self.x.reshape(self.batch_size, 1, -1)
@@ -154,23 +154,23 @@ class LinfBoundedInput(BoundedInput):
 class AbstractTransformer(nn.Module):
 
     bounded_in: Optional[BoundedInput] = None
-    
+
     def __init__(self):
         self.parent: Optional[Self] = None
         super().__init__()
 
     def forward(self, parent: Optional[Self]=None):
         ...
-    
+
     def __call__(self, parent: Optional[Self]=None) -> Self:
         self.parent = parent
         self.forward(parent)
         return self
-    
+
     def get_bounds(self) -> Bounds:
         lrp_wrt_inputs, urp_wrt_inputs = self.backsubstitution()
         return AbstractTransformer.bounded_in.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs)
-    
+
     def backsubstitution(self) -> Tuple[RelationalPolyhedra]:
         assert isinstance(self, AffineAT)
         lrp, urp = self.rp.clone(), self.rp.clone()
@@ -189,7 +189,7 @@ class AbstractTransformer(nn.Module):
                 urp.W = torch.bmm(urp.posW(), prev.rp.W) + torch.bmm(urp.negW(), prev.rp.W)
             else: raise NotImplementedError(f"Transform for {prev} is unclear")
             prev = prev.parent
-        
+
         return lrp, urp
 
 class AffineAT(AbstractTransformer):
@@ -198,7 +198,7 @@ class AffineAT(AbstractTransformer):
         self.W = weight
         self.b = bias
         self.rp = RelationalPolyhedra(self.W, self.b)
-    
+
     @staticmethod
     def expand(weight: torch.Tensor, bias: torch.Tensor, batch_size: int) -> Tuple[torch.Tensor]:
         return (weight.unsqueeze(0).expand(batch_size, -1, -1),
@@ -253,7 +253,7 @@ class ActivationAT(AbstractTransformer):
     @staticmethod
     def compute_rp(bounds: Bounds) -> (RelationalPolyhedra):
         raise NotImplementedError("Subclasses must implement compute_rp method.")
-    
+
     def forward(self, parent: Optional[AbstractTransformer]=None):
         self.lrp, self.urp = self.compute_rp(parent.get_bounds())
 
