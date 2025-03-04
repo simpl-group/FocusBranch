@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from typing import List, Self, Optional, Tuple, Union
 import warnings
+from contextlib import contextmanager
 
 torch.set_default_dtype(torch.float32)
 
@@ -68,11 +69,7 @@ class BoundedInput:
         return center + diff
 
     def compute_bounds(self, lrp: RelationalPolyhedra, urp: RelationalPolyhedra) -> Bounds:
-        lcenter = torch.bmm(lrp.W, self.x) + lrp.b  # (batch, d1, 1)
-        ucenter = torch.bmm(urp.W, self.x) + urp.b
-        ldiff = self.compute_diff(lrp.W, sign=-1)
-        udiff = self.compute_diff(urp.W, sign=1)
-        return Bounds(lbounds=lcenter+ldiff, ubounds=ucenter+udiff)
+        return Bounds(lbounds=self.compute_bound(lrp, -1), ubounds=self.compute_bound(urp, 1))
 
 class L0BoundedInput(BoundedInput):
     def __init__(self, x: torch.Tensor, eps: int, pixel_value_range=(0, 1)):
@@ -90,12 +87,24 @@ class L0BoundedInput(BoundedInput):
         self.selected_idx = self.selected_idx[:, :-last]
         self.eps += last
 
+    @contextmanager
+    def selecting(self, idx: torch.Tensor):
+        self.select_idx(idx)
+        yield
+        self.undo_select(idx[0].numel())
+
     def ignore_idx(self, idx: torch.Tensor):
         self.ignored_idx = torch.cat((self.ignored_idx, idx), dim=1)
 
     def undo_ignore(self, last: int=1):
         self.ignored_idx = self.ignored_idx[:, :-last]
-    
+
+    @contextmanager
+    def ignoring(self, idx: torch.Tensor):
+        self.ignore_idx(idx)
+        yield
+        self.undo_ignore(idx[0].numel())
+
     def clear_all_idx(self):
         self.eps += self.num_selected()
         self.selected_idx = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)

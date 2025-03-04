@@ -37,13 +37,11 @@ def L0_samplewise_lowerbound(dp_net: SequentialAT, bounded_in: L0BoundedInput, d
     if depth > 0 and bounded_in.eps > 0:
         idx = bounded_x0.most_contributed_idx(lrp_wrt_x0.W)
         # assume idx is selected
-        bounded_in.select_idx(idx)
-        L0_samplewise_lowerbound(dp_net=dp_net, bounded_in=bounded_in, depth=depth-1)
+        with bounded_in.selecting(idx):
+            L0_samplewise_lowerbound(dp_net=dp_net, bounded_in=bounded_in, depth=depth-1)
         # assume idx is not selected
-        bounded_in.undo_select(idx[0].numel())
-        bounded_in.ignore_idx(idx)
-        L0_samplewise_lowerbound(dp_net=dp_net, bounded_in=bounded_in, depth=depth-1)
-        bounded_in.undo_ignore(idx[0].numel())
+        with bounded_in.ignoring(idx):
+            L0_samplewise_lowerbound(dp_net=dp_net, bounded_in=bounded_in, depth=depth-1)
 
 def Linf_robust(dp_net: SequentialAT, bounded_in: LinfBoundedInput, collective=False) -> bool:
     output = dp_net(bounded_in)
@@ -115,6 +113,7 @@ if __name__ == "__main__":
                 continue
     elif args.linf_epsilon > 0:
         for images, labels in test_loader:
+            images, labels = images.to(DEVICE), labels.to(DEVICE)
             pred_labels = net(images).argmax(1)
             if all(pred_labels == labels) and all(pred_labels != args.target_label):
                 if mean is not None:
