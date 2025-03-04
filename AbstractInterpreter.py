@@ -269,26 +269,23 @@ class ReLUAT(ActivationAT):
 
         # Case 1: ubound <= 0
         below_nodes = bounds.u <= 0
-        lrp.W = torch.where(below_nodes, 0, lrp.W)
         urp.W = torch.where(below_nodes, 0, urp.W)
 
         # Case 2: lbound >= 0
         above_nodes = bounds.l >= 0
-        lrp.W = torch.where(above_nodes, 1, lrp.W)
         urp.W = torch.where(above_nodes, 1, urp.W)
 
         # Case 3: lbound <= 0 <= ubound
         crossing_nodes = ~(below_nodes | above_nodes)
-
         uk = bounds.u / (bounds.u - bounds.l)
         ub = (1 - uk) * bounds.u
         urp.W = torch.where(crossing_nodes, uk, urp.W)
         urp.b = torch.where(crossing_nodes, ub, urp.b)
 
-        # Case 3a: lbound + ubound > 0
-        lrp.W = torch.where(crossing_nodes & (bounds.l + bounds.u > 0), 1, lrp.W)
-        # Case 3b: lbound + ubound <= 0
-        lrp.W = torch.where(crossing_nodes & (bounds.l + bounds.u <= 0), 0, lrp.W)
+        # Case a: lbound + ubound > 0
+        lrp.W = torch.where(bounds.l + bounds.u > 0, 1, lrp.W)
+        # Case b: lbound + ubound <= 0
+        lrp.W = torch.where(bounds.l + bounds.u <= 0, 0, lrp.W)
 
         lrp.W.transpose_(-1, -2)
         urp.W.transpose_(-1, -2)
