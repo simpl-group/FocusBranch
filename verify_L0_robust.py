@@ -21,7 +21,7 @@ def get_next_level_branches(combs_to_split: List[frozenset]) -> Set[frozenset]:
 def check_and_branch(combs_to_check: Set[frozenset]) -> bool:
     global safe_combs, budget_used, level
     combs_to_split = []
-    safe_num = 0
+    safe_num, unk_num = 0, 0
     level = level + 1
     combs_to_check_tqdm = tqdm(combs_to_check)
     for comb in combs_to_check_tqdm:
@@ -30,11 +30,12 @@ def check_and_branch(combs_to_check: Set[frozenset]) -> bool:
             safe_combs.append(comb)
         elif budget_used < args.budget and len(comb) < bounded_x0.eps:
             # verification failed, need to split the comb
+            unk_num += 1
             budget_used += 1
             combs_to_split.append(comb)
         else: return False
-        combs_to_check_tqdm.set_description(debug_message(safe_num))
-    if len(combs_to_split) == 0: return True
+        combs_to_check_tqdm.set_description(debug_message(safe_num, unk_num))
+    if unk_num == 0: return True
     next_level_branches = get_next_level_branches(combs_to_split)
     return check_and_branch(next_level_branches)
 
@@ -72,10 +73,10 @@ def check(comb: frozenset, debug=False, mute=True) -> None:
     solver_time_used += time.time() - start
     return ret
 
-def debug_message(safe_num) -> str:
-    global start, solver_time_used, splits, budget_used, total_checks, solver_checks
-    return f"Level {level}: Safes: {safe_num}; Time: {solver_time_used:.2f}/{time.time() - start:.2f} \
-Budget: {splits}/{budget_used}/{args.budget}; Checks: {solver_checks}/{total_checks}"
+def debug_message(safe_num: int, unk_num: int) -> str:
+    global level, splits, solver_time_used, start, solver_checks, total_checks
+    return f"Level {level}: Splits {splits}; Time {solver_time_used:.2f}/{time.time() - start:.2f}; \
+Safe:UNK {safe_num}:{unk_num}; Checks: {solver_checks}/{total_checks}"
 
 if __name__ == "__main__":
     args = get_args()
