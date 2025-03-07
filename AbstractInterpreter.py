@@ -88,7 +88,9 @@ class L0BoundedInput(BoundedInput):
         self.eps += last
 
     @contextmanager
-    def selecting(self, idx: torch.Tensor):
+    def selecting(self, idx: Union[torch.Tensor, frozenset]):
+        if isinstance(idx, frozenset):
+            idx = torch.tensor(list(idx), dtype=torch.long).repeat(self.batch_size, 1).to(self.device)
         self.select_idx(idx)
         yield
         self.undo_select(idx[0].numel())
@@ -100,7 +102,9 @@ class L0BoundedInput(BoundedInput):
         self.ignored_idx = self.ignored_idx[:, :-last]
 
     @contextmanager
-    def ignoring(self, idx: torch.Tensor):
+    def ignoring(self, idx: Union[torch.Tensor, frozenset]):
+        if isinstance(idx, frozenset):
+            idx = torch.tensor(list(idx), dtype=torch.long).repeat(self.batch_size, 1).to(self.device)
         self.ignore_idx(idx)
         yield
         self.undo_ignore(idx[0].numel())
@@ -293,9 +297,9 @@ class ReLUAT(ActivationAT):
 
 class SequentialAT(nn.Sequential):
     def __init__(self, layers: List[AbstractTransformer]):
-        super().__init__(*layers)
         assert isinstance(layers[0], AffineAT)
         assert isinstance(layers[-1], AffineAT)
+        super().__init__(*layers)
 
     @staticmethod
     def parse_layers(seq_net: nn.Sequential, x: torch.Tensor) -> List[AbstractTransformer]:
@@ -317,6 +321,9 @@ class SequentialAT(nn.Sequential):
     @classmethod
     def from_sequential(cls, seq_net: nn.Sequential, x: torch.Tensor) -> Self:
         return cls(SequentialAT.parse_layers(seq_net, x))
+
+    def tail(self) -> AffineAT:
+        return self[-1]
 
     def __call__(self, bounded_in: BoundedInput) -> AbstractTransformer:
         AbstractTransformer.bounded_in=bounded_in
