@@ -313,8 +313,11 @@ class SequentialAT(nn.Sequential):
                 layers.append(ReLUAT())
             elif isinstance(layer, nn.Sequential):
                 layers += SequentialAT.parse_layers(layer, x)
-            else:
-                warnings.warn(f"No Abstract Transformer for layer {layer}, skip for now", RuntimeWarning)
+            elif isinstance(layer, nn.Flatten):
+                if layer.start_dim != 1 or layer.end_dim != -1:
+                    warnings.warn("No Abstract Transformer for Flatten with non-default start_dim and end_dim; skip for now", RuntimeWarning)
+            elif not isinstance(layer, (nn.Identity, nn.Dropout)):
+                warnings.warn(f"No Abstract Transformer for {layer}; skip for now", RuntimeWarning)
             x = layer(x)
         return layers
 

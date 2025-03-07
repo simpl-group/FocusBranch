@@ -2,15 +2,13 @@ import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
 
-env = gp.Env()
-env.setParam("SolutionLimit", 1)
+env = gp.Env(params={"OutputFlag": 0, "SolutionLimit": 1})
 
 def solver_check_unsat(x0: np.ndarray, coefficients: np.ndarray, bias: np.ndarray,
                 eps: int, selected_idx: frozenset=frozenset(), pixel_value_range=(0, 1),
                 mute=False) -> bool:
     num_batch, num_pixel = len(x0), len(x0[0])
     L, U = pixel_value_range
-    if mute: env.setParam("OutputFlag", 0)
 
     model = gp.Model("check_unsat", env=env)
 
