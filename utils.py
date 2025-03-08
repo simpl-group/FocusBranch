@@ -1,7 +1,7 @@
 import torch
 from torchvision.transforms import ToTensor
 from torchvision.datasets import MNIST
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from networks import get_network, Normalization
 from AbstractInterpreter import SequentialAT, L0BoundedInput, LinfBoundedInput
 from typing import Tuple
@@ -48,13 +48,15 @@ def preprocess(args: argparse.Namespace) -> Tuple[SequentialAT, L0BoundedInput]:
     dp_net = SequentialAT.from_sequential(net, x_)
 
     test_dataset = MNIST(root='./data/test', train=False, transform=ToTensor(), download=True)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=True, num_workers=2)
+    indices = [i for i, (_, label) in enumerate(test_dataset) if label != args.target_label]
+    filtered_dataset = Subset(test_dataset, indices)
+    test_loader = DataLoader(filtered_dataset, batch_size=args.batch_size, shuffle=True, num_workers=2)
 
     while True:
         images, labels = next(iter(test_loader))
         images, labels = images.to(DEVICE), labels.to(DEVICE)
         pred_labels = net(images).argmax(1)
-        if all(pred_labels == labels) and all(pred_labels != args.target_label):
+        if all(pred_labels == labels):  # No need to check target label again
             break
     if mean is not None:
         images = (images - mean) / sigma
