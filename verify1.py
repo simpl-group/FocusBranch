@@ -16,7 +16,7 @@ tqdm_bar_format = "{desc}: {n_fmt}/{total_fmt} |{percentage:3.2f}% {elapsed}<{re
 def get_next_level_branches(combs_to_split: List[frozenset]) -> Set[frozenset]:
     global splits, safe_combs, level
     combs_to_check: Set[frozenset] = set()
-    for comb in tqdm(combs_to_split, disable=(len(safe_combs) == 0), desc="Splitting", bar_format=tqdm_bar_format):
+    for comb in tqdm(combs_to_split, disable=(level < 2), desc="Splitting", bar_format=tqdm_bar_format):
         for idx in range(bounded_x0.num_features):
             if idx in comb: continue
             new_comb = frozenset(comb | {idx})
@@ -45,10 +45,12 @@ def check_and_branch_batch(combs_to_check: Set[frozenset]) -> bool:
     with bounded_x0.selecting(combs_to_check_tail_tensor):
         output = dp_net(bounded_x0)
         lrp, _ = output.backsubstitution()
-        lb_range = bounded_x0.compute_bounds(lrp, lrp)
+        lb_l = bounded_x0.compute_bound(lrp, sign=-1).reshape(-1)
 
-    unk_indices = lb_range.l.reshape(-1) < 0
-    safe_indices = lb_range.l.reshape(-1) >= 0
+    min_value = lb_l.min().item()
+    min_comb = combs_to_check_tail_tensor[lb_l.argmin()]
+    unk_indices = lb_l < 0
+    safe_indices = lb_l >= 0
     unk_num += unk_indices.sum().item()
     safe_num += safe_indices.sum().item()
     combs_to_split += combs_to_check_tail_tensor[unk_indices].tolist()
@@ -65,18 +67,21 @@ def check_and_branch_batch(combs_to_check: Set[frozenset]) -> bool:
                 with bounded_x0.selecting(combs):
                     output = dp_net(bounded_x0)
                     lrp, _ = output.backsubstitution()
-                    lb_range = bounded_x0.compute_bounds(lrp, lrp)
+                    lb_l = bounded_x0.compute_bound(lrp, sign=-1).reshape(-1)
 
-                unk_indices = lb_range.l.reshape(-1) < 0
-                safe_indices = lb_range.l.reshape(-1) >= 0
+                unk_indices = lb_l < 0
+                safe_indices = lb_l >= 0
                 unk_num += unk_indices.sum().item()
                 safe_num += safe_indices.sum().item()
                 combs_to_split += combs[unk_indices].tolist()
                 safe_combs_temp += combs[safe_indices].tolist()
-                pbar.set_postfix({"Safe:UNK": f"{safe_num}:{unk_num}"})
+                if lb_l.min() < min_value:
+                    min_value = lb_l.min().item()
+                    min_comb = combs[lb_l.argmin()]
+                pbar.set_postfix({"Safe:UNK": f"{safe_num}:{unk_num}", "Min": f"{min_value:.2f}", "Comb": min_comb.tolist()})
                 pbar.update(batch_size)
     else:
-        print(f"Level {level} complete; Nodes: {num_to_check}; Safe:UNK={safe_num}:{unk_num}")
+        print(f"Level {level} complete; Nodes: {num_to_check}; Safe:UNK={safe_num}:{unk_num}; Min: {min_value:.2f}; Comb: {min_comb.tolist()}")
     total_nodes += num_to_check
 
     if unk_num == 0: return True
@@ -134,5 +139,5 @@ if __name__ == "__main__":
     start = time.time()
 
     ret = check_and_branch_batch(set([frozenset()]))
-    print(f"Total: Splits {splits}; Nodes: {total_nodes}; Time: {time.time() - start:.2f}; Branching Time: {branching_time:.2f}")
+    print(f"Total: Splits {splits}; Nodes {total_nodes}; Time {time.time() - start:.2f}s; Branching Time {branching_time:.2f}s")
     print(f"Collectively Safe: {ret}")
