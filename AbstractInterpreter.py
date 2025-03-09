@@ -255,7 +255,7 @@ class ActivationAT(AbstractTransformer):
         self.urp: Optional[RelationalPolyhedra] = None
 
     @staticmethod
-    def compute_rp(bounds: Bounds) -> (RelationalPolyhedra):
+    def compute_rp(bounds: Bounds) -> Tuple[RelationalPolyhedra, RelationalPolyhedra]:
         raise NotImplementedError("Subclasses must implement compute_rp method.")
 
     def forward(self, parent: Optional[AbstractTransformer]=None):
@@ -266,7 +266,7 @@ class ReLUAT(ActivationAT):
         super().__init__()
 
     @staticmethod
-    def compute_rp(bounds: Bounds) -> (RelationalPolyhedra):
+    def compute_rp(bounds: Bounds) -> Tuple[RelationalPolyhedra, RelationalPolyhedra]:
         # Initialization
         lrp = RelationalPolyhedra(torch.ones_like(bounds.l), torch.zeros_like(bounds.l))
         urp = lrp.clone()

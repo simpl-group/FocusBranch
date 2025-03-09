@@ -33,7 +33,7 @@ def check_and_branch(combs_to_check: Set[frozenset]) -> bool:
             if check(comb):
                 safe_num += 1
                 safe_combs.append(comb)
-            elif splits + unk_num < args.budget and len(comb) < bounded_x0.eps:
+            elif splits + unk_num < args.budget and level < bounded_x0.eps:
                 # verification failed, need to split the comb
                 unk_num += 1
                 combs_to_split.append(comb)
