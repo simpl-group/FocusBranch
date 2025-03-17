@@ -1,5 +1,6 @@
 import time
 from solver_check import solver_check_unsat
+from AbstractInterpreter import L0BoundedInput
 from typing import List, Set
 from utils import get_args, preprocess
 from tqdm import tqdm
@@ -83,7 +84,12 @@ def check(comb: frozenset, debug=False, mute=True) -> bool:
 
 if __name__ == "__main__":
     args = get_args()
-    dp_net, bounded_x0 = preprocess(args)
+    dp_net, data_loader, L, U = preprocess(args, demo=True)
+    for images, pred_labels in data_loader:
+        x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
+        dp_net.tail().make_marginal(true_labels=pred_labels, target_label=args.target_label)
+        bounded_x0 = L0BoundedInput(x0, args.epsilon, (L, U))
+        break
     x0_ = bounded_x0.x.squeeze(2).cpu().numpy()
     print("Preprocessing done")
 

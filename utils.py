@@ -1,10 +1,10 @@
 import torch
-from torchvision.transforms import ToTensor
+from torchvision.transforms import ToTensor, Compose, Normalize
 from torchvision.datasets import MNIST
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, TensorDataset
 from networks import get_network, Normalization
 from AbstractInterpreter import SequentialAT, L0BoundedInput, LinfBoundedInput
-from typing import Tuple
+from typing import Iterable, Tuple
 import argparse
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -31,40 +31,57 @@ def get_args():
     args = parser.parse_args()
     return args
 
-def preprocess(args: argparse.Namespace) -> Tuple[SequentialAT, L0BoundedInput]:
+def preprocess(args: argparse.Namespace, demo: bool=True) -> Tuple[SequentialAT, DataLoader, float, float]:
+    """Prepares data and network for verification."""
     torch.manual_seed(args.seed)
 
     net = get_network(args.net, args.models_dir, device=DEVICE)
     net_head = net[0]
     if isinstance(net_head, Normalization):
         net.pop(0)
-        mean = net_head.mean
-        sigma = net_head.sigma
-        L, U = (0 - mean) / sigma, (1 - mean) / sigma
+        mean, sigma = net_head.mean, net_head.sigma
     else:
-        L, U = 0, 1
+        mean, sigma = 0, 1
 
-    x_ = torch.zeros(args.batch_size, 1, 28, 28).to(DEVICE)
+    L, U = (0 - mean) / sigma, (1 - mean) / sigma
+
+    # Filter and collect correctly classified samples
+    test_dataset = MNIST(root='./data/test', train=False, transform=Compose([ToTensor(), Normalize(mean, sigma)]), download=True)
+    non_targeted_indices = (test_dataset.targets != args.target_label).nonzero().squeeze(1)
+    non_targeted_subset = Subset(test_dataset, non_targeted_indices)
+
+    correct_images = []
+    correct_labels = []
+    batch_size = min(256, len(non_targeted_subset))
+    test_loader = DataLoader(non_targeted_subset, batch_size=batch_size, shuffle=False, num_workers=2)
+
+    with torch.no_grad():
+        for batch_images, batch_labels in test_loader:
+            batch_images, batch_labels = batch_images.to(DEVICE), batch_labels.to(DEVICE)
+            batch_preds = net(batch_images).argmax(1)
+            correct_idx = (batch_preds == batch_labels).nonzero().squeeze(1)
+
+            correct_images.append(batch_images[correct_idx])
+            correct_labels.append(batch_preds[correct_idx])
+
+            if demo and sum(len(imgs) for imgs in correct_images) >= args.batch_size:
+                break
+
+    correct_dataset = TensorDataset(torch.cat(correct_images), torch.cat(correct_labels))
+    correct_loader = DataLoader(correct_dataset, batch_size=args.batch_size, shuffle=True)
+
+    x_ = torch.zeros(min(args.batch_size, len(correct_dataset)), 1, 28, 28).to(DEVICE)
     dp_net = SequentialAT.from_sequential(net, x_)
+    return dp_net, correct_loader, L, U
 
-    test_dataset = MNIST(root='./data/test', train=False, transform=ToTensor(), download=True)
-    indices = [i for i, (_, label) in enumerate(test_dataset) if label != args.target_label]
-    filtered_dataset = Subset(test_dataset, indices)
-    test_loader = DataLoader(filtered_dataset, batch_size=args.batch_size, shuffle=True, num_workers=2)
-
-    while True:
-        images, labels = next(iter(test_loader))
-        images, labels = images.to(DEVICE), labels.to(DEVICE)
-        pred_labels = net(images).argmax(1)
-        if all(pred_labels == labels):  # No need to check target label again
-            break
-    if mean is not None:
-        images = (images - mean) / sigma
-
-    x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-    dp_net.tail().make_marginal(true_labels=pred_labels, target_label=args.target_label)
-    bounded_x0 = L0BoundedInput(x0, args.epsilon, (L, U))
-    return dp_net, bounded_x0
+def abstraction_loader(dp_net: SequentialAT, data_loader: L0BoundedInput,
+                       L: float, U: float, target_label: int, epsilon: int
+                       ) -> Iterable[Tuple[SequentialAT, L0BoundedInput]]:
+    for images, pred_labels in data_loader:
+        x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
+        dp_net.tail().make_marginal(true_labels=pred_labels, target_label=target_label)
+        bounded_x0 = L0BoundedInput(x0, epsilon, (L, U))
+        yield dp_net, bounded_x0
 
 def assume_and_bound(dp_net: SequentialAT, bounded_x0: L0BoundedInput, depth: int=1):
     output = dp_net(bounded_x0)
