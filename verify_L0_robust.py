@@ -7,8 +7,7 @@ from tqdm import tqdm
 
 tqdm_bar_format = "{desc}: {n_fmt}/{total_fmt} |{percentage:3.2f}% {elapsed}<{remaining} {postfix} {rate_fmt}"
 
-def get_next_level_branches(combs_to_split: List[frozenset]) -> Set[frozenset]:
-    global splits, safe_combs, level
+def split_combs(combs_to_split: List[frozenset], safe_combs: List[frozenset]) -> Set[frozenset]:
     combs_to_check: Set[frozenset] = set()
     for comb in tqdm(combs_to_split, disable=(len(safe_combs) == 0), desc="Splitting", bar_format=tqdm_bar_format):
         for idx in range(bounded_x0.num_features):
@@ -17,24 +16,21 @@ def get_next_level_branches(combs_to_split: List[frozenset]) -> Set[frozenset]:
             if any(safe_comb.issubset(new_comb) for safe_comb in safe_combs):
                 continue  # pruning
             combs_to_check.add(new_comb)
-    level = level + 1
-    splits += len(combs_to_split)
     return combs_to_check
 
 # BFS
-def check_and_branch(combs_to_check: Set[frozenset]) -> bool:
-    global safe_combs, splits, level, solver_time_temp, solver_checks_temp
-    combs_to_split = []
+def check_and_branch(combs_to_check: Set[frozenset], safe_combs: List[frozenset]) -> bool:
+    global splits, level, solver_time_temp, solver_checks_temp
+    combs_to_split: List[frozenset] = []
     safe_num, unk_num = 0, 0
-    num_to_check = len(combs_to_check)
     solver_time_temp = .0
     solver_checks_temp = 0
-    with tqdm(total=num_to_check, disable=(level == 0), desc=f"Level {level}", bar_format=tqdm_bar_format) as pbar:
+    with tqdm(total=len(combs_to_check), disable=(level == 0), desc=f"Level {level}", bar_format=tqdm_bar_format) as pbar:
         for comb in combs_to_check:
             if check(comb):
                 safe_num += 1
                 safe_combs.append(comb)
-            elif splits + unk_num < args.budget and level < bounded_x0.eps:
+            elif splits + unk_num < args.budget:
                 # verification failed, need to split the comb
                 unk_num += 1
                 combs_to_split.append(comb)
@@ -42,8 +38,11 @@ def check_and_branch(combs_to_check: Set[frozenset]) -> bool:
             pbar.set_postfix({"Safe:UNK": f"{safe_num}:{unk_num}", "GRB": f"{solver_checks_temp}({solver_time_temp:.2f}s)"})
             pbar.update(1)
     if unk_num == 0: return True
-    next_level_branches = get_next_level_branches(combs_to_split)
-    return check_and_branch(next_level_branches)
+    if level == bounded_x0.eps: return False
+    level += 1
+    next_level_combs = split_combs(combs_to_split, safe_combs)
+    splits += unk_num
+    return check_and_branch(next_level_combs, safe_combs)
 
 def check(comb: frozenset, debug=False, mute=True) -> bool:
     global total_checks, solver_checks, solver_checks_temp, solver_time, x0_, solver_time_temp
@@ -106,6 +105,6 @@ if __name__ == "__main__":
         print(f"Collectively Safe: {ret}; Checks: {total_checks}({solver_checks})")
         exit(0)
 
-    ret = check_and_branch(set([frozenset()]))
+    ret = check_and_branch(set([frozenset()]), safe_combs)
     print(f"Total: Splits {splits}; Time: {time.time() - start:.2f}; Nodes: {total_checks}; GRB Checks: {solver_checks}({solver_time:.2f}s)")
     print(f"Collectively Safe: {ret}")
