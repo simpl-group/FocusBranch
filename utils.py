@@ -28,6 +28,7 @@ def get_args():
     parser.add_argument("-t", "--target-label", type=int, required=True)
     parser.add_argument("-b", "--budget", type=int, default=0)
     parser.add_argument("-s", "--seed", type=int, default=0)
+    parser.add_argument("--threshold", type=float, default=0.95)
     parser.add_argument("-m", "--mute", action="store_true", help="Mute gurobi output.")
     parser.add_argument("-si", '--select-indices', type=int, nargs='*', default=[])
     parser.add_argument("-d", "--debug", action="store_true", help="Inspect a specific node.")

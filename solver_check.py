@@ -38,3 +38,42 @@ def solver_check_unsat(x0: np.ndarray, coefficients: np.ndarray, bias: np.ndarra
     else:
         print(f"Solver status: {model.Status}")
     return False
+
+def solver_check_unsat_all(x0: np.ndarray, coefficients: np.ndarray, bias: np.ndarray, eps: int,
+        selected_idx: frozenset=frozenset(), pixel_value_range=(0, 1), mute=False, threshold: float=.95) -> bool:
+    num_batch, num_pixel = len(x0), len(x0[0])
+    L, U = pixel_value_range
+
+    model = gp.Model("check_unsat", env=env)
+
+    controllers = model.addMVar((num_pixel,), vtype=GRB.BINARY, name="c")
+    triggers = model.addMVar((num_pixel,), vtype=GRB.CONTINUOUS, lb=L, ub=U, name="t")
+
+    # l0=eps constraint
+    model.addConstr(controllers.sum() == eps)
+    if len(selected_idx) > 0:
+        selected_idx = np.array(list(selected_idx))
+        assert len(selected_idx) <= eps
+        model.addConstr(controllers[selected_idx] == 1)
+
+    violates = model.addMVar((num_batch,), vtype=GRB.BINARY, name="vio")
+    # tolerance
+    model.addConstr(violates.sum() <= (1 - threshold) * num_batch)
+
+    for i in range(num_batch):
+        img = controllers * triggers + (1 - controllers) * x0[i]
+        # # violates[i] = 1 if the i-th constr is violated
+        model.addConstr(coefficients[i] @ img + bias[i] <= 100000 * violates[i])
+
+    model.optimize()
+
+    if model.Status == GRB.Status.INFEASIBLE: return True
+    if mute: return False
+    if model.Status == GRB.Status.OPTIMAL:
+        print("Solution found:")
+        for idx in range(num_pixel):
+            if controllers[idx].X > 0.5:  # If idx is within the trigger
+                print(f"{idx}: {triggers[idx].X}")
+    else:
+        print(f"Solver status: {model.Status}")
+    return False
