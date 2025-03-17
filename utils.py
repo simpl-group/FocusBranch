@@ -4,6 +4,7 @@ from torchvision.datasets import MNIST
 from torch.utils.data import DataLoader, Subset, TensorDataset
 from networks import get_network, Normalization
 from AbstractInterpreter import SequentialAT, L0BoundedInput, LinfBoundedInput
+from torch.nn import Sequential
 from typing import Iterable, Tuple, List, Set
 from tqdm import tqdm
 import argparse
@@ -34,7 +35,7 @@ def get_args():
     args = parser.parse_args()
     return args
 
-def preprocess(args: argparse.Namespace, demo: bool=True) -> Tuple[SequentialAT, DataLoader, float, float]:
+def preprocess(args: argparse.Namespace, demo: bool=True) -> Tuple[Sequential, DataLoader, float, float]:
     """Prepares data and network for verification."""
     torch.manual_seed(args.seed)
 
@@ -73,9 +74,7 @@ def preprocess(args: argparse.Namespace, demo: bool=True) -> Tuple[SequentialAT,
     correct_dataset = TensorDataset(torch.cat(correct_images), torch.cat(correct_labels))
     correct_loader = DataLoader(correct_dataset, batch_size=args.batch_size, shuffle=True)
 
-    x_ = torch.zeros(min(args.batch_size, len(correct_dataset)), 1, 28, 28).to(DEVICE)
-    dp_net = SequentialAT.from_sequential(net, x_)
-    return dp_net, correct_loader, L, U
+    return net, correct_loader, L, U
 
 def abstraction_loader(dp_net: SequentialAT, data_loader: L0BoundedInput,
                        L: float, U: float, target_label: int, epsilon: int
