@@ -4,10 +4,13 @@ from torchvision.datasets import MNIST
 from torch.utils.data import DataLoader, Subset, TensorDataset
 from networks import get_network, Normalization
 from AbstractInterpreter import SequentialAT, L0BoundedInput, LinfBoundedInput
-from typing import Iterable, Tuple
+from typing import Iterable, Tuple, List, Set
+from tqdm import tqdm
 import argparse
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+tqdm_bar_format = "{desc}: {n_fmt}/{total_fmt} |{percentage:3.2f}% {elapsed}<{remaining} {postfix} {rate_fmt}"
+num_features = 28 * 28
 
 def get_args():
     parser = argparse.ArgumentParser(
@@ -82,6 +85,17 @@ def abstraction_loader(dp_net: SequentialAT, data_loader: L0BoundedInput,
         dp_net.tail().make_marginal(true_labels=pred_labels, target_label=target_label)
         bounded_x0 = L0BoundedInput(x0, epsilon, (L, U))
         yield dp_net, bounded_x0
+
+def split_combs(combs_to_split: List[frozenset], safe_combs: List[frozenset]) -> Set[frozenset]:
+    combs_to_check: Set[frozenset] = set()
+    for comb in tqdm(combs_to_split, disable=(len(safe_combs) == 0), desc="Splitting", bar_format=tqdm_bar_format):
+        for idx in range(num_features):
+            if idx in comb: continue
+            new_comb = frozenset(comb | {idx})
+            if any(safe_comb.issubset(new_comb) for safe_comb in safe_combs):
+                continue  # pruning
+            combs_to_check.add(new_comb)
+    return combs_to_check
 
 def assume_and_bound(dp_net: SequentialAT, bounded_x0: L0BoundedInput, depth: int=1):
     output = dp_net(bounded_x0)

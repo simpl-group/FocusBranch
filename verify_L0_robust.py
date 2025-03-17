@@ -2,21 +2,8 @@ import time
 from solver_check import solver_check_unsat
 from AbstractInterpreter import L0BoundedInput
 from typing import List, Set
-from utils import get_args, preprocess
+from utils import get_args, preprocess, split_combs, tqdm_bar_format
 from tqdm import tqdm
-
-tqdm_bar_format = "{desc}: {n_fmt}/{total_fmt} |{percentage:3.2f}% {elapsed}<{remaining} {postfix} {rate_fmt}"
-
-def split_combs(combs_to_split: List[frozenset], safe_combs: List[frozenset]) -> Set[frozenset]:
-    combs_to_check: Set[frozenset] = set()
-    for comb in tqdm(combs_to_split, disable=(len(safe_combs) == 0), desc="Splitting", bar_format=tqdm_bar_format):
-        for idx in range(bounded_x0.num_features):
-            if idx in comb: continue
-            new_comb = frozenset(comb | {idx})
-            if any(safe_comb.issubset(new_comb) for safe_comb in safe_combs):
-                continue  # pruning
-            combs_to_check.add(new_comb)
-    return combs_to_check
 
 # BFS
 def check_and_branch(combs_to_check: Set[frozenset], safe_combs: List[frozenset]) -> bool:
