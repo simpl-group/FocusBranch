@@ -5,7 +5,8 @@ from torch.utils.data import DataLoader, Subset, TensorDataset
 from networks import get_network, Normalization
 from AbstractInterpreter import SequentialAT, L0BoundedInput, LinfBoundedInput
 from torch.nn import Sequential
-from typing import Iterable, Tuple, List, Set
+from typing import Iterable, Tuple, List
+import numpy as np
 from tqdm import tqdm
 import argparse
 
@@ -76,7 +77,7 @@ def preprocess(args: argparse.Namespace, demo: bool=True) -> Tuple[Sequential, D
 
     return net, correct_loader, L, U
 
-def abstraction_loader(dp_net: SequentialAT, data_loader: L0BoundedInput,
+def abstraction_loader(dp_net: SequentialAT, data_loader: DataLoader,
                        L: float, U: float, target_label: int, epsilon: int
                        ) -> Iterable[Tuple[SequentialAT, L0BoundedInput]]:
     for images, pred_labels in data_loader:
@@ -85,15 +86,111 @@ def abstraction_loader(dp_net: SequentialAT, data_loader: L0BoundedInput,
         bounded_x0 = L0BoundedInput(x0, epsilon, (L, U))
         yield dp_net, bounded_x0
 
-def split_combs(combs_to_split: List[frozenset], safe_combs: List[frozenset]) -> Set[frozenset]:
-    combs_to_check: Set[frozenset] = set()
-    for comb in tqdm(combs_to_split, disable=(len(safe_combs) == 0), desc="Splitting", bar_format=tqdm_bar_format):
-        for idx in range(num_features):
-            if idx in comb: continue
-            new_comb = frozenset(comb | {idx})
-            if any(safe_comb.issubset(new_comb) for safe_comb in safe_combs):
-                continue  # pruning
-            combs_to_check.add(new_comb)
+def mask_tensor(comb: List[int]) -> torch.Tensor:
+    tensor = torch.zeros(num_features, dtype=torch.bool, device=DEVICE)
+    if comb: tensor[comb] = True
+    return tensor
+
+chunk_size = 1000  # Adjust based on GPU memory availability
+def split_combs(combs_to_split: List[List[int]], safe_combs: List[List[int]]) -> List[List[int]]:
+    # Convert combs_to_split to a tensor
+    c2s_tensor = torch.stack([mask_tensor(c) for c in combs_to_split], dim=0).to(DEVICE)
+
+    if len(combs_to_split) < len(safe_combs): return split_combs_aux(c2s_tensor)
+
+    # Convert safe_combs to a tensor and precompute sums
+    if safe_combs:
+        safe_combs_tensor = torch.stack([mask_tensor(s) for s in safe_combs], dim=0).to(DEVICE)
+    else:
+        safe_combs_tensor = torch.empty((0, num_features), dtype=torch.bool, device=DEVICE)
+    safe_comb_sums = safe_combs_tensor.sum(dim=1, dtype=torch.float32)
+
+    combs_to_check_tensor_list = []
+
+    for i in tqdm(range(num_features), desc="Processing features", disable=(len(safe_combs) == 0), bar_format=tqdm_bar_format):
+        # Get combs that don't include feature i (i-th column is False)
+        c2s_i = c2s_tensor[~c2s_tensor[:, i]]
+        num_new_icombs = c2s_i.shape[0]
+        if num_new_icombs == 0: continue
+
+        # Generate new_combs by setting i-th column to True
+        new_icombs = c2s_i.clone()
+        new_icombs[:, i] = True
+
+        # Process in chunks to manage memory
+        for j in range(0, num_new_icombs, chunk_size):
+            new_icombs_jchunk = new_icombs[j:j + chunk_size]
+            any_subset = torch.zeros(new_icombs_jchunk.shape[0], dtype=torch.bool, device=DEVICE)
+
+            for k in range(0, safe_combs_tensor.shape[0], chunk_size):
+                safe_combs_tensor_kchunk = safe_combs_tensor[k:k + chunk_size]
+                safe_comb_sums_kchunk = safe_comb_sums[k:k + chunk_size]
+
+                # check subset condition by comparing matrix product and comb_sum
+                product = new_icombs_jchunk.float() @ safe_combs_tensor_kchunk.float().T
+                any_subset |= (product == safe_comb_sums_kchunk.unsqueeze(0)).any(dim=1)
+
+            # Filter out new_combs that are pruned
+            valid_new_combs = new_icombs_jchunk[~any_subset]
+            if valid_new_combs.shape[0] > 0:
+                combs_to_check_tensor_list.append(valid_new_combs)
+
+    # Concatenate all valid new combs and deduplicate
+    if combs_to_check_tensor_list:
+        combs_to_check_tensor = torch.cat(combs_to_check_tensor_list, dim=0).unique(dim=0)
+    else:
+        combs_to_check_tensor = torch.empty((0, num_features), dtype=torch.bool, device=DEVICE)
+
+    # Convert tensor to List[List[int]]
+    combs_to_check = []
+    for comb_tensor in combs_to_check_tensor.cpu().numpy():
+        indices = np.where(comb_tensor)[0].astype(int).tolist()
+        combs_to_check.append(indices)
+
+    return combs_to_check
+
+def split_combs_aux(c2s_tensor: torch.Tensor) -> List[List[int]]:
+    combs_to_check_tensor_list = []
+    base_level = c2s_tensor[0].sum().item()
+
+    for i in tqdm(range(num_features), desc="Processing features", bar_format=tqdm_bar_format):
+        # Get combs that don't include feature i (i-th column is False)
+        c2s_i = c2s_tensor[~c2s_tensor[:, i]]
+        num_new_icombs = c2s_i.shape[0]
+        if num_new_icombs == 0: continue
+
+        # Generate new_combs by setting i-th column to True
+        new_icombs = c2s_i.clone()
+        new_icombs[:, i] = True
+
+        for j in range(0, num_new_icombs, chunk_size):
+            new_icombs_jchunk = new_icombs[j:j + chunk_size]
+            superset_cnt = torch.zeros(new_icombs_jchunk.shape[0], dtype=torch.uint8, device=DEVICE)
+
+            for k in range(0, c2s_tensor.shape[0], chunk_size):
+                c2s_tensor_kchunk = c2s_tensor[k:k + chunk_size]
+
+                # compute superset_cnt by sum of matrix product == base_level
+                product = new_icombs_jchunk.float() @ c2s_tensor_kchunk.float().T
+                superset_cnt += (product == base_level).sum(dim=1)
+
+            # Filter out new_combs that are pruned
+            valid_new_combs = new_icombs_jchunk[superset_cnt == base_level + 1]
+            if valid_new_combs.shape[0] > 0:
+                combs_to_check_tensor_list.append(valid_new_combs)
+
+    # Concatenate all valid new combs and deduplicate
+    if combs_to_check_tensor_list:
+        combs_to_check_tensor = torch.cat(combs_to_check_tensor_list, dim=0).unique(dim=0)
+    else:
+        combs_to_check_tensor = torch.empty((0, num_features), dtype=torch.bool, device=DEVICE)
+
+    # Convert tensor to List[List[int]]
+    combs_to_check = []
+    for comb_tensor in combs_to_check_tensor.cpu().numpy():
+        indices = np.where(comb_tensor)[0].astype(int).tolist()
+        combs_to_check.append(indices)
+
     return combs_to_check
 
 def assume_and_bound(dp_net: SequentialAT, bounded_x0: L0BoundedInput, depth: int=1):

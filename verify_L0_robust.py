@@ -2,14 +2,14 @@ import time
 import torch
 from solver_check import solver_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
-from typing import List, Set
+from typing import List
 from utils import get_args, preprocess, split_combs, tqdm_bar_format, DEVICE
 from tqdm import tqdm
 
 # BFS
-def check_and_branch(combs_to_check: Set[frozenset], safe_combs: List[frozenset]) -> bool:
+def check_and_branch(combs_to_check: List[List[int]], safe_combs: List[List[int]]) -> bool:
     global splits, level, solver_time_temp, solver_checks_temp
-    combs_to_split: List[frozenset] = []
+    combs_to_split: List[List[int]] = []
     safe_num, unk_num = 0, 0
     solver_time_temp = .0
     solver_checks_temp = 0
@@ -32,7 +32,7 @@ def check_and_branch(combs_to_check: Set[frozenset], safe_combs: List[frozenset]
     splits += unk_num
     return check_and_branch(next_level_combs, safe_combs)
 
-def check(comb: frozenset, debug=False, mute=True) -> bool:
+def check(comb: List[int], debug=False, mute=True) -> bool:
     global total_checks, solver_checks, solver_checks_temp, solver_time, x0_, solver_time_temp
     total_checks += 1
     with bounded_x0.selecting(comb):
@@ -80,10 +80,11 @@ if __name__ == "__main__":
         bounded_x0 = L0BoundedInput(x0, args.epsilon, (L, U))
         break
     x0_ = bounded_x0.x.squeeze(2).cpu().numpy()
+    del net
     print("Preprocessing done")
 
     total_checks, solver_checks, solver_checks_temp = 0, 0, 0
-    safe_combs: List[frozenset] = []
+    safe_combs: List[List[int]] = []
     splits = 0
     solver_time, solver_time_temp = .0, .0
     level = 0
@@ -95,6 +96,6 @@ if __name__ == "__main__":
         print(f"Collectively Safe: {ret}; Checks: {total_checks}({solver_checks})")
         exit(0)
 
-    ret = check_and_branch(set([frozenset()]), safe_combs)
+    ret = check_and_branch([[]], safe_combs)
     print(f"Total: Splits {splits}; Time: {time.time() - start:.2f}; Nodes: {total_checks}; GRB Checks: {solver_checks}({solver_time:.2f}s)")
     print(f"Collectively Safe: {ret}")

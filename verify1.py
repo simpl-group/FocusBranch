@@ -1,5 +1,5 @@
 import time
-from typing import List, Set
+from typing import List
 from utils import split_combs, get_args, preprocess, tqdm_bar_format, DEVICE
 import torch
 from AbstractInterpreter1 import L0BoundedInput, SequentialAT
@@ -8,14 +8,12 @@ import torch
 MAX_BATCH_SIZE = 25000
 
 # BFS
-def check_and_branch_batch(combs_to_check: Set[frozenset]) -> bool:
+def check_and_branch_batch(combs_to_check: List[List[int]], safe_combs: List[List[int]]) -> bool:
     num_to_check = len(combs_to_check)
     if num_to_check == 0: return True
-    global safe_combs, level, branching_time, total_nodes, batch_size, splits
-    safe_combs_temp, combs_to_split = [], []
+    global level, branching_time, total_nodes, batch_size, splits
+    combs_to_split = []
     safe_num, unk_num = 0, 0
-
-    combs_to_check = [list(comb) for comb in combs_to_check] # [[int]]
 
     combs_to_check_tail = combs_to_check[-(num_to_check % batch_size):]
     combs_to_check_tail_tensor = torch.tensor(combs_to_check_tail).to(torch.long).to(DEVICE)
@@ -34,7 +32,7 @@ def check_and_branch_batch(combs_to_check: Set[frozenset]) -> bool:
     unk_num += unk_indices.sum().item()
     safe_num += safe_indices.sum().item()
     combs_to_split += combs_to_check_tail_tensor[unk_indices].tolist()
-    safe_combs_temp += combs_to_check_tail_tensor[safe_indices].tolist()
+    safe_combs += combs_to_check_tail_tensor[safe_indices].tolist()
 
     if tail_length != num_to_check:
         bounded_x0.expand(batch_size)
@@ -54,7 +52,7 @@ def check_and_branch_batch(combs_to_check: Set[frozenset]) -> bool:
                 unk_num += unk_indices.sum().item()
                 safe_num += safe_indices.sum().item()
                 combs_to_split += combs[unk_indices].tolist()
-                safe_combs_temp += combs[safe_indices].tolist()
+                safe_combs += combs[safe_indices].tolist()
                 if lb_l.min() < min_value:
                     min_value = lb_l.min().item()
                     min_comb = combs[lb_l.argmin()]
@@ -67,13 +65,11 @@ def check_and_branch_batch(combs_to_check: Set[frozenset]) -> bool:
     if unk_num == 0: return True
     if level == bounded_x0.eps: return False
     level += 1
-    safe_combs += [frozenset(comb) for comb in safe_combs_temp]
-    combs_to_split = [frozenset(comb) for comb in combs_to_split]
     t0 = time.time()
     next_level_branches = split_combs(combs_to_split, safe_combs)
     splits += unk_num
     branching_time += time.time() - t0
-    return check_and_branch_batch(next_level_branches)
+    return check_and_branch_batch(next_level_branches, safe_combs)
 
 if __name__ == "__main__":
     args = get_args()
@@ -87,15 +83,16 @@ if __name__ == "__main__":
         dp_net.tail().make_marginal(true_labels=pred_labels, target_label=args.target_label)
         bounded_x0 = L0BoundedInput(x0, args.epsilon, (L, U))
         break
+    del net
     print("Preprocessing done")
 
-    safe_combs: List[frozenset] = []
+    safe_combs: List[List[int]] = []
     splits = 0
     total_nodes = 0
     branching_time = .0
     level = 0
     start = time.time()
 
-    ret = check_and_branch_batch(set([frozenset()]))
+    ret = check_and_branch_batch([[]], safe_combs)
     print(f"Total: Splits {splits}; Nodes {total_nodes}; Time {time.time() - start:.2f}s; Branching Time {branching_time:.2f}s")
     print(f"Collectively Safe: {ret}")

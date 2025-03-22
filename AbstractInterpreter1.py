@@ -98,9 +98,9 @@ class L0BoundedInput(BoundedInput):
         self.eps += last
 
     @contextmanager
-    def selecting(self, idx: Union[torch.Tensor, frozenset]):
-        if isinstance(idx, frozenset):
-            idx = torch.tensor(list(idx), dtype=torch.long).repeat(self.batch_size, 1).to(self.device)
+    def selecting(self, idx: Union[torch.Tensor, List[int]]):
+        if isinstance(idx, list):
+            idx = torch.tensor(idx, dtype=torch.long).repeat(self.batch_size, 1).to(self.device)
         self.select_idx(idx)
         yield
         self.undo_select(idx[0].numel())
@@ -112,9 +112,9 @@ class L0BoundedInput(BoundedInput):
         self.ignored_idx = self.ignored_idx[:, :-last]
 
     @contextmanager
-    def ignoring(self, idx: Union[torch.Tensor, frozenset]):
-        if isinstance(idx, frozenset):
-            idx = torch.tensor(list(idx), dtype=torch.long).repeat(self.batch_size, 1).to(self.device)
+    def ignoring(self, idx: Union[torch.Tensor, List[int]]):
+        if isinstance(idx, list):
+            idx = torch.tensor(idx, dtype=torch.long).repeat(self.batch_size, 1).to(self.device)
         self.ignore_idx(idx)
         yield
         self.undo_ignore(idx[0].numel())
