@@ -30,6 +30,7 @@ def check_and_branch(combs_to_check: List[List[int]], safe_combs: List[List[int]
     level += 1
     next_level_combs = split_combs(combs_to_split, safe_combs)
     splits += unk_num
+    torch.cuda.empty_cache()
     return check_and_branch(next_level_combs, safe_combs)
 
 def check(comb: List[int], debug=False, mute=True) -> bool:

@@ -24,6 +24,10 @@ class RelationalPolyhedra:
     def negW(self) -> torch.Tensor:
         return self.W.clamp_max(0)
 
+    def expand(self, batch_size: int) -> None:
+        self.W = self.W[0].unsqueeze(0).expand(batch_size, -1, -1)
+        self.b = self.b[0].unsqueeze(0).expand(batch_size, -1, -1)
+
 class Bounds:
     def __init__(self, lbounds: torch.Tensor, ubounds: torch.Tensor):
         self.l = lbounds  # (batch_size, features, 1)
@@ -78,6 +82,12 @@ class L0BoundedInput(BoundedInput):
         """indices pre-selected before the ranking to compute the sum which is then added to the diff"""
         self.ignored_idx: torch.Tensor = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
         """indices to ignore while picking the top-epsilon values"""
+
+    def expand(self, batch_size: int) -> None:
+        self.x = self.x[0].unsqueeze(0).expand(batch_size, -1, -1)
+        self.batch_indices = torch.arange(batch_size).unsqueeze(1)
+        self.batch_size = batch_size
+        self.clear_all_idx()
 
     def select_idx(self, idx: torch.Tensor):
         self.selected_idx = torch.cat((self.selected_idx, idx), dim=1)
@@ -327,6 +337,11 @@ class SequentialAT(nn.Sequential):
 
     def tail(self) -> AffineAT:
         return self[-1]
+
+    def expand(self, batch_size: int) -> None:
+        for layer in self:
+            if isinstance(layer, AffineAT):
+                layer.rp.expand(batch_size)
 
     def __call__(self, bounded_in: BoundedInput) -> AbstractTransformer:
         AbstractTransformer.bounded_in=bounded_in
