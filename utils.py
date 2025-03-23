@@ -3,7 +3,7 @@ from torchvision.transforms import ToTensor, Compose, Normalize
 from torchvision.datasets import MNIST
 from torch.utils.data import DataLoader, Subset, TensorDataset
 from networks import get_network, Normalization
-from AbstractInterpreter import SequentialAT, L0BoundedInput, LinfBoundedInput
+from AbstractInterpreter import SequentialAT, L0BoundedInput
 from torch.nn import Sequential
 from typing import Iterable, Tuple, List
 import numpy as np
@@ -77,14 +77,14 @@ def preprocess(args: argparse.Namespace, demo: bool=True) -> Tuple[Sequential, D
 
     return net, correct_loader, L, U
 
-def abstraction_loader(dp_net: SequentialAT, data_loader: DataLoader,
+def abstraction_loader(seqAT: SequentialAT, data_loader: DataLoader,
                        L: float, U: float, target_label: int, epsilon: int
                        ) -> Iterable[Tuple[SequentialAT, L0BoundedInput]]:
     for images, pred_labels in data_loader:
         x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-        dp_net.tail().make_marginal(true_labels=pred_labels, target_label=target_label)
+        seqAT.tail().make_marginal(true_labels=pred_labels, target_label=target_label)
         bounded_x0 = L0BoundedInput(x0, epsilon, (L, U))
-        yield dp_net, bounded_x0
+        yield seqAT, bounded_x0
 
 def mask_tensor(comb: List[int]) -> torch.Tensor:
     tensor = torch.zeros(num_features, dtype=torch.bool, device=DEVICE)
@@ -192,30 +192,3 @@ def split_combs_aux(c2s_tensor: torch.Tensor) -> List[List[int]]:
         combs_to_check.append(indices)
 
     return combs_to_check
-
-def assume_and_bound(dp_net: SequentialAT, bounded_x0: L0BoundedInput, depth: int=1):
-    output = dp_net(bounded_x0)
-    lrp_wrt_x0, _ = output.backsubstitution()
-    lb = bounded_x0.compute_bound(lrp_wrt_x0, -1).reshape(-1).tolist()
-    if depth == 0:
-        print(f"({bounded_x0.num_selected()},{bounded_x0.num_ignored()}):\t", lb)
-
-    if depth > 0 and bounded_x0.eps > 0:
-        idx = bounded_x0.most_contributed_idx(lrp_wrt_x0.W)
-        # assume idx is selected
-        with bounded_x0.selecting(idx):
-            assume_and_bound(dp_net=dp_net, bounded_x0=bounded_x0, depth=depth-1)
-        # assume idx is not selected
-        with bounded_x0.ignoring(idx):
-            assume_and_bound(dp_net=dp_net, bounded_x0=bounded_x0, depth=depth-1)
-
-def Linf_robust(dp_net: SequentialAT, bounded_in: LinfBoundedInput, collective=False) -> bool:
-    output = dp_net(bounded_in)
-    out_bounds = output.get_bounds()
-    print("Initial lower bounds:\t", out_bounds.l.reshape(-1).tolist())
-    if not collective:
-        return all(out_bounds.l > 0)
-    if any(out_bounds.l > 0):
-        return True
-    # future work
-    return False

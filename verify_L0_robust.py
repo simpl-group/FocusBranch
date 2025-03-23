@@ -37,7 +37,7 @@ def check(comb: List[int], debug=False, mute=True) -> bool:
     global total_checks, solver_checks, solver_checks_temp, solver_time, x0_, solver_time_temp
     total_checks += 1
     with bounded_x0.selecting(comb):
-        output = dp_net(bounded_x0)
+        output = seqAT(bounded_x0)
         lrp, _ = output.backsubstitution()
         lb_range = bounded_x0.compute_bounds(lrp, lrp)
 
@@ -74,10 +74,10 @@ if __name__ == "__main__":
     args = get_args()
     net, data_loader, L, U = preprocess(args, demo=True)
     x_ = torch.zeros(min(args.batch_size, len(data_loader)), 1, 28, 28).to(DEVICE)
-    dp_net = SequentialAT.from_sequential(net, x_)
+    seqAT = SequentialAT.from_sequential(net, x_)
     for images, pred_labels in data_loader:
         x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-        dp_net.tail().make_marginal(true_labels=pred_labels, target_label=args.target_label)
+        seqAT.tail().make_marginal(true_labels=pred_labels, target_label=args.target_label)
         bounded_x0 = L0BoundedInput(x0, args.epsilon, (L, U))
         break
     x0_ = bounded_x0.x.squeeze(2).cpu().numpy()

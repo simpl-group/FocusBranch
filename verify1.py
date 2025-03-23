@@ -25,10 +25,10 @@ def check_and_branch_batch(combs_to_check: List[List[int]], safe_combs: List[Lis
             current_batch_size = len(combs_to_check_batch_tensor)
             if bounded_x0.batch_size != current_batch_size:
                 bounded_x0.expand(current_batch_size)
-                dp_net.expand(current_batch_size)
+                seqAT.expand(current_batch_size)
 
             with bounded_x0.selecting(combs_to_check_batch_tensor.to(DEVICE)):
-                output = dp_net(bounded_x0)
+                output = seqAT(bounded_x0)
                 lrp, _ = output.backsubstitution()
                 lb_l = bounded_x0.compute_bound(lrp, sign=-1).reshape(-1).cpu()
 
@@ -60,10 +60,10 @@ if __name__ == "__main__":
     args.batch_size = 1
     net, data_loader, L, U = preprocess(args, demo=True)
     x_ = torch.zeros(1, 1, 28, 28).to(DEVICE)
-    dp_net = SequentialAT.from_sequential(net, x_)
+    seqAT = SequentialAT.from_sequential(net, x_)
     for images, pred_labels in data_loader:
         x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-        dp_net.tail().make_marginal(true_labels=pred_labels, target_label=args.target_label)
+        seqAT.tail().make_marginal(true_labels=pred_labels, target_label=args.target_label)
         bounded_x0 = L0BoundedInput(x0, args.epsilon, (L, U))
         break
     del net

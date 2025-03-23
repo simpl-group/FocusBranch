@@ -80,14 +80,13 @@ class L0BoundedInput(BoundedInput):
         super().__init__(x, eps, pixel_value_range)
         self.selected_idx: torch.Tensor = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
         """indices pre-selected before the ranking to compute the sum which is then added to the diff"""
-        self.ignored_idx: torch.Tensor = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
-        """indices to ignore while picking the top-epsilon values"""
 
     def expand(self, batch_size: int) -> None:
         self.x = self.x[0].unsqueeze(0).expand(batch_size, -1, -1)
         self.batch_indices = torch.arange(batch_size).unsqueeze(1)
         self.batch_size = batch_size
-        self.clear_all_idx()
+        self.eps += self.num_selected()
+        self.selected_idx = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
 
     def select_idx(self, idx: torch.Tensor):
         self.selected_idx = torch.cat((self.selected_idx, idx), dim=1)
@@ -105,30 +104,8 @@ class L0BoundedInput(BoundedInput):
         yield
         self.undo_select(idx[0].numel())
 
-    def ignore_idx(self, idx: torch.Tensor):
-        self.ignored_idx = torch.cat((self.ignored_idx, idx), dim=1)
-
-    def undo_ignore(self, last: int=1):
-        self.ignored_idx = self.ignored_idx[:, :-last]
-
-    @contextmanager
-    def ignoring(self, idx: Union[torch.Tensor, List[int]]):
-        if isinstance(idx, list):
-            idx = torch.tensor(idx, dtype=torch.long).repeat(self.batch_size, 1).to(self.device)
-        self.ignore_idx(idx)
-        yield
-        self.undo_ignore(idx[0].numel())
-
-    def clear_all_idx(self):
-        self.eps += self.num_selected()
-        self.selected_idx = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
-        self.ignored_idx = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
-
     def num_selected(self):
         return self.selected_idx[0].numel()
-
-    def num_ignored(self):
-        return self.ignored_idx[0].numel()
 
     def compute_diff(self, rpW: torch.Tensor, sign: int=1) -> torch.Tensor:
         # rpW.shape[1] number of nuerons in next layer
@@ -140,18 +117,9 @@ class L0BoundedInput(BoundedInput):
         if self.eps == 0:
             return WX_selected_sum
         WX_diff[self.batch_indices, :, self.selected_idx] = 0
-        WX_diff[self.batch_indices, :, self.ignored_idx] = 0
 
         WX_tope_diff = WX_diff.topk(self.eps, dim=2, largest=(sign == 1), sorted=False).values
         return WX_tope_diff.sum(dim=-1, keepdim=True) + WX_selected_sum
-
-    def most_contributed_idx(self, rpW: torch.Tensor, sign: int=-1) -> torch.Tensor:
-        assert rpW.shape[1] == 1
-        X = self.x.reshape(self.batch_size, 1, -1)
-        WX_diff = sign * torch.where(rpW * sign > 0, rpW * (self.U - X), rpW * (self.L - X))
-        WX_diff[self.batch_indices, :, self.ignored_idx] = 0
-        WX_diff[self.batch_indices, :, self.selected_idx] = 0
-        return WX_diff.argmax(-1)
 
 class LinfBoundedInput(BoundedInput):
     def __init__(self, x: torch.Tensor, eps: float, pixel_value_range=(0, 1), bounds: Bounds=None):
