@@ -89,7 +89,7 @@ class L0BoundedInput(BoundedInput):
         self.selected_idx = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
 
     def select_idx(self, idx: torch.Tensor):
-        self.selected_idx = torch.cat((self.selected_idx, idx), dim=1)
+        self.selected_idx = torch.cat((self.selected_idx, idx.to(self.device)), dim=1)
         self.eps -= idx[0].numel()
 
     def undo_select(self, last: int=1):
@@ -97,9 +97,9 @@ class L0BoundedInput(BoundedInput):
         self.eps += last
 
     @contextmanager
-    def selecting(self, idx: Union[torch.Tensor, List[int]]):
-        if isinstance(idx, list):
-            idx = torch.tensor(idx, dtype=torch.long).repeat(self.batch_size, 1).to(self.device)
+    def selecting(self, idx: torch.Tensor):
+        if idx.ndim == 1:
+            idx = idx.unsqueeze(0).expand(self.batch_size, -1)
         self.select_idx(idx)
         yield
         self.undo_select(idx[0].numel())

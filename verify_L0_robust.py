@@ -3,37 +3,39 @@ import torch
 from solver_check import solver_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from typing import List
-from utils import get_args, preprocess, split_combs, tqdm_bar_format, DEVICE
+from utils import get_args, preprocess, tqdm_bar_format, DEVICE
+from split_and_prune import split_and_prune
 from tqdm import tqdm
 
 # BFS
-def check_and_branch(combs_to_check: List[List[int]], safe_combs: List[List[int]]) -> bool:
+def check_and_branch(combs_to_check: torch.Tensor, safe_combs: List[List[int]]) -> bool:
     global splits, level, solver_time_temp, solver_checks_temp
-    combs_to_split: List[List[int]] = []
-    safe_num, unk_num = 0, 0
+    unk_combs: List[List[int]] = []
+    unk_num = 0
     solver_time_temp = .0
     solver_checks_temp = 0
     with tqdm(total=len(combs_to_check), disable=(level == 0), desc=f"Level {level}", bar_format=tqdm_bar_format) as pbar:
         for comb in combs_to_check:
             if check(comb):
-                safe_num += 1
-                safe_combs.append(comb)
+                safe_combs.append(comb.tolist())
             elif splits + unk_num < args.budget:
                 # verification failed, need to split the comb
                 unk_num += 1
-                combs_to_split.append(comb)
+                unk_combs.append(comb.tolist())
             else: return False
-            pbar.set_postfix({"Safe:UNK": f"{safe_num}:{unk_num}", "GRB": f"{solver_checks_temp}({solver_time_temp:.2f}s)"})
+            pbar.set_postfix({"Safe:UNK": f"{len(safe_combs)}:{len(unk_combs)}", "GRB": f"{solver_checks_temp}({solver_time_temp:.2f}s)"})
             pbar.update(1)
-    if unk_num == 0: return True
+    if unk_num <= level: return True
     if level == bounded_x0.eps: return False
+    del combs_to_check
+    torch.cuda.empty_cache()
+    next_level_combs = split_and_prune(unk_combs, safe_combs, level)
     level += 1
-    next_level_combs = split_combs(combs_to_split, safe_combs)
     splits += unk_num
     torch.cuda.empty_cache()
     return check_and_branch(next_level_combs, safe_combs)
 
-def check(comb: List[int], debug=False, mute=True) -> bool:
+def check(comb: torch.Tensor, debug=False, mute=True) -> bool:
     global total_checks, solver_checks, solver_checks_temp, solver_time, x0_, solver_time_temp
     total_checks += 1
     with bounded_x0.selecting(comb):
@@ -64,7 +66,7 @@ def check(comb: List[int], debug=False, mute=True) -> bool:
 
     t0 = time.time()
     ret = solver_check_unsat(x0=x0, coefficients=coef,
-            bias=bias, eps=bounded_x0.eps, selected_idx=comb,
+            bias=bias, eps=bounded_x0.eps, selected_idx=comb.tolist(),
             pixel_value_range=(bounded_x0.L, bounded_x0.U), mute=mute)
     solver_time += time.time() - t0
     solver_time_temp += time.time() - t0
@@ -86,6 +88,7 @@ if __name__ == "__main__":
 
     total_checks, solver_checks, solver_checks_temp = 0, 0, 0
     safe_combs: List[List[int]] = []
+    root_combs = torch.empty((1, 0), dtype=torch.int64)
     splits = 0
     solver_time, solver_time_temp = .0, .0
     level = 0
@@ -97,6 +100,6 @@ if __name__ == "__main__":
         print(f"Collectively Safe: {ret}; Checks: {total_checks}({solver_checks})")
         exit(0)
 
-    ret = check_and_branch([[]], safe_combs)
+    ret = check_and_branch(root_combs, safe_combs)
     print(f"Total: Splits {splits}; Time: {time.time() - start:.2f}; Nodes: {total_checks}; GRB Checks: {solver_checks}({solver_time:.2f}s)")
     print(f"Collectively Safe: {ret}")
