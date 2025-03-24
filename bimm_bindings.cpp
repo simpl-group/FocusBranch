@@ -15,62 +15,19 @@ torch::Tensor bimm64_laucher(torch::Tensor A, torch::Tensor B) {
     return C;
 }
 
-void bimm64_eq_cuda(
+void superset_popc_cuda(
     at::Tensor A, at::Tensor B, at::Tensor C,
-    const int na, const int nb, const int nv, const int cmp
+    const int na, const int nb, const int nv, const int nb_div8
 );
-torch::Tensor bimm64_eq_laucher(torch::Tensor A, torch::Tensor B, const int cmp) {
-    CHECK_CUDA(A);
-    CHECK_CUDA(B);
-    const int na = A.size(0);
-    const int nb = B.size(0);
-    auto C = torch::zeros({na, nb}, torch::TensorOptions().dtype(torch::kUInt8).device(torch::kCUDA));
-    bimm64_eq_cuda(A, B, C, na, nb, A.size(1), cmp);
-    return C;  //.sum(1) here improves 8%
-}
-
-void bimm64_le_cuda(
-    at::Tensor A, at::Tensor B, at::Tensor C,
-    const int na, const int nb, const int nv, const int cmp
-);
-torch::Tensor bimm64_le_laucher(torch::Tensor A, torch::Tensor B, const int cmp) {
-    CHECK_CUDA(A);
-    CHECK_CUDA(B);
-    const int na = A.size(0);
-    const int nb = B.size(0);
-    auto C = torch::zeros({na, nb}, torch::TensorOptions().dtype(torch::kUInt8).device(torch::kCUDA));
-    bimm64_le_cuda(A, B, C, na, nb, A.size(1), cmp);
-    return C;  //.any(1)
-}
-
-void bimm64_eq_popc_cuda(
-    at::Tensor A, at::Tensor B, at::Tensor C,
-    const int na, const int nb, const int nv, const int cmp, const int nb_div8
-);
-torch::Tensor bimm64_eq_sum_laucher(torch::Tensor A, torch::Tensor B, const int cmp) {
+torch::Tensor superset_sum_laucher(torch::Tensor A, torch::Tensor B) {
     CHECK_CUDA(A);
     CHECK_CUDA(B);
     const int na = A.size(0);
     const int nb = B.size(0);
     const int nb_div8 = (nb + 7) / 8;
     auto C = torch::zeros({na, nb_div8}, torch::TensorOptions().dtype(torch::kUInt8).device(torch::kCUDA));
-    bimm64_eq_popc_cuda(A, B, C, na, nb, A.size(1), cmp, nb_div8);
+    superset_popc_cuda(A, B, C, na, nb, A.size(1), nb_div8);
     return C.sum(1);
-}
-
-void bimm64_le_popc_cuda(
-    at::Tensor A, at::Tensor B, at::Tensor C,
-    const int na, const int nb, const int nv, const int cmp, const int nb_div8
-);
-torch::Tensor bimm64_le_any_laucher(torch::Tensor A, torch::Tensor B, const int cmp) {
-    CHECK_CUDA(A);
-    CHECK_CUDA(B);
-    const int na = A.size(0);
-    const int nb = B.size(0);
-    const int nb_div8 = (nb + 7) / 8;
-    auto C = torch::zeros({na, nb_div8}, torch::TensorOptions().dtype(torch::kUInt8).device(torch::kCUDA));
-    bimm64_le_popc_cuda(A, B, C, na, nb, A.size(1), cmp, nb_div8);
-    return C.any(1);
 }
 
 void comb2bitmask_cuda(
@@ -100,10 +57,7 @@ torch::Tensor bitmask2comb_laucher(torch::Tensor bitmasks, const int popc) {
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("bimm64", &bimm64_laucher, "Binary Matmul 64 (CUDA)");
-    m.def("bimm64_eq", &bimm64_eq_laucher, "Binary Matmul 64 Equal (CUDA)");
-    m.def("bimm64_le", &bimm64_le_laucher, "Binary Matmul 64 Less Equal (CUDA)");
-    m.def("bimm64_eq_sum", &bimm64_eq_sum_laucher, "Binary Matmul 64 Equal Sum (CUDA)");
-    m.def("bimm64_le_any", &bimm64_le_any_laucher, "Binary Matmul 64 Less Equal Any (CUDA)");
+    m.def("superset_sum", &superset_sum_laucher, "Superset Sum (CUDA)");
     m.def("comb2bitmask", &comb2bitmask_laucher, "Combination to Bitmask (CUDA)");
     m.def("bitmask2comb", &bitmask2comb_laucher, "Bitmask to Combination (CUDA)");
 }

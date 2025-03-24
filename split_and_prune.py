@@ -61,7 +61,7 @@ def split_and_prune(unk_combs: List[List[int]], safe_combs: List[List[int]], lev
         else:
             safe_bitmasks = torch.empty((0, num_ints), dtype=torch.int64, device=DEVICE)
 
-        new_bitmasks_pruned_list = prune_by_safe(new_bitmasks, safe_bitmasks, level)
+        new_bitmasks_pruned_list = prune_by_safe(new_bitmasks, safe_bitmasks)
 
         del safe_bitmasks
 
@@ -76,21 +76,21 @@ def split_and_prune(unk_combs: List[List[int]], safe_combs: List[List[int]], lev
 
     return bimm.bitmask2comb(combs_to_check_tensor, level + 1)
 
-def prune_by_safe(new_bitmasks: torch.Tensor, safe_bitmasks: torch.Tensor, level: int) -> List[torch.Tensor]:
+def prune_by_safe(new_bitmasks: torch.Tensor, safe_bitmasks: torch.Tensor) -> List[torch.Tensor]:
     new_bitmasks_pruned_list = []
 
     with tqdm(total=new_bitmasks.shape[0], desc="Pruning next level combs",
                     bar_format=tqdm_bar_format) as pbar:
         for i in range(0, new_bitmasks.shape[0], chunk_size):
             new_bitmasks_ichunk = new_bitmasks[i:i + chunk_size]
-            any_subset = torch.zeros(new_bitmasks_ichunk.shape[0], dtype=torch.bool, device=DEVICE)
+            superset_cnt = torch.zeros(new_bitmasks_ichunk.shape[0], dtype=torch.uint8, device=DEVICE)
 
             for j in range(0, safe_bitmasks.shape[0], chunk_size*8):
                 safe_bitmasks_jchunk = safe_bitmasks[j:j + chunk_size*8]
-                any_subset |= bimm.bimm64_le_any(new_bitmasks_ichunk, safe_bitmasks_jchunk, level)
+                superset_cnt += bimm.superset_sum(new_bitmasks_ichunk, safe_bitmasks_jchunk)
 
             # Filter out new_combs that are a subset of any safe_combs
-            valid_new_combs = new_bitmasks_ichunk[~any_subset]
+            valid_new_combs = new_bitmasks_ichunk[superset_cnt == 0]
             if valid_new_combs.shape[0] > 0:
                 new_bitmasks_pruned_list.append(valid_new_combs)
             pbar.update(new_bitmasks_ichunk.shape[0])
@@ -109,8 +109,7 @@ def prune_by_unk(new_bitmasks: torch.Tensor, unk_bitmasks: torch.Tensor, level: 
 
             for j in range(0, unk_bitmasks.shape[0], chunk_size*8):
                 unk_bitmasks_jchunk = unk_bitmasks[j:j + chunk_size*8]
-                # compute superset_cnt by sum of binary matrix product == base_level
-                superset_cnt += bimm.bimm64_eq_sum(new_bitmasks_ichunk, unk_bitmasks_jchunk, level)
+                superset_cnt += bimm.superset_sum(new_bitmasks_ichunk, unk_bitmasks_jchunk)
 
             # Only keep those new_combs whose superset_cnt == level + 1
             valid_new_combs = new_bitmasks_ichunk[superset_cnt == level + 1]
