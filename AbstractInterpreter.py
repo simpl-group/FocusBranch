@@ -141,12 +141,8 @@ class AbstractTransformer(nn.Module):
         self.parent: Optional[Self] = None
         super().__init__()
 
-    def forward(self, parent: Optional[Self]=None):
-        ...
-
-    def __call__(self, parent: Optional[Self]=None) -> Self:
+    def forward(self, parent: Optional[Self]=None) -> Self:
         self.parent = parent
-        self.forward(parent)
         return self
 
     def get_bounds(self) -> Bounds:
@@ -236,8 +232,9 @@ class ActivationAT(AbstractTransformer):
     def compute_rp(bounds: Bounds) -> Tuple[RelationalPolyhedra, RelationalPolyhedra]:
         raise NotImplementedError("Subclasses must implement compute_rp method.")
 
-    def forward(self, parent: Optional[AbstractTransformer]=None):
+    def forward(self, parent: Optional[AbstractTransformer]=None) -> Self:
         self.lrp, self.urp = self.compute_rp(parent.get_bounds())
+        return super().forward(parent)
 
 class ReLUAT(ActivationAT):
     def __init__(self):
@@ -313,4 +310,4 @@ class SequentialAT(nn.Sequential):
 
     def __call__(self, bounded_in: BoundedInput) -> AbstractTransformer:
         AbstractTransformer.bounded_in=bounded_in
-        return self.forward(None)
+        return super().__call__(None)
