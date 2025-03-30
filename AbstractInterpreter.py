@@ -64,22 +64,23 @@ class BoundedInput:
         self.batch_size, self.num_features, _ = x.shape
         self.batch_indices = torch.arange(self.batch_size).unsqueeze(1)
 
-    def compute_diff(self, rpW: torch.Tensor, sign: int=1) -> torch.Tensor:
+    def compute_ubound(self, rp: RelationalPolyhedra) -> torch.Tensor:
         raise NotImplementedError
 
-    def compute_bound(self, rp: RelationalPolyhedra, sign: int=1) -> torch.Tensor:
-        center = torch.bmm(rp.W, self.x) + rp.b  # (batch, d1, 1)
-        diff = self.compute_diff(rp.W, sign=sign)
-        return center + diff
+    def compute_lbound(self, rp: RelationalPolyhedra) -> torch.Tensor:
+        raise NotImplementedError
 
     def compute_bounds(self, lrp: RelationalPolyhedra, urp: RelationalPolyhedra) -> Bounds:
-        return Bounds(lbounds=self.compute_bound(lrp, -1), ubounds=self.compute_bound(urp, 1))
+        return Bounds(lbounds=self.compute_lbound(lrp), ubounds=self.compute_ubound(urp))
 
 class L0BoundedInput(BoundedInput):
     def __init__(self, x: torch.Tensor, eps: int, pixel_value_range=(0, 1)):
         super().__init__(x, eps, pixel_value_range)
         self.selected_idx: torch.Tensor = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
         """indices pre-selected before the ranking to compute the sum which is then added to the diff"""
+
+    def num_selected(self):
+        return self.selected_idx[0].numel()
 
     def expand(self, batch_size: int) -> None:
         self.x = self.x[0].unsqueeze(0).expand(batch_size, -1, -1)
@@ -104,22 +105,43 @@ class L0BoundedInput(BoundedInput):
         yield
         self.undo_select(idx[0].numel())
 
-    def num_selected(self):
-        return self.selected_idx[0].numel()
+    def wx_selected_sum(self, WX_diff: torch.Tensor, d1: int) -> torch.Tensor:
+        indices = self.selected_idx.unsqueeze(1).expand(-1, d1, -1)
+        return WX_diff.gather(dim=2, index=indices).sum(dim=-1, keepdim=True)
 
-    def compute_diff(self, rpW: torch.Tensor, sign: int=1) -> torch.Tensor:
-        # rpW.shape[1] number of nuerons in next layer
-        X = self.x.reshape(self.batch_size, 1, -1).expand(-1, rpW.shape[1], -1)
-        WX_diff = torch.where(rpW * sign > 0, rpW * (self.U - X), rpW * (self.L - X))
+    def compute_udiff(self, rpW: torch.Tensor) -> torch.Tensor:
+        d1 = rpW.shape[1]  # number of nuerons in next layer
+        X = self.x.reshape(self.batch_size, 1, -1).expand(-1, d1, -1)
+        WX_diff = torch.where(rpW > 0, rpW * (self.U - X), rpW * (self.L - X))
 
-        indices = self.selected_idx.unsqueeze(1).expand(-1, rpW.shape[1], -1)
-        WX_selected_sum = WX_diff.gather(dim=2, index=indices).sum(dim=-1, keepdim=True)
-        if self.eps == 0:
-            return WX_selected_sum
+        WX_selected_sum = self.wx_selected_sum(WX_diff, d1)
+        if self.eps == 0: return WX_selected_sum
         WX_diff[self.batch_indices, :, self.selected_idx] = 0
 
-        WX_tope_diff = WX_diff.topk(self.eps, dim=2, largest=(sign == 1), sorted=False).values
+        WX_tope_diff = WX_diff.topk(self.eps, dim=2, largest=True, sorted=False).values
         return WX_tope_diff.sum(dim=-1, keepdim=True) + WX_selected_sum
+
+    def compute_ldiff(self, rpW: torch.Tensor) -> torch.Tensor:
+        d1 = rpW.shape[1]
+        X = self.x.reshape(self.batch_size, 1, -1).expand(-1, d1, -1)
+        WX_diff = torch.where(rpW < 0, rpW * (self.U - X), rpW * (self.L - X))
+
+        WX_selected_sum = self.wx_selected_sum(WX_diff, d1)
+        if self.eps == 0: return WX_selected_sum
+        WX_diff[self.batch_indices, :, self.selected_idx] = 0
+
+        WX_tope_diff = WX_diff.topk(self.eps, dim=2, largest=False, sorted=False).values
+        return WX_tope_diff.sum(dim=-1, keepdim=True) + WX_selected_sum
+
+    def compute_ubound(self, rp: RelationalPolyhedra) -> torch.Tensor:
+        center = torch.bmm(rp.W, self.x) + rp.b
+        diff = self.compute_udiff(rp.W)
+        return center + diff
+
+    def compute_lbound(self, rp: RelationalPolyhedra) -> torch.Tensor:
+        center = torch.bmm(rp.W, self.x) + rp.b
+        diff = self.compute_ldiff(rp.W)
+        return center + diff
 
 class LinfBoundedInput(BoundedInput):
     def __init__(self, x: torch.Tensor, eps: float, pixel_value_range=(0, 1), bounds: Bounds=None):
@@ -129,9 +151,11 @@ class LinfBoundedInput(BoundedInput):
         else:
             self.bounds = Bounds((x-eps).clamp(self.L, self.U), (x+eps).clamp(self.L, self.U))
 
-    def compute_bounds(self, lrp: RelationalPolyhedra, urp: RelationalPolyhedra) -> Bounds:
-        return Bounds(torch.bmm(lrp.posW(), self.bounds.l) + torch.bmm(lrp.negW(), self.bounds.u) + lrp.b,
-                      torch.bmm(urp.posW(), self.bounds.u) + torch.bmm(urp.negW(), self.bounds.l) + urp.b)
+    def compute_ubound(self, rp: RelationalPolyhedra) -> torch.Tensor:
+        return torch.bmm(rp.posW(), self.bounds.u) + torch.bmm(rp.negW(), self.bounds.l) + rp.b
+
+    def compute_lbound(self, rp: RelationalPolyhedra) -> torch.Tensor:
+        return torch.bmm(rp.posW(), self.bounds.l) + torch.bmm(rp.negW(), self.bounds.u) + rp.b
 
 class AbstractTransformer(nn.Module):
 
@@ -149,7 +173,7 @@ class AbstractTransformer(nn.Module):
         lrp_wrt_inputs, urp_wrt_inputs = self.backsubstitution()
         return AbstractTransformer.bounded_in.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs)
 
-    def backsubstitution(self) -> Tuple[RelationalPolyhedra]:
+    def backsubstitution(self) -> Tuple[RelationalPolyhedra, RelationalPolyhedra]:
         assert isinstance(self, AffineAT)
         lrp, urp = self.rp.clone(), self.rp.clone()
         prev = self.parent
@@ -178,7 +202,7 @@ class AffineAT(AbstractTransformer):
         self.rp = RelationalPolyhedra(self.W, self.b)
 
     @staticmethod
-    def expand(weight: torch.Tensor, bias: torch.Tensor, batch_size: int) -> Tuple[torch.Tensor]:
+    def expand(weight: torch.Tensor, bias: torch.Tensor, batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
         return (weight.unsqueeze(0).expand(batch_size, -1, -1),
                 bias.reshape(1, -1, 1).expand(batch_size, -1, -1))
 

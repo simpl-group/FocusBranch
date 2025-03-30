@@ -29,7 +29,7 @@ def check_and_branch_batch(combs_to_check: torch.Tensor, safe_combs: List[List[i
             with bounded_x0.selecting(combs_to_check_batch):
                 output = seqAT(bounded_x0)
                 lrp, _ = output.backsubstitution()
-                lb_l = bounded_x0.compute_bound(lrp, sign=-1).reshape(-1).cpu()
+                lb_l = bounded_x0.compute_lbound(lrp).reshape(-1).cpu()
 
             safe_combs += combs_to_check_batch[lb_l >= 0].tolist()
             unk_combs += combs_to_check_batch[lb_l < 0].tolist()
