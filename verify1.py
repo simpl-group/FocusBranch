@@ -27,8 +27,7 @@ def check_and_branch_batch(combs_to_check: torch.Tensor, safe_combs: List[List[i
                 seqAT.expand(current_batch_size)
 
             with bounded_x0.selecting(combs_to_check_batch):
-                output = seqAT(bounded_x0)
-                lrp, _ = output.backsubstitution()
+                lrp = seqAT(bounded_x0).backsubstitution_lrp()
                 lb_l = bounded_x0.compute_lbound(lrp).reshape(-1).cpu()
 
             safe_combs += combs_to_check_batch[lb_l >= 0].tolist()
@@ -42,7 +41,7 @@ def check_and_branch_batch(combs_to_check: torch.Tensor, safe_combs: List[List[i
     total_nodes += num_to_check
     if len(unk_combs) <= level: return True
     if level == bounded_x0.eps: return False
-    del combs_to_check, combs_to_check_batch, output, lrp, lb_l, min_comb, min_value
+    del combs_to_check, combs_to_check_batch, lb_l, min_comb, min_value, lrp
     torch.cuda.empty_cache()
     t0 = time.time()
     next_level_combs = split_and_prune(unk_combs, safe_combs, level)

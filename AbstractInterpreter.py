@@ -185,14 +185,31 @@ class AbstractTransformer(nn.Module):
                 lrp.W = lrp.posW() * prev.lrp.W + lrp.negW() * prev.urp.W
                 urp.W = urp.posW() * prev.urp.W + urp.negW() * prev.lrp.W
             elif isinstance(prev, AffineAT):
-                lrp.b = torch.bmm(lrp.posW(), prev.rp.b) + torch.bmm(lrp.negW(), prev.rp.b) + lrp.b
-                urp.b = torch.bmm(urp.posW(), prev.rp.b) + torch.bmm(urp.negW(), prev.rp.b) + urp.b
-                lrp.W = torch.bmm(lrp.posW(), prev.rp.W) + torch.bmm(lrp.negW(), prev.rp.W)
-                urp.W = torch.bmm(urp.posW(), prev.rp.W) + torch.bmm(urp.negW(), prev.rp.W)
+                lrp.b = torch.bmm(lrp.W, prev.rp.b) + lrp.b
+                urp.b = torch.bmm(urp.W, prev.rp.b) + urp.b
+                lrp.W = torch.bmm(lrp.W, prev.rp.W)
+                urp.W = torch.bmm(urp.W, prev.rp.W)
             else: raise NotImplementedError(f"Transform for {prev} is unclear")
             prev = prev.parent
 
         return lrp, urp
+
+    def backsubstitution_lrp(self) -> RelationalPolyhedra:
+        assert isinstance(self, AffineAT)
+        lrp = self.rp.clone()
+        prev = self.parent
+
+        while prev is not None:
+            if isinstance(prev, ActivationAT):
+                lrp.b = torch.bmm(lrp.posW(), prev.lrp.b) + torch.bmm(lrp.negW(), prev.urp.b) + lrp.b
+                lrp.W = lrp.posW() * prev.lrp.W + lrp.negW() * prev.urp.W
+            elif isinstance(prev, AffineAT):
+                lrp.b = torch.bmm(lrp.W, prev.rp.b) + lrp.b
+                lrp.W = torch.bmm(lrp.W, prev.rp.W)
+            else: raise NotImplementedError(f"Transform for {prev} is unclear")
+            prev = prev.parent
+
+        return lrp
 
 class AffineAT(AbstractTransformer):
     def __init__(self, weight: torch.Tensor, bias: torch.Tensor):
