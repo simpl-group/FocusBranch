@@ -80,6 +80,6 @@ def abstraction_loader(seqAT: SequentialAT, data_loader: DataLoader,
                        ) -> Iterable[Tuple[SequentialAT, L0BoundedInput]]:
     for images, pred_labels in data_loader:
         x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-        seqAT.tail().make_marginal(true_labels=pred_labels, target_label=target_label)
+        seqAT.tail.make_marginal(true_labels=pred_labels, target_label=target_label)
         bounded_x0 = L0BoundedInput(x0, epsilon, (L, U))
         yield seqAT, bounded_x0

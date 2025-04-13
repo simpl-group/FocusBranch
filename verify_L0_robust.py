@@ -39,8 +39,8 @@ def check(comb: torch.Tensor, debug=False, mute=True) -> bool:
     global total_checks, solver_checks, solver_checks_temp, solver_time, x0_, solver_time_temp
     total_checks += 1
     with bounded_x0.selecting(comb):
-        output = seqAT(bounded_x0)
-        lrp, _ = output.backsubstitution()
+        seqAT.update_activation_rp(bounded_in=bounded_x0)
+        lrp = seqAT.tail.backsubstitution_lrp()
         lb_range = bounded_x0.compute_bounds(lrp, lrp)
 
     if debug and not mute:
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     seqAT = SequentialAT.from_sequential(net, x_)
     for images, pred_labels in data_loader:
         x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-        seqAT.tail().make_marginal(true_labels=pred_labels, target_label=args.target_label)
+        seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label)
         bounded_x0 = L0BoundedInput(x0, args.epsilon, (L, U))
         break
     x0_ = bounded_x0.x.squeeze(2).cpu().numpy()

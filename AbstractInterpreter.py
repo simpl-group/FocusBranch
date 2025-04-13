@@ -105,16 +105,15 @@ class L0BoundedInput(BoundedInput):
         yield
         self.undo_select(idx[0].numel())
 
-    def wx_selected_sum(self, WX_diff: torch.Tensor, d1: int) -> torch.Tensor:
-        indices = self.selected_idx.unsqueeze(1).expand(-1, d1, -1)
+    def wx_selected_sum(self, WX_diff: torch.Tensor) -> torch.Tensor:
+        indices = self.selected_idx.unsqueeze(1).expand(-1, WX_diff.shape[1], -1)
         return WX_diff.gather(dim=2, index=indices).sum(dim=-1, keepdim=True)
 
     def compute_udiff(self, rpW: torch.Tensor) -> torch.Tensor:
-        d1 = rpW.shape[1]  # number of nuerons in next layer
-        X = self.x.reshape(self.batch_size, 1, -1).expand(-1, d1, -1)
+        X = self.x.reshape(self.batch_size, 1, -1).expand(-1, rpW.shape[1], -1) # rpW.shape[1]: number of nuerons in next layer
         WX_diff = torch.where(rpW > 0, rpW * (self.U - X), rpW * (self.L - X))
 
-        WX_selected_sum = self.wx_selected_sum(WX_diff, d1)
+        WX_selected_sum = self.wx_selected_sum(WX_diff)
         if self.eps == 0: return WX_selected_sum
         WX_diff[self.batch_indices, :, self.selected_idx] = 0
 
@@ -122,11 +121,10 @@ class L0BoundedInput(BoundedInput):
         return WX_tope_diff.sum(dim=-1, keepdim=True) + WX_selected_sum
 
     def compute_ldiff(self, rpW: torch.Tensor) -> torch.Tensor:
-        d1 = rpW.shape[1]
-        X = self.x.reshape(self.batch_size, 1, -1).expand(-1, d1, -1)
+        X = self.x.reshape(self.batch_size, 1, -1).expand(-1, rpW.shape[1], -1)
         WX_diff = torch.where(rpW < 0, rpW * (self.U - X), rpW * (self.L - X))
 
-        WX_selected_sum = self.wx_selected_sum(WX_diff, d1)
+        WX_selected_sum = self.wx_selected_sum(WX_diff)
         if self.eps == 0: return WX_selected_sum
         WX_diff[self.batch_indices, :, self.selected_idx] = 0
 
@@ -157,21 +155,9 @@ class LinfBoundedInput(BoundedInput):
     def compute_lbound(self, rp: RelationalPolyhedra) -> torch.Tensor:
         return torch.bmm(rp.posW(), self.bounds.l) + torch.bmm(rp.negW(), self.bounds.u) + rp.b
 
-class AbstractTransformer(nn.Module):
-
-    bounded_in: Optional[BoundedInput] = None
-
+class AbstractTransformer:
     def __init__(self):
         self.parent: Optional[Self] = None
-        super().__init__()
-
-    def forward(self, parent: Optional[Self]=None) -> Self:
-        self.parent = parent
-        return self
-
-    def get_bounds(self) -> Bounds:
-        lrp_wrt_inputs, urp_wrt_inputs = self.backsubstitution()
-        return AbstractTransformer.bounded_in.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs)
 
     def backsubstitution(self) -> Tuple[RelationalPolyhedra, RelationalPolyhedra]:
         assert isinstance(self, AffineAT)
@@ -266,16 +252,12 @@ class AffineAT(AbstractTransformer):
 class ActivationAT(AbstractTransformer):
     def __init__(self):
         super().__init__()
-        self.lrp: Optional[RelationalPolyhedra] = None
-        self.urp: Optional[RelationalPolyhedra] = None
+        self.lrp: RelationalPolyhedra = None
+        self.urp: RelationalPolyhedra = None
 
     @staticmethod
     def compute_rp(bounds: Bounds) -> Tuple[RelationalPolyhedra, RelationalPolyhedra]:
         raise NotImplementedError("Subclasses must implement compute_rp method.")
-
-    def forward(self, parent: Optional[AbstractTransformer]=None) -> Self:
-        self.lrp, self.urp = self.compute_rp(parent.get_bounds())
-        return super().forward(parent)
 
 class ReLUAT(ActivationAT):
     def __init__(self):
@@ -311,44 +293,54 @@ class ReLUAT(ActivationAT):
         urp.W.transpose_(-1, -2)
         return lrp, urp
 
-class SequentialAT(nn.Sequential):
-    def __init__(self, layers: List[AbstractTransformer]):
-        assert isinstance(layers[0], AffineAT)
-        assert isinstance(layers[-1], AffineAT)
-        super().__init__(*layers)
+class SequentialAT:
+    def __init__(self, ATs: List[AbstractTransformer]):
+        tail = ATs[-1]
+        assert isinstance(tail, AffineAT)
+        self.ATs = ATs
+        self.tail = tail
 
     @staticmethod
-    def parse_layers(seq_net: nn.Sequential, x: torch.Tensor) -> List[AbstractTransformer]:
-        layers = []
+    def parse_layers(seq_net: nn.Sequential, x: torch.Tensor, prev: Optional[AbstractTransformer]=None) -> List[AbstractTransformer]:
+        ATs = []
+        current: Optional[AbstractTransformer] = None
         for layer in seq_net:
+            x_in = x
+            x = layer(x_in)
             if isinstance(layer, nn.Linear):
-                layers.append(AffineAT.from_linear(layer, x.shape[0]))
+                current = AffineAT.from_linear(layer, x_in.shape[0])
             elif isinstance(layer, nn.Conv2d):
-                layers.append(AffineAT.from_conv2d(layer, x.shape))
+                current = AffineAT.from_conv2d(layer, x_in.shape)
             elif isinstance(layer, nn.ReLU):
-                layers.append(ReLUAT())
+                current = ReLUAT()
             elif isinstance(layer, nn.Sequential):
-                layers += SequentialAT.parse_layers(layer, x)
+                ATs += SequentialAT.parse_layers(layer, x_in, prev)
+                prev = ATs[-1]
             elif isinstance(layer, nn.Flatten):
                 if layer.start_dim != 1 or layer.end_dim != -1:
                     warnings.warn("No Abstract Transformer for Flatten with non-default start_dim and end_dim; skip for now", RuntimeWarning)
             elif not isinstance(layer, (nn.Identity, nn.Dropout)):
                 warnings.warn(f"No Abstract Transformer for {layer}; skip for now", RuntimeWarning)
-            x = layer(x)
-        return layers
+            if current is not None:
+                # feed forward computation graph
+                current.parent = prev
+                ATs.append(current)
+                prev = current
+                current = None
+        return ATs
 
     @classmethod
-    def from_sequential(cls, seq_net: nn.Sequential, x: torch.Tensor) -> Self:
-        return cls(SequentialAT.parse_layers(seq_net, x))
-
-    def tail(self) -> AffineAT:
-        return self[-1]
+    def from_sequential(cls, seq_net: nn.Sequential, x: torch.Tensor, prev: Optional[AbstractTransformer]=None) -> Self:
+        return cls(SequentialAT.parse_layers(seq_net, x, prev))
 
     def expand(self, batch_size: int) -> None:
-        for layer in self:
-            if isinstance(layer, AffineAT):
-                layer.rp.expand(batch_size)
+        for AT in self.ATs:
+            if isinstance(AT, AffineAT):
+                AT.rp.expand(batch_size)
 
-    def __call__(self, bounded_in: BoundedInput) -> AbstractTransformer:
-        AbstractTransformer.bounded_in=bounded_in
-        return super().__call__(None)
+    def update_activation_rp(self, bounded_in: BoundedInput) -> None:
+        for AT in self.ATs:
+            if isinstance(AT, ActivationAT):
+                lrp_wrt_inputs, urp_wrt_inputs = AT.parent.backsubstitution()
+                pre_activation_bounds = bounded_in.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs)
+                AT.lrp, AT.urp = AT.compute_rp(pre_activation_bounds)

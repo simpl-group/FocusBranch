@@ -27,7 +27,8 @@ def check_and_branch_batch(combs_to_check: torch.Tensor, safe_combs: List[List[i
                 seqAT.expand(current_batch_size)
 
             with bounded_x0.selecting(combs_to_check_batch):
-                lrp = seqAT(bounded_x0).backsubstitution_lrp()
+                seqAT.update_activation_rp(bounded_in=bounded_x0)
+                lrp = seqAT.tail.backsubstitution_lrp()
                 lb_l = bounded_x0.compute_lbound(lrp).reshape(-1).cpu()
 
             safe_combs += combs_to_check_batch[lb_l >= 0].tolist()
@@ -61,7 +62,7 @@ if __name__ == "__main__":
     seqAT = SequentialAT.from_sequential(net, x_)
     for images, pred_labels in data_loader:
         x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-        seqAT.tail().make_marginal(true_labels=pred_labels, target_label=args.target_label)
+        seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label)
         bounded_x0 = L0BoundedInput(x0, args.epsilon, (L, U))
         break
     del net
