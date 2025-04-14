@@ -32,12 +32,11 @@ def get_args():
     parser.add_argument("-d", "--debug", action="store_true", help="Inspect a specific node.")
 
     args = parser.parse_args()
+    torch.manual_seed(args.seed)
     return args
 
-def preprocess(args: argparse.Namespace, demo: bool=True) -> Tuple[Sequential, DataLoader, float, float]:
-    """Prepares data and network for verification."""
-    torch.manual_seed(args.seed)
-
+def get_pure_network(args: argparse.Namespace) -> Tuple[Sequential, float, float]:
+    """Returns the network and its input bounds."""
     net = get_network(args.net, args.models_dir, device=DEVICE)
     net_head = net[0]
     if isinstance(net_head, Normalization):
@@ -46,9 +45,10 @@ def preprocess(args: argparse.Namespace, demo: bool=True) -> Tuple[Sequential, D
     else:
         mean, sigma = 0, 1
 
-    L, U = (0 - mean) / sigma, (1 - mean) / sigma
+    return net, mean, sigma
 
-    # Filter and collect correctly classified samples
+def preprocess(args: argparse.Namespace, net: Sequential, mean: float=0, sigma: float=1, demo: bool=True) -> DataLoader:
+    """Filter and collect correctly classified target samples into a DataLoader"""
     test_dataset = MNIST(root='./data/test', train=False, transform=Compose([ToTensor(), Normalize(mean, sigma)]), download=True)
     non_targeted_indices = (test_dataset.targets != args.target_label).nonzero().squeeze(1)
     non_targeted_subset = Subset(test_dataset, non_targeted_indices)
@@ -73,7 +73,7 @@ def preprocess(args: argparse.Namespace, demo: bool=True) -> Tuple[Sequential, D
     correct_dataset = TensorDataset(torch.cat(correct_images), torch.cat(correct_labels))
     correct_loader = DataLoader(correct_dataset, batch_size=args.batch_size, shuffle=True)
 
-    return net, correct_loader, L, U
+    return correct_loader
 
 def abstraction_loader(seqAT: SequentialAT, data_loader: DataLoader,
                        L: float, U: float, target_label: int, epsilon: int

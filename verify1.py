@@ -1,6 +1,6 @@
 import time
 from typing import List
-from utils import get_args, preprocess, tqdm_bar_format, DEVICE
+from utils import get_args, preprocess, tqdm_bar_format, DEVICE, get_pure_network
 import torch
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from tqdm import tqdm
@@ -57,7 +57,9 @@ if __name__ == "__main__":
     args = get_args()
     batch_size = args.batch_size if args.batch_size < MAX_BATCH_SIZE else MAX_BATCH_SIZE
     args.batch_size = 1
-    net, data_loader, L, U = preprocess(args, demo=True)
+    net, mean, sigma = get_pure_network(args)
+    L, U = (0 - mean) / sigma, (1 - mean) / sigma
+    data_loader = preprocess(args, net, mean, sigma, demo=True)
     x_ = torch.zeros(1, 1, 28, 28).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
     for images, pred_labels in data_loader:
