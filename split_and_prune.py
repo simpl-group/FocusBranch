@@ -21,9 +21,9 @@ def comb2bitmask64(comb: List[int]) -> torch.Tensor:
         mask[idx // 64] |= (torch.tensor(1, dtype=torch.int64) << idx % 64)
     return mask
 
-def split_and_prune(unk_combs: List[List[int]], safe_combs: List[List[int]], level: int) -> torch.Tensor:
+def split_and_prune(unk_combs: List[List[int]], safe_combs: List[List[int]], level: int, demo: bool=False) -> torch.Tensor:
     bitmask_list = []
-    for comb in tqdm(unk_combs, desc="Bitmasking combs", bar_format=tqdm_bar_format, leave=False):
+    for comb in tqdm(unk_combs, desc="Bitmasking combs", bar_format=tqdm_bar_format, leave=False, disable=not demo):
         bitmask_list.append(comb2bitmask64(comb))
     unk_bitmasks = torch.stack(bitmask_list, dim=0).to(DEVICE)
 
@@ -51,7 +51,7 @@ def split_and_prune(unk_combs: List[List[int]], safe_combs: List[List[int]], lev
     torch.cuda.empty_cache()
 
     if len(unk_combs) < len(safe_combs):
-        new_bitmasks_pruned_list = prune_by_unk(new_bitmasks, unk_bitmasks, level)
+        new_bitmasks_pruned_list = prune_by_unk(new_bitmasks, unk_bitmasks, level, demo)
     else:
         del unk_bitmasks
         torch.cuda.empty_cache()
@@ -61,7 +61,7 @@ def split_and_prune(unk_combs: List[List[int]], safe_combs: List[List[int]], lev
         else:
             safe_bitmasks = torch.empty((0, num_ints), dtype=torch.int64, device=DEVICE)
 
-        new_bitmasks_pruned_list = prune_by_safe(new_bitmasks, safe_bitmasks)
+        new_bitmasks_pruned_list = prune_by_safe(new_bitmasks, safe_bitmasks, demo)
 
         del safe_bitmasks
 
@@ -76,10 +76,10 @@ def split_and_prune(unk_combs: List[List[int]], safe_combs: List[List[int]], lev
 
     return bimm.bitmask2comb(combs_to_check_tensor, level + 1)
 
-def prune_by_safe(new_bitmasks: torch.Tensor, safe_bitmasks: torch.Tensor) -> List[torch.Tensor]:
+def prune_by_safe(new_bitmasks: torch.Tensor, safe_bitmasks: torch.Tensor, demo: bool=False) -> List[torch.Tensor]:
     new_bitmasks_pruned_list = []
 
-    with tqdm(total=new_bitmasks.shape[0], desc="Pruning next level combs",
+    with tqdm(total=new_bitmasks.shape[0], desc="Pruning next level combs", disable=not demo,
                     bar_format=tqdm_bar_format) as pbar:
         for i in range(0, new_bitmasks.shape[0], chunk_size):
             new_bitmasks_ichunk = new_bitmasks[i:i + chunk_size]
@@ -98,10 +98,10 @@ def prune_by_safe(new_bitmasks: torch.Tensor, safe_bitmasks: torch.Tensor) -> Li
     return new_bitmasks_pruned_list
 
 
-def prune_by_unk(new_bitmasks: torch.Tensor, unk_bitmasks: torch.Tensor, level: int) -> List[torch.Tensor]:
+def prune_by_unk(new_bitmasks: torch.Tensor, unk_bitmasks: torch.Tensor, level: int, demo: bool=False) -> List[torch.Tensor]:
     new_bitmasks_pruned_list = []
 
-    with tqdm(total=new_bitmasks.shape[0], desc="Pruning next level combs",
+    with tqdm(total=new_bitmasks.shape[0], desc="Pruning next level combs", disable=not demo,
                 bar_format=tqdm_bar_format) as pbar:
         for i in range(0, new_bitmasks.shape[0], chunk_size):
             new_bitmasks_ichunk = new_bitmasks[i:i + chunk_size]

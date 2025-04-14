@@ -29,7 +29,7 @@ def check_and_branch(combs_to_check: torch.Tensor, safe_combs: List[List[int]]) 
     if level == bounded_x0.eps: return False
     del combs_to_check
     torch.cuda.empty_cache()
-    next_level_combs = split_and_prune(unk_combs, safe_combs, level)
+    next_level_combs = split_and_prune(unk_combs, safe_combs, level, True)
     level += 1
     splits += unk_num
     torch.cuda.empty_cache()
