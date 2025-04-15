@@ -1,3 +1,4 @@
+import warnings
 import torch
 from typing import List
 from tqdm import tqdm
@@ -39,7 +40,7 @@ def split_and_prune(unk_combs: List[List[int]], safe_combs: List[List[int]], lev
     try:
         new_bitmasks = torch.cat(new_bm_list, dim=0).unique(dim=0)
     except torch.OutOfMemoryError:
-        print("CUDA out of memory when concatenating new_bitmasks, try to chunk process it.")
+        warnings.warn("CUDA out of memory when concatenating new_bitmasks. Attempting to chunk process it.", UserWarning)
         new_bitmasks = torch.empty((0, num_ints), dtype=torch.long, device=DEVICE)
         for i in range(0, len(new_bm_list), 100):
             new_chunk = new_bm_list[i:i + 100]
