@@ -3,7 +3,7 @@ import torch
 from solver_check import solver_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from typing import List
-from utils import get_args, get_pure_network, preprocess, tqdm_bar_format, DEVICE
+from utils import get_args, get_pure_network, preprocess, tqdm_bar_format, DEVICE, TimeoutException
 from split_and_prune import split_and_prune
 from tqdm import tqdm
 
@@ -18,11 +18,10 @@ def check_and_branch(combs_to_check: torch.Tensor, safe_combs: List[List[int]]) 
         for comb in combs_to_check:
             if check(comb):
                 safe_combs.append(comb.tolist())
-            elif splits + unk_num < args.budget:
+            else:
                 # verification failed, need to split the comb
                 unk_num += 1
                 unk_combs.append(comb.tolist())
-            else: return False
             pbar.set_postfix({"Safe:UNK": f"{len(safe_combs)}:{len(unk_combs)}", "GRB": f"{solver_checks_temp}({solver_time_temp:.2f}s)"})
             pbar.update(1)
     if unk_num <= level: return True
@@ -80,6 +79,7 @@ if __name__ == "__main__":
     x_ = torch.zeros(min(args.batch_size, len(data_loader)), 1, 28, 28).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
     for images, pred_labels in data_loader:
+        images, pred_labels = images.to(DEVICE), pred_labels.to(DEVICE)
         x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
         seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label)
         bounded_x0 = L0BoundedInput(x0, args.epsilon, (L, U))
@@ -102,6 +102,16 @@ if __name__ == "__main__":
         print(f"Collectively Safe: {ret}; Checks: {total_checks}({solver_checks})")
         exit(0)
 
-    ret = check_and_branch(root_combs, safe_combs)
+    if args.timeout is not None:
+        from signal import alarm
+        ret = False
+        try:
+            alarm(args.timeout)
+            ret = check_and_branch(root_combs, safe_combs)
+            alarm(0)
+        except TimeoutException:
+            print("Timeout")
+    else:
+        ret = check_and_branch(root_combs, safe_combs)
     print(f"Total: Splits {splits}; Time: {time.time() - start:.2f}; Nodes: {total_checks}; GRB Checks: {solver_checks}({solver_time:.2f}s)")
     print(f"Collectively Safe: {ret}")

@@ -7,6 +7,13 @@ from AbstractInterpreter import SequentialAT, L0BoundedInput
 from torch.nn import Sequential
 from typing import Iterable, Tuple
 import argparse
+import signal
+
+class TimeoutException(Exception):
+    pass
+
+def timeout_handler(signum, frame) -> None:
+    raise TimeoutException()
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 tqdm_bar_format = "{desc}: {n_fmt}/{total_fmt} |{percentage:3.2f}% {elapsed}<{remaining} {postfix} {rate_fmt}"
@@ -18,14 +25,15 @@ def get_args():
     )
     parser.add_argument("--net", type=str,
         choices=["fc1", "fc2", "fc3", "fc4", "fc5", "fc6", "fc7", "fcbase",
-                 "conv1", "conv2", "conv3", "conv4"], required=True,
+                 "conv1", "conv2", "conv3", "conv4"], default="fc2",
         help="Neural network architecture",
     )
     parser.add_argument("-md", "--models-dir", type=str, default="models")
     parser.add_argument("-e", "--epsilon", type=int, default=0, help="L0 norm bound.")
     parser.add_argument("-bs", "--batch-size", type=int, required=True)
     parser.add_argument("-t", "--target-label", type=int, required=True)
-    parser.add_argument("-b", "--budget", type=int, default=0)
+    parser.add_argument("-ntb", "--num-test-batches", type=int, default=100)
+    parser.add_argument("-to", "--timeout", type=int, default=None)
     parser.add_argument("-s", "--seed", type=int, default=0)
     parser.add_argument("-m", "--mute", action="store_true", help="Mute gurobi output.")
     parser.add_argument("-si", '--select-indices', type=int, nargs='*', default=[])
@@ -33,6 +41,8 @@ def get_args():
 
     args = parser.parse_args()
     torch.manual_seed(args.seed)
+    if args.timeout is not None:
+        signal.signal(signal.SIGALRM, timeout_handler)
     return args
 
 def get_pure_network(args: argparse.Namespace) -> Tuple[Sequential, float, float]:
@@ -70,7 +80,7 @@ def preprocess(args: argparse.Namespace, net: Sequential, mean: float=0, sigma: 
             if demo and sum(len(imgs) for imgs in correct_images) >= args.batch_size:
                 break
 
-    correct_dataset = TensorDataset(torch.cat(correct_images), torch.cat(correct_labels))
+    correct_dataset = TensorDataset(torch.cat(correct_images).cpu(), torch.cat(correct_labels).cpu())
     correct_loader = DataLoader(correct_dataset, batch_size=args.batch_size, shuffle=True)
 
     return correct_loader

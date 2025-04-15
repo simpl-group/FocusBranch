@@ -1,6 +1,6 @@
 import time
 from typing import List
-from utils import get_args, preprocess, tqdm_bar_format, DEVICE, get_pure_network
+from utils import get_args, preprocess, tqdm_bar_format, DEVICE, get_pure_network, TimeoutException
 import torch
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from tqdm import tqdm
@@ -70,6 +70,7 @@ if __name__ == "__main__":
     x_ = torch.zeros(1, 1, 28, 28).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
     for images, pred_labels in data_loader:
+        images, pred_labels = images.to(DEVICE), pred_labels.to(DEVICE)
         x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
         seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label)
         bounded_x0 = L0BoundedInput(x0, args.epsilon, (L, U))
@@ -83,7 +84,18 @@ if __name__ == "__main__":
         branching_time = .0
     start = time.time()
 
-    ret = check_and_branch_batch(seqAT, bounded_x0, batch_size, demo=not args.mute)
+    if args.timeout is not None:
+        from signal import alarm
+        ret = False
+        try:
+            alarm(args.timeout)
+            ret = check_and_branch_batch(seqAT, bounded_x0, batch_size, demo=not args.mute)
+            alarm(0)
+        except TimeoutException:
+            print("Timeout")
+    else:
+        ret = check_and_branch_batch(seqAT, bounded_x0, batch_size, demo=not args.mute)
+
     if not args.mute:
         print(f"Total: Splits {splits}; Nodes {total_nodes}; Time {time.time() - start:.2f}s; Branching Time {branching_time:.2f}s")
     else:
