@@ -110,7 +110,7 @@ class L0BoundedInput(BoundedInput):
         return WX_diff.gather(dim=2, index=indices).sum(dim=-1, keepdim=True)
 
     def compute_udiff(self, rpW: torch.Tensor) -> torch.Tensor:
-        X = self.x.reshape(self.batch_size, 1, -1).expand(-1, rpW.shape[1], -1) # rpW.shape[1]: number of nuerons in next layer
+        X = self.x.transpose(-1,-2) # rpW.shape[1]: number of nuerons in next layer
         WX_diff = torch.where(rpW > 0, rpW * (self.U - X), rpW * (self.L - X))
 
         WX_selected_sum = self.wx_selected_sum(WX_diff)
@@ -121,7 +121,7 @@ class L0BoundedInput(BoundedInput):
         return WX_tope_diff.sum(dim=-1, keepdim=True) + WX_selected_sum
 
     def compute_ldiff(self, rpW: torch.Tensor) -> torch.Tensor:
-        X = self.x.reshape(self.batch_size, 1, -1).expand(-1, rpW.shape[1], -1)
+        X = self.x.transpose(-1,-2)
         WX_diff = torch.where(rpW < 0, rpW * (self.U - X), rpW * (self.L - X))
 
         WX_selected_sum = self.wx_selected_sum(WX_diff)
