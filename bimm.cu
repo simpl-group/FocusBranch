@@ -67,7 +67,7 @@ __global__ void superset_popc_kernel(
         local_flags[local_id] = 0;
     }
     __syncthreads();
-    if (local_id == 0) {
+    if (ia < na && ib < nb && local_id == 0) {
         const int global_id = ia * nb_div8 + ib / 8;
         C[global_id] = __popcll(*reinterpret_cast<uint64_t*>(local_flags));
     }
