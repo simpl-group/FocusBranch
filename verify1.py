@@ -30,7 +30,6 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
                 current_batch_size = len(combs_to_check_batch)
                 if bounded_x0.batch_size != current_batch_size:
                     bounded_x0.expand(current_batch_size)
-                    seqAT.expand(current_batch_size)
 
                 with bounded_x0.selecting(combs_to_check_batch):
                     seqAT.update_activation_rp(bounded_in=bounded_x0)

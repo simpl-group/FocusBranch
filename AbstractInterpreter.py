@@ -24,10 +24,6 @@ class RelationalPolyhedra:
     def negW(self) -> torch.Tensor:
         return self.W.clamp_max(0)
 
-    def expand(self, batch_size: int) -> None:
-        self.W = self.W[0].unsqueeze(0).expand(batch_size, -1, -1)
-        self.b = self.b[0].unsqueeze(0).expand(batch_size, -1, -1)
-
 class Bounds:
     def __init__(self, lbounds: torch.Tensor, ubounds: torch.Tensor):
         self.l = lbounds  # (batch_size, features, 1)
@@ -83,7 +79,6 @@ class L0BoundedInput(BoundedInput):
         return self.selected_idx[0].numel()
 
     def expand(self, batch_size: int) -> None:
-        self.x = self.x[0].unsqueeze(0).expand(batch_size, -1, -1)
         self.batch_indices = torch.arange(batch_size).unsqueeze(1)
         self.batch_size = batch_size
         self.eps += self.num_selected()
@@ -112,6 +107,8 @@ class L0BoundedInput(BoundedInput):
     def compute_udiff(self, rpW: torch.Tensor) -> torch.Tensor:
         X = self.x.transpose(-1,-2) # rpW.shape[1]: number of nuerons in next layer
         WX_diff = torch.where(rpW > 0, rpW * (self.U - X), rpW * (self.L - X))
+        if WX_diff.shape[0] != self.batch_size:
+            WX_diff = WX_diff.expand(self.batch_size, -1, -1).clone()
 
         WX_selected_sum = self.wx_selected_sum(WX_diff)
         if self.eps == 0: return WX_selected_sum
@@ -123,6 +120,8 @@ class L0BoundedInput(BoundedInput):
     def compute_ldiff(self, rpW: torch.Tensor) -> torch.Tensor:
         X = self.x.transpose(-1,-2)
         WX_diff = torch.where(rpW < 0, rpW * (self.U - X), rpW * (self.L - X))
+        if WX_diff.shape[0] != self.batch_size:
+            WX_diff = WX_diff.expand(self.batch_size, -1, -1).clone()
 
         WX_selected_sum = self.wx_selected_sum(WX_diff)
         if self.eps == 0: return WX_selected_sum
@@ -132,14 +131,20 @@ class L0BoundedInput(BoundedInput):
         return WX_tope_diff.sum(dim=-1, keepdim=True) + WX_selected_sum
 
     def compute_ubound(self, rp: RelationalPolyhedra) -> torch.Tensor:
-        center = torch.bmm(rp.W, self.x) + rp.b
+        center = rp.W @ self.x + rp.b
         diff = self.compute_udiff(rp.W)
-        return center + diff
+        result = center + diff
+        if result.shape[0] != self.batch_size:
+            result = result.expand(self.batch_size, -1, -1)
+        return result
 
     def compute_lbound(self, rp: RelationalPolyhedra) -> torch.Tensor:
-        center = torch.bmm(rp.W, self.x) + rp.b
+        center = rp.W @ self.x + rp.b
         diff = self.compute_ldiff(rp.W)
-        return center + diff
+        result = center + diff
+        if result.shape[0] != self.batch_size:
+            result = result.expand(self.batch_size, -1, -1)
+        return result
 
 class LinfBoundedInput(BoundedInput):
     def __init__(self, x: torch.Tensor, eps: float, pixel_value_range=(0, 1), bounds: Bounds=None):
@@ -150,10 +155,10 @@ class LinfBoundedInput(BoundedInput):
             self.bounds = Bounds((x-eps).clamp(self.L, self.U), (x+eps).clamp(self.L, self.U))
 
     def compute_ubound(self, rp: RelationalPolyhedra) -> torch.Tensor:
-        return torch.bmm(rp.posW(), self.bounds.u) + torch.bmm(rp.negW(), self.bounds.l) + rp.b
+        return rp.posW() @ self.bounds.u + rp.negW() @ self.bounds.l + rp.b
 
     def compute_lbound(self, rp: RelationalPolyhedra) -> torch.Tensor:
-        return torch.bmm(rp.posW(), self.bounds.l) + torch.bmm(rp.negW(), self.bounds.u) + rp.b
+        return rp.posW() @ self.bounds.l + rp.negW() @ self.bounds.u + rp.b
 
 class AbstractTransformer:
     def __init__(self):
@@ -166,15 +171,15 @@ class AbstractTransformer:
 
         while prev is not None:
             if isinstance(prev, ActivationAT):
-                lrp.b = torch.bmm(lrp.posW(), prev.lrp.b) + torch.bmm(lrp.negW(), prev.urp.b) + lrp.b
-                urp.b = torch.bmm(urp.posW(), prev.urp.b) + torch.bmm(urp.negW(), prev.lrp.b) + urp.b
+                lrp.b = lrp.posW() @ prev.lrp.b + lrp.negW() @ prev.urp.b + lrp.b
+                urp.b = urp.posW() @ prev.urp.b + urp.negW() @ prev.lrp.b + urp.b
                 lrp.W = lrp.posW() * prev.lrp.W + lrp.negW() * prev.urp.W
                 urp.W = urp.posW() * prev.urp.W + urp.negW() * prev.lrp.W
             elif isinstance(prev, AffineAT):
-                lrp.b = torch.bmm(lrp.W, prev.rp.b) + lrp.b
-                urp.b = torch.bmm(urp.W, prev.rp.b) + urp.b
-                lrp.W = torch.bmm(lrp.W, prev.rp.W)
-                urp.W = torch.bmm(urp.W, prev.rp.W)
+                lrp.b = lrp.W @ prev.rp.b + lrp.b
+                urp.b = urp.W @ prev.rp.b + urp.b
+                lrp.W = lrp.W @ prev.rp.W
+                urp.W = urp.W @ prev.rp.W
             else: raise NotImplementedError(f"Transform for {prev} is unclear")
             prev = prev.parent
 
@@ -187,11 +192,11 @@ class AbstractTransformer:
 
         while prev is not None:
             if isinstance(prev, ActivationAT):
-                lrp.b = torch.bmm(lrp.posW(), prev.lrp.b) + torch.bmm(lrp.negW(), prev.urp.b) + lrp.b
+                lrp.b = lrp.posW() @ prev.lrp.b + lrp.negW() @ prev.urp.b + lrp.b
                 lrp.W = lrp.posW() * prev.lrp.W + lrp.negW() * prev.urp.W
             elif isinstance(prev, AffineAT):
-                lrp.b = torch.bmm(lrp.W, prev.rp.b) + lrp.b
-                lrp.W = torch.bmm(lrp.W, prev.rp.W)
+                lrp.b = lrp.W @ prev.rp.b + lrp.b
+                lrp.W = lrp.W @ prev.rp.W
             else: raise NotImplementedError(f"Transform for {prev} is unclear")
             prev = prev.parent
 
@@ -333,11 +338,6 @@ class SequentialAT:
     @classmethod
     def from_sequential(cls, seq_net: nn.Sequential, x: torch.Tensor, prev: Optional[AbstractTransformer]=None) -> Self:
         return cls(SequentialAT.parse_layers(seq_net, x, prev))
-
-    def expand(self, batch_size: int) -> None:
-        for AT in self.ATs:
-            if isinstance(AT, AffineAT):
-                AT.rp.expand(batch_size)
 
     def update_activation_rp(self, bounded_in: BoundedInput) -> None:
         for AT in self.ATs:
