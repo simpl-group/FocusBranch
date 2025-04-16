@@ -81,7 +81,14 @@ class L0BoundedInput(BoundedInput):
     def expand(self, batch_size: int) -> None:
         self.batch_indices = torch.arange(batch_size).unsqueeze(1)
         self.batch_size = batch_size
-        self.eps += self.num_selected()
+        assert self.num_selected() == 0, "Cannot expand L0BoundedInput with selected indices"
+        self.selected_idx = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
+
+    def clear_cache(self) -> None:
+        del self.x
+        self.batch_indices = torch.arange(1).unsqueeze(1)
+        self.batch_size = 1
+        assert self.num_selected() == 0, "Cannot clear cache of L0BoundedInput with selected indices"
         self.selected_idx = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
 
     def select_idx(self, idx: torch.Tensor):
@@ -97,8 +104,10 @@ class L0BoundedInput(BoundedInput):
         if idx.ndim == 1:
             idx = idx.unsqueeze(0).expand(self.batch_size, -1)
         self.select_idx(idx)
-        yield
-        self.undo_select(idx[0].numel())
+        try:
+            yield
+        finally:
+            self.undo_select(idx[0].numel())
 
     def wx_selected_sum(self, WX_diff: torch.Tensor) -> torch.Tensor:
         indices = self.selected_idx.unsqueeze(1).expand(-1, WX_diff.shape[1], -1)
