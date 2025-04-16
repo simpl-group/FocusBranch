@@ -224,8 +224,8 @@ class AffineAT(AbstractTransformer):
         ho = (hi + 2 * padding[0] - kh) // stride[0] + 1
         wo = (wi + 2 * padding[1] - kw) // stride[1] + 1
 
-        W = torch.zeros(co * ho * wo, ci * hi * wi)
-        b = torch.zeros(co * ho * wo)
+        W = torch.zeros(co * ho * wo, ci * hi * wi, device=bias.device)
+        b = torch.zeros(co * ho * wo, device=bias.device)
         for co_idx in range(co):
             for h_out in range(ho):
                 for w_out in range(wo):
@@ -242,12 +242,11 @@ class AffineAT(AbstractTransformer):
         W, b = AffineAT.expand(W, b, batch_size)
         return cls(weight=W, bias=b)
 
-    def make_marginal(self, true_labels: torch.Tensor, target_label: int) -> Self:
-        batch_size = true_labels.shape[0]
-        batch_idx = torch.arange(batch_size, device=self.W.device)
+    def make_marginal(self, true_labels: torch.Tensor, target_label: int, device: str="cpu") -> None:
+        batch_idx = torch.arange(true_labels.shape[0])
         W = (self.W[batch_idx, true_labels, :] - self.W[:, target_label, :]).unsqueeze(1)
         b = (self.b[batch_idx, true_labels, :] - self.b[:, target_label, :]).unsqueeze(1)
-        self.rp = RelationalPolyhedra(W, b)
+        self.rp = RelationalPolyhedra(W.to(device), b.to(device))
 
 class ActivationAT(AbstractTransformer):
     def __init__(self):
@@ -299,6 +298,8 @@ class SequentialAT:
         assert isinstance(tail, AffineAT)
         self.ATs = ATs
         self.tail = tail
+        self.tail.W = self.tail.W.cpu()
+        self.tail.b = self.tail.b.cpu()
 
     @staticmethod
     def parse_layers(seq_net: nn.Sequential, x: torch.Tensor, prev: Optional[AbstractTransformer]=None) -> List[AbstractTransformer]:

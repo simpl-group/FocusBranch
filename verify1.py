@@ -70,9 +70,9 @@ if __name__ == "__main__":
     x_ = torch.zeros(1, 1, 28, 28).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
     for images, pred_labels in data_loader:
-        images, pred_labels = images.to(DEVICE), pred_labels.to(DEVICE)
+        images = images.to(DEVICE)
         x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-        seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label)
+        seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device=DEVICE)
         bounded_x0 = L0BoundedInput(x0, args.epsilon, (L, U))
         break
     del net
