@@ -2,10 +2,10 @@
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 
 void bimm64_cuda(
-    at::Tensor A, at::Tensor B, at::Tensor C,
+    const at::Tensor A, const at::Tensor B, at::Tensor C,
     const int na, const int nb, const int nv
 );
-torch::Tensor bimm64_laucher(torch::Tensor A, torch::Tensor B) {
+torch::Tensor bimm64_laucher(const torch::Tensor A, const torch::Tensor B) {
     CHECK_CUDA(A);
     CHECK_CUDA(B);
     const int na = A.size(0);
@@ -16,10 +16,10 @@ torch::Tensor bimm64_laucher(torch::Tensor A, torch::Tensor B) {
 }
 
 void superset_popc_cuda(
-    at::Tensor A, at::Tensor B, at::Tensor C,
+    const at::Tensor A, const at::Tensor B, at::Tensor C,
     const int na, const int nb, const int nv, const int nb_div8
 );
-torch::Tensor superset_sum_laucher(torch::Tensor A, torch::Tensor B) {
+torch::Tensor superset_sum_laucher(const torch::Tensor A, const torch::Tensor B) {
     CHECK_CUDA(A);
     CHECK_CUDA(B);
     const int na = A.size(0);
@@ -31,10 +31,10 @@ torch::Tensor superset_sum_laucher(torch::Tensor A, torch::Tensor B) {
 }
 
 void comb2bitmask_cuda(
-    at::Tensor combs, at::Tensor bitmasks,
+    const at::Tensor combs, at::Tensor bitmasks,
     const int num_rows, const int nv, const int popc
 );
-torch::Tensor comb2bitmask_laucher(torch::Tensor combs, const int nv) {
+torch::Tensor comb2bitmask_laucher(const torch::Tensor combs, const int nv) {
     CHECK_CUDA(combs);
     const int num_rows = combs.size(0);
     const int popc = combs.size(1);
@@ -44,10 +44,10 @@ torch::Tensor comb2bitmask_laucher(torch::Tensor combs, const int nv) {
 }
 
 void bitmask2comb_cuda(
-    at::Tensor bitmasks, at::Tensor combs,
+    const at::Tensor bitmasks, at::Tensor combs,
     const int num_rows, const int nv, const int popc
 );
-torch::Tensor bitmask2comb_laucher(torch::Tensor bitmasks, const int popc) {
+torch::Tensor bitmask2comb_laucher(const torch::Tensor bitmasks, const int popc) {
     CHECK_CUDA(bitmasks);
     const int num_rows = bitmasks.size(0);
     auto combs = torch::zeros({num_rows, popc}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
