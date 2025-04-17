@@ -31,7 +31,7 @@ def get_args():
     parser.add_argument("-md", "--models-dir", type=str, default="models")
     parser.add_argument("-e", "--epsilon", type=int, default=0, help="L0 norm bound.")
     parser.add_argument("-bs", "--batch-size", type=int, required=True)
-    parser.add_argument("-t", "--target-label", type=int, required=True)
+    parser.add_argument("-t", "--target-label", type=int, default=None)
     parser.add_argument("-ntb", "--num-test-batches", type=int, default=100)
     parser.add_argument("-to", "--timeout", type=int, default=0)
     parser.add_argument("-s", "--seed", type=int, default=0)
@@ -59,13 +59,14 @@ def get_pure_network(args: argparse.Namespace) -> Tuple[Sequential, float, float
 def preprocess(args: argparse.Namespace, net: Sequential, mean: float=0, sigma: float=1, demo: bool=True) -> DataLoader:
     """Filter and collect correctly classified target samples into a DataLoader"""
     test_dataset = MNIST(root='./data/test', train=False, transform=Compose([ToTensor(), Normalize(mean, sigma)]), download=True)
-    non_targeted_indices = (test_dataset.targets != args.target_label).nonzero().squeeze(1)
-    non_targeted_subset = Subset(test_dataset, non_targeted_indices)
+    if args.target_label is not None:
+        non_targeted_indices = (test_dataset.targets != args.target_label).nonzero().squeeze(1)
+        test_dataset = Subset(test_dataset, non_targeted_indices)
 
     correct_images = []
     correct_labels = []
-    batch_size = min(256, len(non_targeted_subset))
-    test_loader = DataLoader(non_targeted_subset, batch_size=batch_size, shuffle=False, num_workers=2)
+    batch_size = min(256, len(test_dataset))
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
 
     with torch.no_grad():
         for batch_images, batch_labels in test_loader:

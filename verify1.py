@@ -9,7 +9,6 @@ from split_and_prune import split_and_prune
 from signal import alarm
 MAX_BATCH_SIZE = 25000
 
-# BFS
 def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batch_size: int=2000, demo: bool=False) -> bool:
     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
     safe_combs: List[List[int]] = []
@@ -62,6 +61,53 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
         level += 1
     return False
 
+def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batch_size: int=2000, demo: bool=False) -> bool:
+    combs_to_check = torch.empty((1, 0), dtype=torch.int64)
+    safe_combs: List[List[int]] = []
+    level = 0
+    if demo:
+        global branching_time, total_nodes, splits
+    while level <= bounded_x0.eps:
+        num_to_check = combs_to_check.shape[0]
+        if num_to_check == 0: return True
+        unk_combs: List[List[int]]  = []
+        new_safe_combs: List[List[int]] = []
+
+        with tqdm(total=num_to_check, desc=f"Level {level}", bar_format=tqdm_bar_format, disable=not demo) as pbar:
+            for i in range(0, num_to_check, batch_size):
+                combs_to_check_batch = combs_to_check[i:i + batch_size]
+
+                current_batch_size = len(combs_to_check_batch)
+                if bounded_x0.batch_size != current_batch_size:
+                    bounded_x0.expand(current_batch_size)
+
+                with bounded_x0.selecting(combs_to_check_batch):
+                    seqAT.update_activation_rp(bounded_in=bounded_x0)
+                    lrp = seqAT.tail.backsubstitution_lrp()
+                    lb_l = bounded_x0.compute_lbound(lrp).squeeze(2).cpu()
+
+                safes = lb_l.ge(0).all(dim=1)
+                new_safe_combs += combs_to_check_batch[safes].tolist()
+                unk_combs += combs_to_check_batch[~safes].tolist()
+                if demo:
+                    pbar.set_postfix({"Safe:UNK": f"{len(new_safe_combs)}:{len(unk_combs)}"})
+                    pbar.update(current_batch_size)
+
+        if len(unk_combs) == 0: return True
+        safe_combs += new_safe_combs
+        del combs_to_check, combs_to_check_batch, lb_l, lrp, new_safe_combs
+        torch.cuda.empty_cache()
+        t0 = time.time()
+        combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo)
+        if demo:
+            branching_time += time.time() - t0
+            total_nodes += num_to_check
+            splits += len(unk_combs)
+        del unk_combs
+        torch.cuda.empty_cache()
+        level += 1
+    return False
+
 if __name__ == "__main__":
     args = get_args()
     batch_size = args.batch_size if args.batch_size < MAX_BATCH_SIZE else MAX_BATCH_SIZE
@@ -74,7 +120,10 @@ if __name__ == "__main__":
     for images, pred_labels in data_loader:
         images = images.to(DEVICE)
         x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-        seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device=DEVICE)
+        if args.target_label is not None:
+            seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device=DEVICE)
+        else:
+            seqAT.tail.make_marginals(true_labels=pred_labels, device=DEVICE)
         bounded_x0 = L0BoundedInput(x0, args.epsilon, (L, U))
         break
     del net
@@ -89,7 +138,10 @@ if __name__ == "__main__":
     ret = False
     try:
         alarm(args.timeout)
-        ret = check_and_branch_batch(seqAT, bounded_x0, batch_size, demo=not args.mute)
+        if args.target_label is not None:
+            ret = check_and_branch_batch(seqAT, bounded_x0, batch_size, demo=not args.mute)
+        else:
+            ret = check_and_branch_batch_untargeted(seqAT, bounded_x0, batch_size, demo=not args.mute)
         alarm(0)
     except TimeoutException:
         print("Timeout")

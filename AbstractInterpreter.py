@@ -258,6 +258,16 @@ class AffineAT(AbstractTransformer):
         b = (self.b[batch_idx, true_labels, :] - self.b[:, target_label, :]).unsqueeze(1)
         self.rp = RelationalPolyhedra(W.to(device), b.to(device))
 
+    def make_marginals(self, true_labels: torch.Tensor, device: str="cpu") -> None:
+        if true_labels.shape[0] != 1:
+            self.W = self.W.expand(true_labels.shape[0], -1, -1)
+            self.b = self.b.expand(true_labels.shape[0], -1, -1)
+        batch_idx = torch.arange(true_labels.shape[0])
+        # each row of W should be the difference between the true label and others
+        W = self.W[batch_idx, true_labels, :].unsqueeze(1) - self.W
+        b = self.b[batch_idx, true_labels, :].unsqueeze(1) - self.b
+        self.rp = RelationalPolyhedra(W.to(device), b.to(device))
+
 class ActivationAT(AbstractTransformer):
     def __init__(self):
         super().__init__()

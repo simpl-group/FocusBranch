@@ -8,7 +8,6 @@ from split_and_prune import split_and_prune
 from tqdm import tqdm
 from signal import alarm
 
-# BFS
 def check_and_branch(combs_to_check: torch.Tensor, safe_combs: List[List[int]]) -> bool:
     global splits, level, solver_time_temp, solver_checks_temp
     unk_combs: List[List[int]] = []
@@ -74,6 +73,7 @@ def check(comb: torch.Tensor, debug=False, mute=True) -> bool:
 
 if __name__ == "__main__":
     args = get_args()
+    assert args.target_label is not None, "Target label must be specified."
     net, mean, sigma = get_pure_network(args)
     L, U = (0 - mean) / sigma, (1 - mean) / sigma
     data_loader = preprocess(args, net, mean, sigma, demo=True)
