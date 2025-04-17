@@ -17,6 +17,7 @@ cnn_spec = {
     'conv3': ([(16, 4, 2, 1), (64, 4, 2, 1)], [100, 100, 10])
 }
 
+
 class Normalization(nn.Module):
 
     def __init__(self, mean=0.1307, sigma=0.3081):
@@ -30,41 +31,30 @@ class Normalization(nn.Module):
 
 class FCN(nn.Sequential):
 
-    def __init__(self, input_size, fc_layers):
-        layers = [Normalization(), nn.Flatten()]
-        prev_fc_size = input_size * input_size
-        for i, fc_size in enumerate(fc_layers):
-            layers += [nn.Linear(prev_fc_size, fc_size)]
-            if i + 1 < len(fc_layers):
+    def __init__(self, args):
+        layers = [nn.Flatten(start_dim=1)]
+        for idx, kwargs in enumerate(args):
+            layers += [nn.Linear(**kwargs)]
+            if idx < len(args) - 1:
                 layers += [nn.ReLU()]
-            prev_fc_size = fc_size
         super().__init__(*layers)
 
 
 class CNN(nn.Sequential):
 
-    def __init__(self, input_size, conv_layers, fc_layers):
-        layers = [Normalization()]
-        prev_channels = 1
-        img_dim = input_size
-
-        for n_channels, kernel_size, stride, padding in conv_layers:
-            layers += [
-                nn.Conv2d(prev_channels, n_channels, kernel_size, stride=stride, padding=padding),
-                nn.ReLU(),
-            ]
-            prev_channels = n_channels
-            img_dim = img_dim // stride
-        layers += [nn.Flatten()]
-
-        prev_fc_size = prev_channels * img_dim * img_dim
-        for i, fc_size in enumerate(fc_layers):
-            layers += [nn.Linear(prev_fc_size, fc_size)]
-            if i + 1 < len(fc_layers):
+    def __init__(self, args):
+        layers = []
+        conv_kwargs = list(filter(lambda xs: len(xs) > 2, args))
+        for idx, kwargs in enumerate(conv_kwargs):
+            layers += [nn.Conv2d(**kwargs), nn.ReLU(), ]
+        layers += [nn.Flatten(start_dim=1)]
+        fc_kwargs = list(filter(lambda xs: len(xs) == 2, args))
+        for idx, kwargs in enumerate(fc_kwargs):
+            layers += [nn.Linear(**kwargs)]
+            if idx < len(args) - 1:
                 layers += [nn.ReLU()]
-            prev_fc_size = fc_size
-
         super().__init__(*layers)
+
 
 class FLN(nn.Sequential):  # Fully linear network
     def __init__(self, input_size, hdims):
@@ -74,6 +64,7 @@ class FLN(nn.Sequential):  # Fully linear network
             layers.append(nn.Linear(prev_fc_size, d))
             prev_fc_size = d
         super().__init__(*layers)
+
 
 def get_network(name: str, folder: str, device: str = "cpu") -> nn.Sequential:
     if name in fcn_spec:
