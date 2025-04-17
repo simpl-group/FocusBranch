@@ -33,7 +33,7 @@ def get_args():
     parser.add_argument("-bs", "--batch-size", type=int, required=True)
     parser.add_argument("-t", "--target-label", type=int, required=True)
     parser.add_argument("-ntb", "--num-test-batches", type=int, default=100)
-    parser.add_argument("-to", "--timeout", type=int, default=None)
+    parser.add_argument("-to", "--timeout", type=int, default=0)
     parser.add_argument("-s", "--seed", type=int, default=0)
     parser.add_argument("-m", "--mute", action="store_true", help="Mute gurobi output.")
     parser.add_argument("-si", '--select-indices', type=int, nargs='*', default=[])
@@ -41,8 +41,7 @@ def get_args():
 
     args = parser.parse_args()
     torch.manual_seed(args.seed)
-    if args.timeout is not None:
-        signal.signal(signal.SIGALRM, timeout_handler)
+    signal.signal(signal.SIGALRM, timeout_handler)
     return args
 
 def get_pure_network(args: argparse.Namespace) -> Tuple[Sequential, float, float]:

@@ -6,6 +6,7 @@ from typing import List
 from utils import get_args, get_pure_network, preprocess, tqdm_bar_format, DEVICE, TimeoutException
 from split_and_prune import split_and_prune
 from tqdm import tqdm
+from signal import alarm
 
 # BFS
 def check_and_branch(combs_to_check: torch.Tensor, safe_combs: List[List[int]]) -> bool:
@@ -102,16 +103,13 @@ if __name__ == "__main__":
         print(f"Collectively Safe: {ret}; Checks: {total_checks}({solver_checks})")
         exit(0)
 
-    if args.timeout is not None:
-        from signal import alarm
-        ret = False
-        try:
-            alarm(args.timeout)
-            ret = check_and_branch(root_combs, safe_combs)
-            alarm(0)
-        except TimeoutException:
-            print("Timeout")
-    else:
+    ret = False
+    try:
+        alarm(args.timeout)
         ret = check_and_branch(root_combs, safe_combs)
+        alarm(0)
+    except TimeoutException:
+        print("Timeout")
+
     print(f"Total: Splits {splits}; Time: {time.time() - start:.2f}; Nodes: {total_checks}; GRB Checks: {solver_checks}({solver_time:.2f}s)")
     print(f"Collectively Safe: {ret}")

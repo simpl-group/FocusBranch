@@ -6,6 +6,7 @@ from AbstractInterpreter import L0BoundedInput, SequentialAT
 from tqdm import tqdm
 import torch
 from split_and_prune import split_and_prune
+from signal import alarm
 MAX_BATCH_SIZE = 25000
 
 # BFS
@@ -83,17 +84,13 @@ if __name__ == "__main__":
         branching_time = .0
     start = time.time()
 
-    if args.timeout is not None:
-        from signal import alarm
-        ret = False
-        try:
-            alarm(args.timeout)
-            ret = check_and_branch_batch(seqAT, bounded_x0, batch_size, demo=not args.mute)
-            alarm(0)
-        except TimeoutException:
-            print("Timeout")
-    else:
+    ret = False
+    try:
+        alarm(args.timeout)
         ret = check_and_branch_batch(seqAT, bounded_x0, batch_size, demo=not args.mute)
+        alarm(0)
+    except TimeoutException:
+        print("Timeout")
 
     if not args.mute:
         print(f"Total: Splits {splits}; Nodes {total_nodes}; Time {time.time() - start:.2f}s; Branching Time {branching_time:.2f}s")
