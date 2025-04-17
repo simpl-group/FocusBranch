@@ -218,21 +218,15 @@ class AffineAT(AbstractTransformer):
         self.b = bias
         self.rp = RelationalPolyhedra(self.W, self.b)
 
-    @staticmethod
-    def expand(weight: torch.Tensor, bias: torch.Tensor, batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        return (weight.unsqueeze(0).expand(batch_size, -1, -1),
-                bias.reshape(1, -1, 1).expand(batch_size, -1, -1))
-
     @classmethod
-    def from_linear(cls, layer: nn.Linear, batch_size: int) -> Self:
-        W, b = AffineAT.expand(layer.weight.detach(), layer.bias.detach(), batch_size)
-        return cls(W, b)
+    def from_linear(cls, layer: nn.Linear) -> Self:
+        return cls(layer.weight.detach().unsqueeze(0), layer.bias.detach().reshape(1, -1, 1))
 
     @classmethod
     def from_conv2d(cls, layer: nn.Conv2d, input_shape) -> Self:
         kernel, bias = layer.weight.detach(), layer.bias.detach()
         stride, padding = layer.stride, layer.padding
-        batch_size, ci, hi, wi = input_shape
+        _, ci, hi, wi = input_shape
         kh, kw = kernel.shape[2], kernel.shape[3]
         co = kernel.shape[0]
         ho = (hi + 2 * padding[0] - kh) // stride[0] + 1
@@ -253,10 +247,12 @@ class AffineAT(AbstractTransformer):
                                 if 0 <= h_in < hi and 0 <= w_in < wi:
                                     input_idx = ci_idx * hi * wi + h_in * wi + w_in
                                     W[row, input_idx] = kernel[co_idx, ci_idx, kh_idx, kw_idx]
-        W, b = AffineAT.expand(W, b, batch_size)
-        return cls(weight=W, bias=b)
+        return cls(weight=W.unsqueeze(0), bias=b.reshape(1, -1, 1))
 
     def make_marginal(self, true_labels: torch.Tensor, target_label: int, device: str="cpu") -> None:
+        if true_labels.shape[0] != 1:
+            self.W = self.W.expand(true_labels.shape[0], -1, -1)
+            self.b = self.b.expand(true_labels.shape[0], -1, -1)
         batch_idx = torch.arange(true_labels.shape[0])
         W = (self.W[batch_idx, true_labels, :] - self.W[:, target_label, :]).unsqueeze(1)
         b = (self.b[batch_idx, true_labels, :] - self.b[:, target_label, :]).unsqueeze(1)
@@ -323,7 +319,7 @@ class SequentialAT:
             x_in = x
             x = layer(x_in)
             if isinstance(layer, nn.Linear):
-                current = AffineAT.from_linear(layer, x_in.shape[0])
+                current = AffineAT.from_linear(layer)
             elif isinstance(layer, nn.Conv2d):
                 current = AffineAT.from_conv2d(layer, x_in.shape)
             elif isinstance(layer, nn.ReLU):
