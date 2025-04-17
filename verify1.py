@@ -19,7 +19,8 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
     while level <= bounded_x0.eps:
         num_to_check = combs_to_check.shape[0]
         if num_to_check == 0: return True
-        unk_combs = []
+        unk_combs: List[List[int]]  = []
+        new_safe_combs: List[List[int]] = []
         if demo:
             min_value = float("inf")
             min_comb = None
@@ -37,17 +38,18 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
                     lrp = seqAT.tail.backsubstitution_lrp()
                     lb_l = bounded_x0.compute_lbound(lrp).reshape(-1).cpu()
 
-                safe_combs += combs_to_check_batch[lb_l >= 0].tolist()
+                new_safe_combs += combs_to_check_batch[lb_l >= 0].tolist()
                 unk_combs += combs_to_check_batch[lb_l < 0].tolist()
                 if demo:
                     if lb_l.min() < min_value:
                         min_value = lb_l.min().item()
                         min_comb = combs_to_check_batch[lb_l.argmin()]
-                    pbar.set_postfix({"Safe:UNK": f"{len(safe_combs)}:{len(unk_combs)}", "Min": f"{min_value:.2f}", "Comb": min_comb.tolist()})
+                    pbar.set_postfix({"Safe:UNK": f"{len(new_safe_combs)}:{len(unk_combs)}", "Min": f"{min_value:.2f}", "Comb": min_comb.tolist()})
                     pbar.update(current_batch_size)
 
         if len(unk_combs) == 0: return True
-        del combs_to_check, combs_to_check_batch, lb_l, lrp
+        safe_combs += new_safe_combs
+        del combs_to_check, combs_to_check_batch, lb_l, lrp, new_safe_combs
         torch.cuda.empty_cache()
         t0 = time.time()
         combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo)
