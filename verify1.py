@@ -9,13 +9,14 @@ from split_and_prune import split_and_prune
 from signal import alarm
 MAX_BATCH_SIZE = 25000
 
-def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batch_size: int=2000, demo: bool=False) -> bool:
+def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batch_size: int=2000, demo: bool=False, timeout: int=0) -> bool:
     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
     safe_combs: List[List[int]] = []
     level = 0
     watchout = False  # safe combs might contain combs that comes from different levels
     if demo:
         global branching_time, total_nodes, splits
+    t0 = time.time()
     while level <= bounded_x0.eps:
         num_to_check = combs_to_check.shape[0]
         if num_to_check == 0: return True
@@ -46,6 +47,16 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
                         min_comb = combs_to_check_batch[lb_l.argmin()]
                     pbar.set_postfix({"Safe:UNK": f"{len(new_safe_combs)}:{len(unk_combs)}", "Min": f"{min_value:.2f}", "Comb": min_comb.tolist()})
                     pbar.update(current_batch_size)
+                if timeout != 0 and i == batch_size * 100:  # calculate remaining time to decide if to early stop
+                    if demo:
+                        if pbar.format_dict['remaining'] > timeout:
+                            alarm(0)
+                            raise TimeoutException()
+                    else:
+                        # calculate remaining time without pbar
+                        rate = (time.time() - t0) / 100
+                        if ((num_to_check - i) / batch_size) * rate > timeout:
+                            return False
 
         if len(unk_combs) == 0: return True
         if safe_combs is not []:
@@ -66,11 +77,12 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
         level += 1
     return False
 
-def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batch_size: int=2000, demo: bool=False) -> bool:
+def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batch_size: int=2000, demo: bool=False, timeout: int=0) -> bool:
     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
     safe_combs: List[List[int]] = []
     level = 0
     watchout = False
+    t0 = time.time()
     if demo:
         global branching_time, total_nodes, splits
     while level <= bounded_x0.eps:
@@ -98,6 +110,15 @@ def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0Bounded
                 if demo:
                     pbar.set_postfix({"Safe:UNK": f"{len(new_safe_combs)}:{len(unk_combs)}"})
                     pbar.update(current_batch_size)
+                if timeout != 0 and i == batch_size * 100:
+                    if demo:
+                        if pbar.format_dict['remaining'] > timeout:
+                            alarm(0)
+                            raise TimeoutException()
+                    else:
+                        rate = (time.time() - t0) / 100
+                        if ((num_to_check - i) / batch_size) * rate > timeout:
+                            return False
 
         if len(unk_combs) == 0: return True
         if safe_combs is not []:
@@ -150,9 +171,9 @@ if __name__ == "__main__":
     try:
         alarm(args.timeout)
         if args.target_label is not None:
-            ret = check_and_branch_batch(seqAT, bounded_x0, batch_size, demo=not args.mute)
+            ret = check_and_branch_batch(seqAT, bounded_x0, batch_size, demo=not args.mute, timeout=args.timeout)
         else:
-            ret = check_and_branch_batch_untargeted(seqAT, bounded_x0, batch_size, demo=not args.mute)
+            ret = check_and_branch_batch_untargeted(seqAT, bounded_x0, batch_size, demo=not args.mute, timeout=args.timeout)
         alarm(0)
     except TimeoutException:
         print("Timeout")
