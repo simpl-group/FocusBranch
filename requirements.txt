@@ -1,6 +1,10 @@
+auto_LiRPA==0.3
 gurobipy==12.0.1
-numpy==2.2.3
-torch==2.4.1
-torchvision==0.19.1+cu121
-tqdm==4.66.5
+matplotlib==3.10.1
+numpy==2.2.4
 onnx==1.17.0
+setuptools==75.1.0
+torch==2.6.0
+torchvision==0.21.0
+tqdm==4.66.5
+python==3.12.9
