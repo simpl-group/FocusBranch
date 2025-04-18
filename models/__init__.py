@@ -51,9 +51,9 @@ ONNX_FILES = {
 }
 
 FCN_SPEC = {
-    'fc1': (ONNX_FILES["mnist"][0][-1], os.path.join(MODEL_DIR, "mnist-net_256x2.onnx.pt")),
-    'fc2': (ONNX_FILES["mnist"][1][-1], os.path.join(MODEL_DIR, "mnist-net_256x4.onnx.pt")),
-    'fc3': (ONNX_FILES["mnist"][2][-1], os.path.join(MODEL_DIR, "mnist-net_256x6.onnx.pt")),
+    'fc1': (ONNX_FILES["mnist"][0][-1], os.path.join(MODEL_DIR, "mnist", "mnist-net_256x2.pt")),
+    'fc2': (ONNX_FILES["mnist"][1][-1], os.path.join(MODEL_DIR, "mnist", "mnist-net_256x4.pt")),
+    'fc3': (ONNX_FILES["mnist"][2][-1], os.path.join(MODEL_DIR, "mnist", "mnist-net_256x6.pt")),
 }
 CNN_SPEC = {
     # 'conv1': ONNX_FILES["mnist"]['mnist_0.1.onnx'][-1],
