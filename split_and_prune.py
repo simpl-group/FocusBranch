@@ -21,11 +21,9 @@ def comb2bitmask64(comb: List[int]) -> torch.Tensor:
         mask[idx // 64] |= (torch.tensor(1, dtype=torch.int64) << idx % 64)
     return mask
 
-def split_and_prune(unk_combs: List[List[int]], safe_combs: List[List[int]], level: int, demo: bool=False) -> torch.Tensor:
-    bitmask_list = []
-    for comb in tqdm(unk_combs, desc="Bitmasking combs", bar_format=tqdm_bar_format, leave=False, disable=not demo):
-        bitmask_list.append(comb2bitmask64(comb))
-    unk_bitmasks = torch.stack(bitmask_list, dim=0).to(DEVICE)
+def split_and_prune(unk_combs: List[List[int]], safe_combs: List[List[int]], level: int, demo: bool=False, watchout: bool=False) -> torch.Tensor:
+    unk_combs_tensor = torch.tensor(unk_combs, dtype=torch.int64, device=DEVICE)
+    unk_bitmasks = bimm.comb2bitmask(unk_combs_tensor, num_ints)
 
     new_bm_list = []
     for i in range(num_features):
@@ -51,9 +49,11 @@ def split_and_prune(unk_combs: List[List[int]], safe_combs: List[List[int]], lev
     else:
         del unk_bitmasks
         torch.cuda.empty_cache()
-        # Convert safe_combs to a tensor and precompute sums
         if safe_combs:
-            safe_bitmasks = torch.stack([comb2bitmask64(s) for s in safe_combs], dim=0).to(DEVICE)
+            if watchout:
+                safe_bitmasks = torch.stack([comb2bitmask64(s) for s in safe_combs], dim=0).to(DEVICE)
+            else:
+                safe_bitmasks = bimm.comb2bitmask(torch.tensor(safe_combs, dtype=torch.int64, device=DEVICE), num_ints)
         else:
             safe_bitmasks = torch.empty((0, num_ints), dtype=torch.int64, device=DEVICE)
 

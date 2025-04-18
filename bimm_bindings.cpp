@@ -38,7 +38,7 @@ torch::Tensor comb2bitmask_laucher(const torch::Tensor combs, const int nv) {
     CHECK_CUDA(combs);
     const int num_rows = combs.size(0);
     const int popc = combs.size(1);
-    auto bitmasks = torch::zeros({num_rows, nv}, torch::TensorOptions().dtype(torch::kUInt8).device(torch::kCUDA));
+    auto bitmasks = torch::zeros({num_rows, nv}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
     comb2bitmask_cuda(combs, bitmasks, num_rows, nv, popc);
     return bitmasks;
 }

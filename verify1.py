@@ -13,6 +13,7 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
     safe_combs: List[List[int]] = []
     level = 0
+    watchout = False  # safe combs might contain combs that comes from different levels
     if demo:
         global branching_time, total_nodes, splits
     while level <= bounded_x0.eps:
@@ -47,11 +48,15 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
                     pbar.update(current_batch_size)
 
         if len(unk_combs) == 0: return True
-        safe_combs += new_safe_combs
+        if safe_combs is not []:
+            watchout = True
+            safe_combs += new_safe_combs
+        else:
+            safe_combs = new_safe_combs
         del combs_to_check, combs_to_check_batch, lb_l, lrp, new_safe_combs
         torch.cuda.empty_cache()
         t0 = time.time()
-        combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo)
+        combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo, watchout)
         if demo:
             branching_time += time.time() - t0
             total_nodes += num_to_check
@@ -65,6 +70,7 @@ def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0Bounded
     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
     safe_combs: List[List[int]] = []
     level = 0
+    watchout = False
     if demo:
         global branching_time, total_nodes, splits
     while level <= bounded_x0.eps:
@@ -94,11 +100,15 @@ def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0Bounded
                     pbar.update(current_batch_size)
 
         if len(unk_combs) == 0: return True
-        safe_combs += new_safe_combs
+        if safe_combs is not []:
+            watchout = True
+            safe_combs += new_safe_combs
+        else:
+            safe_combs = new_safe_combs
         del combs_to_check, combs_to_check_batch, lb_l, lrp, new_safe_combs
         torch.cuda.empty_cache()
         t0 = time.time()
-        combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo)
+        combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo, watchout)
         if demo:
             branching_time += time.time() - t0
             total_nodes += num_to_check

@@ -14,6 +14,7 @@ def check_and_branch(combs_to_check: torch.Tensor, safe_combs: List[List[int]]) 
     unk_num = 0
     solver_time_temp = .0
     solver_checks_temp = 0
+    watchout = safe_combs is not []
     with tqdm(total=len(combs_to_check), disable=(level == 0), desc=f"Level {level}", bar_format=tqdm_bar_format) as pbar:
         for comb in combs_to_check:
             if check(comb):
@@ -28,7 +29,7 @@ def check_and_branch(combs_to_check: torch.Tensor, safe_combs: List[List[int]]) 
     if level == bounded_x0.eps: return False
     del combs_to_check
     torch.cuda.empty_cache()
-    next_level_combs = split_and_prune(unk_combs, safe_combs, level, True)
+    next_level_combs = split_and_prune(unk_combs, safe_combs, level, True, watchout)
     level += 1
     splits += unk_num
     torch.cuda.empty_cache()
