@@ -1,4 +1,3 @@
-import warnings
 import torch
 from typing import List
 from tqdm import tqdm
@@ -37,18 +36,14 @@ def split_and_prune(unk_combs: List[List[int]], safe_combs: List[List[int]], lev
         new_bm_i = new_bm_i[~prune].bitwise_or(one_hot_feature_mask[i])
         new_bm_list.append(new_bm_i)
 
-    try:
-        new_bitmasks = torch.cat(new_bm_list, dim=0).unique(dim=0)
-    except torch.OutOfMemoryError:
-        warnings.warn("CUDA out of memory when concatenating new_bitmasks. Attempting to chunk process it.", UserWarning)
-        new_bitmasks = torch.empty((0, num_ints), dtype=torch.int64, device=DEVICE)
-        for i in range(0, len(new_bm_list), 100):
-            new_chunk = new_bm_list[i:i + 100]
-            new_bitmasks = torch.cat((new_bitmasks, torch.cat(new_chunk, dim=0)), dim=0)
-            new_bitmasks = new_bitmasks.unique(dim=0)
-            torch.cuda.empty_cache()
+    new_bitmasks = torch.empty((0, num_ints), dtype=torch.int64, device=DEVICE)
+    while len(new_bm_list) > 0:
+        new_chunk = torch.cat(new_bm_list[:100], dim=0)
+        new_bitmasks = torch.cat((new_bitmasks, new_chunk), dim=0)
+        new_bm_list[:100] = []
+        del new_chunk
+        torch.cuda.empty_cache()
         new_bitmasks = new_bitmasks.unique(dim=0)
-    del new_bm_list, bitmask_list
     torch.cuda.empty_cache()
 
     if len(unk_combs) < len(safe_combs):
