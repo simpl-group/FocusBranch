@@ -57,10 +57,13 @@ def get_pure_network(args: argparse.Namespace) -> Tuple[Sequential, float, float
 
     return net, mean, sigma
 
-def get_mnist_loader(batch_size: int=256) -> DataLoader:
+def get_mnist_loader(args: argparse.Namespace) -> DataLoader:
     images, labels = torch.load(MNIST_PT_FILE)
+    if args.target_label is not None:
+        non_targeted_indices = (labels != args.target_label).nonzero().squeeze(1)
+        images, labels = images[non_targeted_indices], labels[non_targeted_indices]
     dataset = TensorDataset(images, labels)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=2)
+    return DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=2)
 
 def preprocess(args: argparse.Namespace, net: Sequential, mean: float=0, sigma: float=1, demo: bool=True) -> DataLoader:
     """Filter and collect correctly classified target samples into a DataLoader"""

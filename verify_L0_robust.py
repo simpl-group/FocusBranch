@@ -77,7 +77,7 @@ if __name__ == "__main__":
     net, mean, sigma = get_pure_network(args)
     L, U = (0 - mean) / sigma, (1 - mean) / sigma
     # data_loader = preprocess(args, net, mean, sigma, demo=True)
-    data_loader = get_mnist_loader(args.batch_size)
+    data_loader = get_mnist_loader(args)
     x_ = torch.zeros(min(args.batch_size, len(data_loader)), 1, 28, 28).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
     for images, pred_labels in data_loader:
