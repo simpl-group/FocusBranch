@@ -3,7 +3,7 @@ import torch
 from solver_check import solver_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from typing import List
-from utils import get_args, get_pure_network, preprocess, tqdm_bar_format, DEVICE, TimeoutException
+from utils import get_args, get_pure_network, tqdm_bar_format, DEVICE, TimeoutException, get_mnist_loader
 from split_and_prune import split_and_prune
 from tqdm import tqdm
 from signal import alarm
@@ -76,7 +76,8 @@ if __name__ == "__main__":
     assert args.target_label is not None, "Target label must be specified."
     net, mean, sigma = get_pure_network(args)
     L, U = (0 - mean) / sigma, (1 - mean) / sigma
-    data_loader = preprocess(args, net, mean, sigma, demo=True)
+    # data_loader = preprocess(args, net, mean, sigma, demo=True)
+    data_loader = get_mnist_loader(args.batch_size)
     x_ = torch.zeros(min(args.batch_size, len(data_loader)), 1, 28, 28).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
     for images, pred_labels in data_loader:

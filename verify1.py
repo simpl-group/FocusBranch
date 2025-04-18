@@ -1,6 +1,6 @@
 import time
 from typing import List
-from utils import get_args, preprocess, tqdm_bar_format, DEVICE, get_pure_network, TimeoutException
+from utils import get_args, tqdm_bar_format, DEVICE, get_pure_network, TimeoutException, get_mnist_loader
 import torch
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from tqdm import tqdm
@@ -114,7 +114,8 @@ if __name__ == "__main__":
     args.batch_size = 1
     net, mean, sigma = get_pure_network(args)
     L, U = (0 - mean) / sigma, (1 - mean) / sigma
-    data_loader = preprocess(args, net, mean, sigma, demo=True)
+    # data_loader = preprocess(args, net, mean, sigma, demo=True)
+    data_loader = get_mnist_loader(1)
     x_ = torch.zeros(1, 1, 28, 28).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
     for images, pred_labels in data_loader:

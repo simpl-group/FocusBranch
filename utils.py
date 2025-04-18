@@ -6,6 +6,7 @@ from networks import get_network, Normalization
 from AbstractInterpreter import SequentialAT, L0BoundedInput
 from torch.nn import Sequential
 from typing import Iterable, Tuple
+from data import MNIST_PT_FILE
 import argparse
 import signal
 
@@ -55,6 +56,11 @@ def get_pure_network(args: argparse.Namespace) -> Tuple[Sequential, float, float
         mean, sigma = 0, 1
 
     return net, mean, sigma
+
+def get_mnist_loader(batch_size: int=256) -> DataLoader:
+    images, labels = torch.load(MNIST_PT_FILE)
+    dataset = TensorDataset(images, labels)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=2)
 
 def preprocess(args: argparse.Namespace, net: Sequential, mean: float=0, sigma: float=1, demo: bool=True) -> DataLoader:
     """Filter and collect correctly classified target samples into a DataLoader"""

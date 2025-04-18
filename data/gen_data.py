@@ -23,5 +23,5 @@ for arch, feature_sizes in archs:
     net.load_state_dict(torch.load(pt_file))
     indices = torch.logical_and(indices, torch.argmax(net(images), dim=-1) == labels)
 
-torch.save([images[indices], labels[indices]], MNIST_PT_FILE)
+torch.save([images[indices].to(torch.float32).permute(0,3,1,2), labels[indices].to(torch.int64)], MNIST_PT_FILE)
 print(f"found {indices.sum().item()} images from MNIST dataset")
