@@ -2,20 +2,22 @@ import torch
 import torch.nn as nn
 import os
 
-fcn_spec = {
-    'fc1': [50, 10],
-    'fc2': [100, 50, 10],
-    'fc3': [100, 100, 10],
-    'fc4': [100, 100, 50, 10],
-    'fc5': [100, 100, 100, 10],
-    'fc6': [100, 100, 100, 100, 10],
-    'fc7': [100, 100, 100, 100, 100, 10]
-}
-cnn_spec = {
-    'conv1': ([(16, 3, 2, 1)], [100, 10]),
-    'conv2': ([(16, 4, 2, 1), (32, 4, 2, 1)], [100, 10]),
-    'conv3': ([(16, 4, 2, 1), (64, 4, 2, 1)], [100, 100, 10])
-}
+# fcn_spec = {
+#     'fc1': [50, 10],
+#     'fc2': [100, 50, 10],
+#     'fc3': [100, 100, 10],
+#     'fc4': [100, 100, 50, 10],
+#     'fc5': [100, 100, 100, 10],
+#     'fc6': [100, 100, 100, 100, 10],
+#     'fc7': [100, 100, 100, 100, 100, 10]
+# }
+# cnn_spec = {
+#     'conv1': ([(16, 3, 2, 1)], [100, 10]),
+#     'conv2': ([(16, 4, 2, 1), (32, 4, 2, 1)], [100, 10]),
+#     'conv3': ([(16, 4, 2, 1), (64, 4, 2, 1)], [100, 100, 10])
+# }
+
+from models import FCN_SPEC, CNN_SPEC
 
 
 class Normalization(nn.Module):
@@ -67,16 +69,19 @@ class FLN(nn.Sequential):  # Fully linear network
 
 
 def get_network(name: str, folder: str, device: str = "cpu") -> nn.Sequential:
-    if name in fcn_spec:
-        model = FCN(28, fcn_spec[name])
-    elif name in cnn_spec:
-        model = CNN(28, *cnn_spec[name])
+    if name in FCN_SPEC:
+        feature_sizes, pt_path = FCN_SPEC[name]
+        model = FCN(feature_sizes)
+    elif name in CNN_SPEC:
+        feature_sizes, pt_path = CNN_SPEC[name]
+        model = CNN(feature_sizes)
     elif name == "fcbase":
+        raise NotImplementedError
         model = FLN(28, [50, 50, 50, 10])
     else:
         assert False, f"Invalid network name: {name}"
 
-    model.load_state_dict(torch.load(os.path.join(folder, f"{name}.pt"), weights_only=True))
+    model.load_state_dict(torch.load(pt_path, weights_only=True))
     model.eval()
 
     return model.to(device=device)
