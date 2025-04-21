@@ -148,7 +148,10 @@ if __name__ == "__main__":
     data_loader = get_mnist_loader(args)
     x_ = torch.zeros(1, 1, 28, 28).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
+    i = 0
     for images, pred_labels in data_loader:
+        i += 1
+        if i <= args.seed: continue
         images = images.to(DEVICE)
         x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
         if args.target_label is not None:

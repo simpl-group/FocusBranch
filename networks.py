@@ -76,8 +76,8 @@ def get_network(name: str, folder: str, device: str = "cpu") -> nn.Sequential:
         feature_sizes, pt_path = CNN_SPEC[name]
         model = CNN(feature_sizes)
     elif name == "fcbase":
-        raise NotImplementedError
         model = FLN(28, [50, 50, 50, 10])
+        pt_path = os.path.join(folder, "fcbase.pt")
     else:
         assert False, f"Invalid network name: {name}"
 
