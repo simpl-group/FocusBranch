@@ -133,7 +133,7 @@ __global__ void comb2bitmask_kernel(
         uint64_t* bitmask = bitmasks + row * nv;
         const uint64_t* comb = combs + row * popc;
         for (int i = 0; i < popc; i++) {
-            int idx = comb[i] / 64;
+            const int idx = comb[i] / 64;
             uint64_t mask = 1ULL << (comb[i] % 64);
             bitmask[idx] |= mask;
         }
@@ -151,4 +151,39 @@ void comb2bitmask_cuda(
         reinterpret_cast<uint64_t*>(bitmasks.data_ptr<int64_t>()),
         num_rows, nv, popc
     );
+}
+
+template <typename scalar_t>
+__global__ void wipe_selected_kernel(
+    scalar_t* __restrict__ W, const long* __restrict__ selected_idx,
+    const int batch_size, const int num_rows, const int num_cols,
+    const int rows_per_thread, const int num_selected
+) {
+    const int b = blockIdx.x;
+    const long* sib = selected_idx + b * num_selected;
+    scalar_t* Wb = W + b * num_rows * num_cols;
+    int r = threadIdx.x * rows_per_thread;
+    for (int i = 0; i < rows_per_thread && r < num_rows; i++, r++) {
+        scalar_t* Wb_r = Wb + r * num_cols;
+        for (int j = 0; j < num_selected; j++) {
+            Wb_r[sib[j]] = static_cast<scalar_t>(0);
+        }
+    }
+}
+
+void wipe_selected_cuda(
+    at::Tensor WX_diff, const at::Tensor selected_idx,
+    const int batch_size, const int num_rows, const int num_cols,
+    const int num_selected
+) {
+    dim3 threads(MAX_THREADS_PER_BLOCK);
+    dim3 blocks(batch_size); // each block handles one batch element
+    const int rows_per_thread = (num_rows + MAX_THREADS_PER_BLOCK - 1) / MAX_THREADS_PER_BLOCK;
+
+    AT_DISPATCH_FLOATING_TYPES(WX_diff.scalar_type(), "wipe_selected_cuda", ([&] {
+        wipe_selected_kernel<scalar_t><<<blocks, threads>>>(
+            WX_diff.data_ptr<scalar_t>(), selected_idx.data_ptr<long>(),
+            batch_size, num_rows, num_cols, rows_per_thread, num_selected
+        );
+    }));
 }
