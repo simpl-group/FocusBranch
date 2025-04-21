@@ -6,7 +6,7 @@ from networks import get_network, Normalization
 from AbstractInterpreter import SequentialAT, L0BoundedInput
 from torch.nn import Sequential
 from typing import Iterable, Tuple
-from data import MNIST_PT_FILE
+from data import MNIST_TEST_PT
 import argparse
 import signal
 
@@ -58,7 +58,7 @@ def get_pure_network(args: argparse.Namespace) -> Tuple[Sequential, float, float
     return net, mean, sigma
 
 def get_mnist_loader(args: argparse.Namespace) -> DataLoader:
-    images, labels = torch.load(MNIST_PT_FILE)
+    images, labels = torch.load(MNIST_TEST_PT)
     if args.target_label is not None:
         non_targeted_indices = (labels != args.target_label).nonzero().squeeze(1)
         images, labels = images[non_targeted_indices], labels[non_targeted_indices]

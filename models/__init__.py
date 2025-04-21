@@ -1,25 +1,23 @@
 # -*- coding:utf-8 -*-
 
-import os
+from pathlib import Path
 
-MODEL_DIR = os.path.dirname(__file__)
+MODEL_DIR = Path(__file__).parent
 
 ONNX_FILES = {
-    "mnist": [
-        # FC
-        ("mnist-net_256x2.onnx", [
+    str(MODEL_DIR/"mnist/mnist-net_256x2"): [
             {"in_features": 784, "out_features": 256},
             {"in_features": 256, "out_features": 256},
             {"in_features": 256, "out_features": 10},
-        ]),
-        ("mnist-net_256x4.onnx", [
+        ],
+    str(MODEL_DIR/"mnist/mnist-net_256x4"): [
             {"in_features": 784, "out_features": 256},
             {"in_features": 256, "out_features": 256},
             {"in_features": 256, "out_features": 256},
             {"in_features": 256, "out_features": 256},
             {"in_features": 256, "out_features": 10},
-        ]),
-        ("mnist-net_256x6.onnx", [
+        ],
+    str(MODEL_DIR/"mnist/mnist-net_256x6"): [
             {"in_features": 784, "out_features": 256},
             {"in_features": 256, "out_features": 256},
             {"in_features": 256, "out_features": 256},
@@ -27,35 +25,34 @@ ONNX_FILES = {
             {"in_features": 256, "out_features": 256},
             {"in_features": 256, "out_features": 256},
             {"in_features": 256, "out_features": 10},
-        ]),
-        # ConV
-        # ("mnist_0.1.onnx", [
-        #     {"in_channels": 1, "out_channels": 32, "kernel_size": 5, "stride": 2, "padding": 2},
-        #     {"in_channels": 32, "out_channels": 64, "kernel_size": 4, "stride": 2, "padding": 1},
-        #     {"in_features": 3136, "out_features": 100},
-        #     {"in_features": 100, "out_features": 10},
-        # ]),
-        # ("mnist_0.3.onnx", [
-        #     {"in_channels": 1, "out_channels": 32, "kernel_size": 5, "stride": 2, "padding": 2},
-        #     {"in_channels": 32, "out_channels": 128, "kernel_size": 4, "stride": 2, "padding": 1},
-        #     {"in_features": 6272, "out_features": 250},
-        #     {"in_features": 250, "out_features": 10},
-        # ]),
+        ],
+    str(MODEL_DIR/"mnist/mnist_0.1"): [
+        {"in_channels": 1, "out_channels": 32, "kernel_size": 5, "stride": 2, "padding": 2},
+        {"in_channels": 32, "out_channels": 64, "kernel_size": 4, "stride": 2, "padding": 1},
+        {"in_features": 3136, "out_features": 100},
+        {"in_features": 100, "out_features": 10},
     ],
-    "cifar10": [
-        # FC
-        # ConV
-        # "cifar10_2_255.onnx",
-        # "cifar10_8_255.onnx",
-    ],
+    str(MODEL_DIR/"mnist/mnist_0.3"): [
+        {"in_channels": 1, "out_channels": 32, "kernel_size": 5, "stride": 2, "padding": 2},
+        {"in_channels": 32, "out_channels": 128, "kernel_size": 4, "stride": 2, "padding": 1},
+        {"in_features": 6272, "out_features": 250},
+        {"in_features": 250, "out_features": 10},
+    ]
 }
 
+__keys = list(ONNX_FILES.keys())
+
+def __idx2spec(idx: int) -> tuple[list[dict[str, int]], str]:
+    if idx < 0 or idx >= len(__keys):
+        raise ValueError(f"Invalid index {idx}.")
+    return ONNX_FILES[__keys[idx]], __keys[idx] + ".pt"
+
 FCN_SPEC = {
-    'fc1': (ONNX_FILES["mnist"][0][-1], os.path.join(MODEL_DIR, "mnist", "mnist-net_256x2.pt")),
-    'fc2': (ONNX_FILES["mnist"][1][-1], os.path.join(MODEL_DIR, "mnist", "mnist-net_256x4.pt")),
-    'fc3': (ONNX_FILES["mnist"][2][-1], os.path.join(MODEL_DIR, "mnist", "mnist-net_256x6.pt")),
+    'fc1': __idx2spec(0),
+    'fc2': __idx2spec(1),
+    'fc3': __idx2spec(2),
 }
 CNN_SPEC = {
-    # 'conv1': ONNX_FILES["mnist"]['mnist_0.1.onnx'][-1],
-    # 'conv2': ONNX_FILES["mnist"]['mnist_0.3.onnx'][-1],
+    'conv1': __idx2spec(3),
+    'conv2': __idx2spec(4)
 }

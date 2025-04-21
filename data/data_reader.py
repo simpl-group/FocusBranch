@@ -1,33 +1,31 @@
 # -*- coding:utf-8 -*-
 
-import os
 import csv
 import numpy as np
-from data import MNIST_FILE, CIFAR10_FILE, CIFAR10_CLASSES
+from data import MNIST_TEST_CSV, CIFAR10_TEST_CSV, CIFAR10_CLASSES
 
 
 def load_mnist_data():
-    with open(MNIST_FILE, 'r') as reader:
+    images, labels = [], []
+    with open(MNIST_TEST_CSV, 'r') as reader:
         csv_reader = csv.reader(reader, delimiter=',')
-        images, labels = [], []
         for line in csv_reader:
             label, image = int(line[0]), np.array(line[1:], dtype=np.int32).reshape([28, 28, 1])
             images.append(image)
             labels.append(label)
-        images, labels = np.array(images, dtype=np.int32), np.array(labels, dtype=np.int32)
-        return images, labels
-
+    images, labels = np.array(images, dtype=np.int32), np.array(labels, dtype=np.int32)
+    return images, labels
 
 def load_cifar10_data():
-    with open(CIFAR10_FILE, 'r') as reader:
+    labels, images = [], []
+    with open(CIFAR10_TEST_CSV, 'r') as reader:
         csv_reader = csv.reader(reader, delimiter=',')
-        labels, images = [], []
         for line in csv_reader:
             label, image = int(line[0]), np.array(line[1:], dtype=np.int32).reshape([32, 32, 3])
             labels.append(label)
             images.append(image)
-        labels, images = np.array(labels, dtype=np.int32), np.array(images, dtype=np.int32)
-        return labels, images
+    labels, images = np.array(labels, dtype=np.int32), np.array(images, dtype=np.int32)
+    return labels, images
 
 
 if __name__ == '__main__':

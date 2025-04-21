@@ -1,11 +1,11 @@
 # -*- coding:utf-8 -*-
 
-import os
+from pathlib import Path
 
-DIR = os.path.dirname(__file__)
-MNIST_FILE = os.path.join(DIR, "mnist_test.csv")
-CIFAR10_FILE = os.path.join(DIR, "cifar10_test.csv")
+DIR = Path(__file__).parent
+MNIST_TEST_CSV = str(DIR / "mnist_test.csv")
+CIFAR10_TEST_CSV = str(DIR / "cifar10_test.csv")
 CIFAR10_CLASSES = ["airplanes", "cars", "birds", "cats", "deer", "dogs", "frogs", "horses", "ships", "trucks"]
 
-MNIST_PT_FILE = os.path.join(DIR, "mnist_test.pt")
-CIFAR10_PT_FILE = os.path.join(DIR, "cifar10_test.pt")
+MNIST_TEST_PT = str(DIR / "mnist_test.pt")
+CIFAR10_TEST_PT = str(DIR / "cifar10_test.pt")
