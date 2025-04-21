@@ -16,7 +16,6 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
     watchout = False  # safe combs might contain combs that comes from different levels
     if demo:
         global branching_time, total_nodes, splits
-    t0 = time.time()
     while level <= bounded_x0.eps:
         num_to_check = combs_to_check.shape[0]
         if num_to_check == 0: return True
@@ -25,7 +24,7 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
         if demo:
             min_value = float("inf")
             min_comb = None
-
+        t0 = time.time()
         with tqdm(total=num_to_check, desc=f"Level {level}", bar_format=tqdm_bar_format, disable=not demo) as pbar:
             for i in range(0, num_to_check, batch_size):
                 combs_to_check_batch = combs_to_check[i:i + batch_size]
@@ -41,6 +40,7 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
 
                 new_safe_combs += combs_to_check_batch[lb_l >= 0].tolist()
                 unk_combs += combs_to_check_batch[lb_l < 0].tolist()
+
                 if demo:
                     if lb_l.min() < min_value:
                         min_value = lb_l.min().item()
@@ -48,17 +48,16 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
                     pbar.set_postfix({"Safe:UNK": f"{len(new_safe_combs)}:{len(unk_combs)}", "Min": f"{min_value:.2f}", "Comb": min_comb.tolist()})
                     pbar.update(current_batch_size)
                 if timeout != 0 and i == batch_size * 100:  # calculate remaining time to decide if to early stop
-                    if demo:
-                        if pbar.format_dict['remaining'] > timeout:
-                            alarm(0)
-                            raise TimeoutException()
-                    else:
-                        # calculate remaining time without pbar
+                    if not demo: # calculate remaining time without pbar
                         rate = (time.time() - t0) / 100
                         if ((num_to_check - i) / batch_size) * rate > timeout:
                             return False
+                    elif (pbar.total - pbar.n) / pbar.format_dict['rate'] > timeout:
+                        alarm(0)
+                        raise TimeoutException()
 
         if len(unk_combs) == 0: return True
+        elif level == bounded_x0.eps: return False
         if safe_combs is not []:
             watchout = True
             safe_combs += new_safe_combs
@@ -82,7 +81,6 @@ def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0Bounded
     safe_combs: List[List[int]] = []
     level = 0
     watchout = False
-    t0 = time.time()
     if demo:
         global branching_time, total_nodes, splits
     while level <= bounded_x0.eps:
@@ -90,7 +88,7 @@ def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0Bounded
         if num_to_check == 0: return True
         unk_combs: List[List[int]]  = []
         new_safe_combs: List[List[int]] = []
-
+        t0 = time.time()
         with tqdm(total=num_to_check, desc=f"Level {level}", bar_format=tqdm_bar_format, disable=not demo) as pbar:
             for i in range(0, num_to_check, batch_size):
                 combs_to_check_batch = combs_to_check[i:i + batch_size]
@@ -107,20 +105,21 @@ def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0Bounded
                 safes = lb_l.ge(0).all(dim=1)
                 new_safe_combs += combs_to_check_batch[safes].tolist()
                 unk_combs += combs_to_check_batch[~safes].tolist()
+
                 if demo:
                     pbar.set_postfix({"Safe:UNK": f"{len(new_safe_combs)}:{len(unk_combs)}"})
                     pbar.update(current_batch_size)
                 if timeout != 0 and i == batch_size * 100:
-                    if demo:
-                        if pbar.format_dict['remaining'] > timeout:
-                            alarm(0)
-                            raise TimeoutException()
-                    else:
+                    if not demo:
                         rate = (time.time() - t0) / 100
                         if ((num_to_check - i) / batch_size) * rate > timeout:
                             return False
+                    elif (pbar.total - pbar.n) / pbar.format_dict['rate'] > timeout:
+                        alarm(0)
+                        raise TimeoutException()
 
         if len(unk_combs) == 0: return True
+        elif level == bounded_x0.eps: return False
         if safe_combs is not []:
             watchout = True
             safe_combs += new_safe_combs
