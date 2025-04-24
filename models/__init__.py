@@ -133,7 +133,7 @@ MODEL_SPECS: dict[str, ModelSpec] = {
 }
 
 
-def get_network(name: str, device: str="cpu", add_affine_normalization: bool=True) -> Sequential:
+def get_network(name: str, device: str="cpu", add_affine_normalization: bool=True) -> tuple[Sequential, ModelSpec]:
     if name in MODEL_SPECS:
         model_spec = MODEL_SPECS[name]
     else:
@@ -145,4 +145,4 @@ def get_network(name: str, device: str="cpu", add_affine_normalization: bool=Tru
     model.load_state_dict(torch.load(model_spec.pt_path, weights_only=True))
     model.eval()
 
-    return model.to(device=device)
+    return model.to(device=device), model_spec

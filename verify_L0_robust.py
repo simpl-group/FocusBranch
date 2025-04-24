@@ -2,7 +2,9 @@ import time
 import torch
 from solver_check import solver_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
-from utils import get_args, tqdm_bar_format, DEVICE, TimeoutException, get_mnist_loader
+from data.prepare import get_loader
+from data import DATASETS
+from utils import get_args, tqdm_bar_format, DEVICE, TimeoutException
 from models import get_network
 from split_and_prune import split_and_prune
 from tqdm import tqdm
@@ -75,20 +77,19 @@ def check(comb: torch.Tensor, debug=False, mute=True) -> bool:
 if __name__ == "__main__":
     args = get_args()
     assert args.target_label is not None, "Target label must be specified."
-    net = get_network(args.net, device=DEVICE)
-    L, U = 0, 1
-    # data_loader = preprocess(args, net, mean, sigma, demo=True)
-    data_loader = get_mnist_loader(args)
-    x_ = torch.zeros(min(args.batch_size, len(data_loader)), 1, 28, 28).to(DEVICE)
+    net, spec = get_network(args.net, device=DEVICE)
+    data_loader = get_loader(spec.dataset_name, batch_size=args.batch_size, target_label=args.target_label, num_batches=args.seed+1)
+    x_ = torch.zeros(args.batch_size, *DATASETS[spec.dataset_name].image_shape).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
     i = 0
     for images, pred_labels in data_loader:
-        i += 1
-        if i <= args.seed: continue
-        images = images.to(DEVICE)
-        x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
+        if i < args.seed:
+            i += 1
+            continue
+        assert net.cpu()(images).argmax(dim=1).eq(pred_labels).all()
+        x0 = images.to(DEVICE).flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
+        bounded_x0 = L0BoundedInput(x0, args.epsilon)
         seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device=DEVICE)
-        bounded_x0 = L0BoundedInput(x0, args.epsilon, (L, U))
         break
     x0_ = bounded_x0.x.squeeze(2).cpu().numpy()
     del net

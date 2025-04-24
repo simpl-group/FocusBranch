@@ -1,6 +1,8 @@
 import time
 from models import get_network
-from utils import get_args, tqdm_bar_format, DEVICE, TimeoutException, get_mnist_loader
+from data.prepare import get_loader
+from data import DATASETS
+from utils import get_args, tqdm_bar_format, DEVICE, TimeoutException
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from tqdm import tqdm
 import torch
@@ -140,24 +142,22 @@ def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0Bounded
 if __name__ == "__main__":
     args = get_args()
     batch_size = args.batch_size if args.batch_size < MAX_BATCH_SIZE else MAX_BATCH_SIZE
-    args.batch_size = 1
-    net = get_network(args.net, device=DEVICE)
-    L, U = 0, 1
-    # data_loader = preprocess(args, net, mean, sigma, demo=True)
-    data_loader = get_mnist_loader(args)
-    x_ = torch.zeros(1, 1, 28, 28).to(DEVICE)
+    net, spec = get_network(args.net, device=DEVICE)
+    data_loader = get_loader(spec.dataset_name, batch_size=1, target_label=args.target_label, num_batches=args.seed+1)
+    x_ = torch.zeros(1, *DATASETS[spec.dataset_name].image_shape).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
     i = 0
     for images, pred_labels in data_loader:
-        i += 1
-        if i <= args.seed: continue
-        images = images.to(DEVICE)
-        x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
+        if i < args.seed:
+            i += 1
+            continue
+        assert net.cpu()(images).argmax(dim=1).eq(pred_labels).all()
+        x0 = images.to(DEVICE).flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
+        bounded_x0 = L0BoundedInput(x0, args.epsilon)
         if args.target_label is not None:
             seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device=DEVICE)
         else:
             seqAT.tail.make_marginals(true_labels=pred_labels, device=DEVICE)
-        bounded_x0 = L0BoundedInput(x0, args.epsilon, (L, U))
         break
     del net
 
