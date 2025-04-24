@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from typing import List, Self, Optional, Tuple, Union
+from typing import Self
 import warnings
 from contextlib import contextmanager
 
@@ -33,7 +33,7 @@ class Bounds:
     def clone(cls, other: Self) -> Self:
         return cls(other.l.clone(), other.u.clone())
 
-    def __add__(self, other: Union[torch.Tensor, Self]) -> Self:
+    def __add__(self, other: torch.Tensor | Self) -> Self:
         if isinstance(other, Bounds):
             return Bounds(self.l + other.l, self.u + other.u)
         else:
@@ -42,7 +42,7 @@ class Bounds:
     def __radd__(self, other: torch.Tensor) -> Self:
         return self.__add__(other)
 
-    def __sub__(self, other: Union[torch.Tensor, Self]) -> Self:
+    def __sub__(self, other: torch.Tensor | Self) -> Self:
         if isinstance(other, Bounds):
             return Bounds(self.l - other.l, self.u - other.u)
         else:
@@ -171,9 +171,9 @@ class LinfBoundedInput(BoundedInput):
 
 class AbstractTransformer:
     def __init__(self):
-        self.parent: Optional[Self] = None
+        self.parent: Self | None = None
 
-    def backsubstitution(self) -> Tuple[RelationalPolyhedra, RelationalPolyhedra]:
+    def backsubstitution(self) -> tuple[RelationalPolyhedra, RelationalPolyhedra]:
         assert isinstance(self, AffineAT)
         lrp, urp = self.rp.clone(), self.rp.clone()
         prev = self.parent
@@ -275,7 +275,7 @@ class ActivationAT(AbstractTransformer):
         self.urp: RelationalPolyhedra = None
 
     @staticmethod
-    def compute_rp(bounds: Bounds) -> Tuple[RelationalPolyhedra, RelationalPolyhedra]:
+    def compute_rp(bounds: Bounds) -> tuple[RelationalPolyhedra, RelationalPolyhedra]:
         raise NotImplementedError("Subclasses must implement compute_rp method.")
 
 class ReLUAT(ActivationAT):
@@ -283,7 +283,7 @@ class ReLUAT(ActivationAT):
         super().__init__()
 
     @staticmethod
-    def compute_rp(bounds: Bounds) -> Tuple[RelationalPolyhedra, RelationalPolyhedra]:
+    def compute_rp(bounds: Bounds) -> tuple[RelationalPolyhedra, RelationalPolyhedra]:
         # Initialization
         lrp = RelationalPolyhedra(torch.ones_like(bounds.l), torch.zeros_like(bounds.l))
         urp = lrp.clone()
@@ -313,7 +313,7 @@ class ReLUAT(ActivationAT):
         return lrp, urp
 
 class SequentialAT:
-    def __init__(self, ATs: List[AbstractTransformer]):
+    def __init__(self, ATs: list[AbstractTransformer]):
         tail = ATs[-1]
         assert isinstance(tail, AffineAT)
         self.ATs = ATs
@@ -322,9 +322,9 @@ class SequentialAT:
         self.tail.b = self.tail.b.cpu()
 
     @staticmethod
-    def parse_layers(seq_net: nn.Sequential, x: torch.Tensor, prev: Optional[AbstractTransformer]=None) -> List[AbstractTransformer]:
+    def parse_layers(seq_net: nn.Sequential, x: torch.Tensor, prev: AbstractTransformer | None=None) -> list[AbstractTransformer]:
         ATs = []
-        current: Optional[AbstractTransformer] = None
+        current: AbstractTransformer | None = None
         for layer in seq_net:
             x_in = x
             x = layer(x_in)
@@ -351,7 +351,7 @@ class SequentialAT:
         return ATs
 
     @classmethod
-    def from_sequential(cls, seq_net: nn.Sequential, x: torch.Tensor, prev: Optional[AbstractTransformer]=None) -> Self:
+    def from_sequential(cls, seq_net: nn.Sequential, x: torch.Tensor, prev: AbstractTransformer | None=None) -> Self:
         return cls(SequentialAT.parse_layers(seq_net, x, prev))
 
     def update_activation_rp(self, bounded_in: BoundedInput) -> None:

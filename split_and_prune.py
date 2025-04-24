@@ -1,5 +1,4 @@
 import torch
-from typing import List
 from tqdm import tqdm
 import bimm
 from utils import DEVICE, tqdm_bar_format
@@ -7,15 +6,15 @@ from data import DATASETS, DatasetName
 
 chunk_size = 2000  # Adjust based on GPU memory availability
 
-def comb2bitmask64(comb: List[int], dataset: DatasetName=DatasetName.MNIST) -> torch.Tensor:
+def comb2bitmask64(comb: list[int], dataset: DatasetName=DatasetName.MNIST) -> torch.Tensor:
     mask = torch.zeros(DATASETS[dataset].bitmask_length, dtype=torch.int64)
     for idx in comb:
         mask[idx // 64] |= (torch.tensor(1, dtype=torch.int64) << idx % 64)
     return mask
 
 def split_and_prune(
-    unk_combs: List[List[int]],
-    safe_combs: List[List[int]],
+    unk_combs: list[list[int]],
+    safe_combs: list[list[int]],
     level: int,
     demo: bool=False,
     watchout: bool=False,
@@ -73,7 +72,7 @@ def split_and_prune(
 
     return bimm.bitmask2comb(combs_to_check_tensor, level + 1)
 
-def prune_by_safe(new_bitmasks: torch.Tensor, safe_bitmasks: torch.Tensor, demo: bool=False) -> List[torch.Tensor]:
+def prune_by_safe(new_bitmasks: torch.Tensor, safe_bitmasks: torch.Tensor, demo: bool=False) -> list[torch.Tensor]:
     new_bitmasks_pruned_list = []
 
     with tqdm(total=new_bitmasks.shape[0], desc="Pruning next level combs", disable=not demo,
@@ -95,7 +94,7 @@ def prune_by_safe(new_bitmasks: torch.Tensor, safe_bitmasks: torch.Tensor, demo:
     return new_bitmasks_pruned_list
 
 
-def prune_by_unk(new_bitmasks: torch.Tensor, unk_bitmasks: torch.Tensor, level: int, demo: bool=False) -> List[torch.Tensor]:
+def prune_by_unk(new_bitmasks: torch.Tensor, unk_bitmasks: torch.Tensor, level: int, demo: bool=False) -> list[torch.Tensor]:
     new_bitmasks_pruned_list = []
 
     with tqdm(total=new_bitmasks.shape[0], desc="Pruning next level combs", disable=not demo,

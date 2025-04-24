@@ -1,8 +1,6 @@
 import time
-from typing import List
 from models import get_network
 from utils import get_args, tqdm_bar_format, DEVICE, TimeoutException, get_mnist_loader
-import torch
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from tqdm import tqdm
 import torch
@@ -12,7 +10,7 @@ MAX_BATCH_SIZE = 25000
 
 def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batch_size: int=2000, demo: bool=False, timeout: int=0) -> bool:
     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
-    safe_combs: List[List[int]] = []
+    safe_combs: list[list[int]] = []
     level = 0
     watchout = False  # safe combs might contain combs that comes from different levels
     if demo:
@@ -20,8 +18,8 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
     while level <= bounded_x0.eps:
         num_to_check = combs_to_check.shape[0]
         if num_to_check == 0: return True
-        unk_combs: List[List[int]]  = []
-        new_safe_combs: List[List[int]] = []
+        unk_combs: list[list[int]]  = []
+        new_safe_combs: list[list[int]] = []
         if demo:
             min_value = float("inf")
             min_comb = None
@@ -79,7 +77,7 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
 
 def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batch_size: int=2000, demo: bool=False, timeout: int=0) -> bool:
     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
-    safe_combs: List[List[int]] = []
+    safe_combs: list[list[int]] = []
     level = 0
     watchout = False
     if demo:
@@ -87,8 +85,8 @@ def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0Bounded
     while level <= bounded_x0.eps:
         num_to_check = combs_to_check.shape[0]
         if num_to_check == 0: return True
-        unk_combs: List[List[int]]  = []
-        new_safe_combs: List[List[int]] = []
+        unk_combs: list[list[int]]  = []
+        new_safe_combs: list[list[int]] = []
         t0 = time.time()
         with tqdm(total=num_to_check, desc=f"Level {level}", bar_format=tqdm_bar_format, disable=not demo) as pbar:
             for i in range(0, num_to_check, batch_size):

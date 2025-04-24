@@ -2,16 +2,15 @@ import time
 import torch
 from solver_check import solver_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
-from typing import List
 from utils import get_args, tqdm_bar_format, DEVICE, TimeoutException, get_mnist_loader
 from models import get_network
 from split_and_prune import split_and_prune
 from tqdm import tqdm
 from signal import alarm
 
-def check_and_branch(combs_to_check: torch.Tensor, safe_combs: List[List[int]]) -> bool:
+def check_and_branch(combs_to_check: torch.Tensor, safe_combs: list[list[int]]) -> bool:
     global splits, level, solver_time_temp, solver_checks_temp
-    unk_combs: List[List[int]] = []
+    unk_combs: list[list[int]] = []
     unk_num = 0
     solver_time_temp = .0
     solver_checks_temp = 0
@@ -96,7 +95,7 @@ if __name__ == "__main__":
     print("Preprocessing done")
 
     total_checks, solver_checks, solver_checks_temp = 0, 0, 0
-    safe_combs: List[List[int]] = []
+    safe_combs: list[list[int]] = []
     root_combs = torch.empty((1, 0), dtype=torch.int64)
     splits = 0
     solver_time, solver_time_temp = .0, .0
