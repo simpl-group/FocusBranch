@@ -68,10 +68,10 @@ if __name__ == "__main__":
         if args.cnn_only and model_spec.constructor == FCN: continue
         if args.fcn_only and model_spec.constructor == CNN: continue
         torch_net = model_spec.constructor(model_spec.layer_params)
-        if model_spec.dataset == DatasetName.MNIST:
+        if model_spec.dataset_name == DatasetName.MNIST:
             if args.cifar10_only: continue
             imgs, labels = mnist_imgs, mnist_labels
-        elif model_spec.dataset == DatasetName.CIFAR10:
+        elif model_spec.dataset_name == DatasetName.CIFAR10:
             if args.mnist_only: continue
             imgs, labels = cifar10_imgs, cifar10_labels
         else: assert False, "Unknown dataset"
@@ -79,11 +79,11 @@ if __name__ == "__main__":
         load_from_onnx(model_spec.onnx_path, torch_net)
 
         if args.add_normalization_layer and model_spec.need_normalization:
-            normalization_layer = get_affine_normalization[model_spec.dataset]
+            normalization_layer = get_affine_normalization[model_spec.dataset_name]
             torch_net.insert(0, normalization_layer)
 
         acc = test_accuracy(torch_net.eval(), imgs, labels)
-        print(f"The accuracy of {os.path.basename(model_spec.model_path)} on {model_spec.dataset} testset is {acc:.2%}")
+        print(f"The accuracy of {os.path.basename(model_spec.model_path)} on {model_spec.dataset_name} testset is {acc:.2%}")
 
         if args.save:
             if not args.force and os.path.exists(model_spec.pt_path):

@@ -4,6 +4,7 @@ from pathlib import Path
 from enum import Enum, auto
 from dataclasses import dataclass
 from functools import cached_property
+from torchvision.datasets import MNIST, CIFAR10, VisionDataset
 import torch
 
 
@@ -24,6 +25,7 @@ class DatasetConfig:
     mean: tuple[float, ...]
     std: tuple[float, ...]
     image_shape: tuple[int, int, int]
+    dataset_class: type[VisionDataset]
 
     @cached_property
     def num_pixels(self) -> int:
@@ -74,6 +76,7 @@ DATASETS: dict[DatasetName, DatasetConfig] = {
         mean=(0.1307,),
         std=(0.3081,),
         image_shape=(1, 28, 28),
+        dataset_class=MNIST,
     ),
     DatasetName.CIFAR10: DatasetConfig(
         csv_file=BASE_DIR / "cifar10_test.csv",
@@ -85,5 +88,6 @@ DATASETS: dict[DatasetName, DatasetConfig] = {
         mean=(0.4914, 0.4822, 0.4465),
         std=(0.2023, 0.1994, 0.2010),
         image_shape=(3, 32, 32),
+        dataset_class=CIFAR10,
     ),
 }

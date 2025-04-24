@@ -15,8 +15,9 @@ class ModelSpec:
     model_path: str
     constructor: Callable[[list[dict]], Sequential]
     layer_params: list[dict[str, int]]
-    dataset: DatasetName
+    dataset_name: DatasetName
     need_normalization: bool
+    debug: bool = False
 
     @property
     def onnx_path(self) -> str:
@@ -27,7 +28,7 @@ class ModelSpec:
         return self.model_path + ".pt"
 
 
-MODEL_SPECS = {
+MODEL_SPECS: dict[str, ModelSpec] = {
     'fcbase': ModelSpec(
         model_path=str(BASE_DIR / "fcbase"),
         constructor=FLN,
@@ -37,8 +38,9 @@ MODEL_SPECS = {
             {"in_features": 50, "out_features": 50},
             {"in_features": 50, "out_features": 10},
         ],
-        dataset=DatasetName.MNIST,
-        need_normalization=False
+        dataset_name=DatasetName.MNIST,
+        need_normalization=False,
+        debug=True
     ),
     'fc1': ModelSpec(
         model_path=str(BASE_DIR / "mnist/mnist-net_256x2"),
@@ -48,7 +50,7 @@ MODEL_SPECS = {
             {"in_features": 256, "out_features": 256},
             {"in_features": 256, "out_features": 10},
         ],
-        dataset=DatasetName.MNIST,
+        dataset_name=DatasetName.MNIST,
         need_normalization=False
     ),
     'fc2': ModelSpec(
@@ -61,7 +63,7 @@ MODEL_SPECS = {
             {"in_features": 256, "out_features": 256},
             {"in_features": 256, "out_features": 10},
         ],
-        dataset=DatasetName.MNIST,
+        dataset_name=DatasetName.MNIST,
         need_normalization=False
     ),
     'fc3': ModelSpec(
@@ -76,7 +78,7 @@ MODEL_SPECS = {
             {"in_features": 256, "out_features": 256},
             {"in_features": 256, "out_features": 10},
         ],
-        dataset=DatasetName.MNIST,
+        dataset_name=DatasetName.MNIST,
         need_normalization=False
     ),
     'conv1': ModelSpec(
@@ -88,7 +90,7 @@ MODEL_SPECS = {
         {"in_features": 3136, "out_features": 100},
         {"in_features": 100, "out_features": 10},
     ],
-        dataset=DatasetName.MNIST,
+        dataset_name=DatasetName.MNIST,
         need_normalization=True
     ),
     'conv2': ModelSpec(
@@ -100,7 +102,7 @@ MODEL_SPECS = {
             {"in_features": 6272, "out_features": 250},
             {"in_features": 250, "out_features": 10},
         ],
-        dataset=DatasetName.MNIST,
+        dataset_name=DatasetName.MNIST,
         need_normalization=True
     ),
     'conv3': ModelSpec(
@@ -113,7 +115,7 @@ MODEL_SPECS = {
             {"in_features": 8192, "out_features": 250},
             {"in_features": 250, "out_features": 10},
         ],
-        dataset=DatasetName.CIFAR10,
+        dataset_name=DatasetName.CIFAR10,
         need_normalization=True
     ),
     'conv4': ModelSpec(
@@ -125,7 +127,7 @@ MODEL_SPECS = {
             {"in_features": 8192, "out_features": 250},
             {"in_features": 250, "out_features": 10},
         ],
-        dataset=DatasetName.CIFAR10,
+        dataset_name=DatasetName.CIFAR10,
         need_normalization=True
     )
 }
@@ -138,7 +140,7 @@ def get_network(name: str, device: str="cpu", add_affine_normalization: bool=Tru
         assert False, f"Invalid network name: {name}"
     model = model_spec.constructor(model_spec.layer_params)
     if model_spec.need_normalization and add_affine_normalization:
-        normalization_layer = get_affine_normalization[model_spec.dataset]
+        normalization_layer = get_affine_normalization[model_spec.dataset_name]
         model.insert(0, normalization_layer)
     model.load_state_dict(torch.load(model_spec.pt_path, weights_only=True))
     model.eval()
