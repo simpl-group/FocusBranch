@@ -53,7 +53,7 @@ class CNN(nn.Sequential):
         fc_kwargs = list(filter(lambda xs: len(xs) == 2, args))
         for idx, kwargs in enumerate(fc_kwargs):
             layers += [nn.Linear(**kwargs)]
-            if idx < len(args) - 1:
+            if idx < len(fc_kwargs) - 1:
                 layers += [nn.ReLU()]
         super().__init__(*layers)
 
