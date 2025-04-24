@@ -64,6 +64,7 @@ if __name__ == "__main__":
     if not args.mnist_only:
         cifar10_imgs, cifar10_labels = load_cifar10_from_csv(normalize=args.normalize)
     for model_spec in MODEL_SPECS.values():
+        if not os.path.exists(model_spec.onnx_path): continue
         if args.cnn_only and model_spec.constructor == FCN: continue
         if args.fcn_only and model_spec.constructor == CNN: continue
         torch_net = model_spec.constructor(model_spec.layer_params)

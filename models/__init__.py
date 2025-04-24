@@ -28,6 +28,18 @@ class ModelSpec:
 
 
 MODEL_SPECS = {
+    'fcbase': ModelSpec(
+        model_path=str(BASE_DIR / "fcbase"),
+        constructor=FLN,
+        layer_params=[
+            {"in_features": 784, "out_features": 50},
+            {"in_features": 50, "out_features": 50},
+            {"in_features": 50, "out_features": 50},
+            {"in_features": 50, "out_features": 10},
+        ],
+        dataset=DatasetName.MNIST,
+        need_normalization=False
+    ),
     'fc1': ModelSpec(
         model_path=str(BASE_DIR / "mnist/mnist-net_256x2"),
         constructor=FCN,
@@ -122,10 +134,6 @@ MODEL_SPECS = {
 def get_network(name: str, device: str="cpu", add_affine_normalization: bool=True) -> Sequential:
     if name in MODEL_SPECS:
         model_spec = MODEL_SPECS[name]
-    elif name == "fcbase":
-        model = FLN(28, [50, 50, 50, 10])
-        model.load_state_dict(torch.load(str(BASE_DIR/"fcbase.pt"), weights_only=True))
-        return model.to(device=device)
     else:
         assert False, f"Invalid network name: {name}"
     model = model_spec.constructor(model_spec.layer_params)

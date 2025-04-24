@@ -2,31 +2,31 @@ import torch.nn as nn
 from data import DatasetName, DATASETS
 
 
-def FCN(args: list[dict[str, int]]) -> nn.Sequential:
+def FCN(layer_params: list[dict[str, int]]) -> nn.Sequential:
     """
     Fully connected network with ReLU activations.
     :param args: List of dictionaries containing layer parameters.
     :return: A Sequential model.
     """
     layers = [nn.Flatten(start_dim=1)]
-    for idx, kwargs in enumerate(args):
+    for idx, kwargs in enumerate(layer_params):
         layers += [nn.Linear(**kwargs)]
-        if idx < len(args) - 1:
+        if idx < len(layer_params) - 1:
             layers += [nn.ReLU()]
     return nn.Sequential(*layers)
 
-def CNN(args: list[dict[str, int]]) -> nn.Sequential:
+def CNN(layer_params: list[dict[str, int]]) -> nn.Sequential:
     """
     Convolutional network with ReLU activations.
     :param args: List of dictionaries containing layer parameters.
     :return: A Sequential model.
     """
     layers = []
-    conv_kwargs = list(filter(lambda xs: len(xs) > 2, args))
+    conv_kwargs = list(filter(lambda xs: len(xs) > 2, layer_params))
     for idx, kwargs in enumerate(conv_kwargs):
         layers += [nn.Conv2d(**kwargs), nn.ReLU()]
     layers += [nn.Flatten(start_dim=1)]
-    fc_kwargs = list(filter(lambda xs: len(xs) == 2, args))
+    fc_kwargs = list(filter(lambda xs: len(xs) == 2, layer_params))
     for idx, kwargs in enumerate(fc_kwargs):
         layers += [nn.Linear(**kwargs)]
         if idx < len(fc_kwargs) - 1:
@@ -34,12 +34,15 @@ def CNN(args: list[dict[str, int]]) -> nn.Sequential:
     return nn.Sequential(*layers)
 
 
-def FLN(input_size: int, hdims: list[int]) -> nn.Sequential:
+def FLN(layer_params: list[dict[str, int]]) -> nn.Sequential:
+    """
+    Fully linear network without activations. Used for testing purposes.
+    :param args: List of dictionaries containing layer parameters.
+    :return: A Sequential model.
+    """
     layers = [nn.Flatten()]
-    prev_fc_size = input_size * input_size
-    for d in hdims:
-        layers.append(nn.Linear(prev_fc_size, d))
-        prev_fc_size = d
+    for idx, kwargs in enumerate(layer_params):
+        layers += [nn.Linear(**kwargs)]
     return nn.Sequential(*layers)
 
 
