@@ -1,23 +1,8 @@
 import torch
 import torch.nn as nn
 import os
-
-# fcn_spec = {
-#     'fc1': [50, 10],
-#     'fc2': [100, 50, 10],
-#     'fc3': [100, 100, 10],
-#     'fc4': [100, 100, 50, 10],
-#     'fc5': [100, 100, 100, 10],
-#     'fc6': [100, 100, 100, 100, 10],
-#     'fc7': [100, 100, 100, 100, 100, 10]
-# }
-# cnn_spec = {
-#     'conv1': ([(16, 3, 2, 1)], [100, 10]),
-#     'conv2': ([(16, 4, 2, 1), (32, 4, 2, 1)], [100, 10]),
-#     'conv3': ([(16, 4, 2, 1), (64, 4, 2, 1)], [100, 100, 10])
-# }
-
-from models import FCN_SPEC, CNN_SPEC
+from models import FCN_SPEC, CNN_SPEC, MODEL_DIR
+from data import MNIST_MEAN, MNIST_STD, CIFAR10_MEAN, CIFAR10_STD
 
 
 class Normalization(nn.Module):
@@ -68,20 +53,50 @@ class FLN(nn.Sequential):  # Fully linear network
         super().__init__(*layers)
 
 
-def get_network(name: str, folder: str, device: str = "cpu") -> nn.Sequential:
+def get_affine_normalization_mnist(mean: float=MNIST_MEAN, sigma: float=MNIST_STD) -> nn.Module:
+    normalization_layer = nn.Conv2d(1, 1, kernel_size=1, stride=1, padding=0)
+    normalization_layer.weight.data.fill_(1.0 / sigma)
+    normalization_layer.bias.data.fill_(-mean / sigma)
+    return normalization_layer
+
+
+def get_affine_normalization_cifar10(mean: tuple[float, float, float]=CIFAR10_MEAN, sigma: tuple[float, float, float]=CIFAR10_STD) -> nn.Module:
+    normalization_layer = nn.Conv2d(3, 3, kernel_size=1, stride=1, padding=0)
+    normalization_layer.weight.data.fill_(0.)
+    normalization_layer.bias.data.fill_(0.)
+    normalization_layer.weight.data[0, 0, 0, 0] = 1.0 / sigma[0]
+    normalization_layer.weight.data[1, 1, 0, 0] = 1.0 / sigma[1]
+    normalization_layer.weight.data[2, 2, 0, 0] = 1.0 / sigma[2]
+    normalization_layer.bias.data[0] = -mean[0] / sigma[0]
+    normalization_layer.bias.data[1] = -mean[1] / sigma[1]
+    normalization_layer.bias.data[2] = -mean[2] / sigma[2]
+    return normalization_layer
+
+
+def get_network(name: str, folder: str=MODEL_DIR, device: str="cpu", add_affine_normalization: bool=True) -> nn.Sequential:
     if name in FCN_SPEC:
-        feature_sizes, pt_path = FCN_SPEC[name]
-        model = FCN(feature_sizes)
+        layer_params, model_path, dataset, need_normalization = FCN_SPEC[name]
+        model = FCN(layer_params)
     elif name in CNN_SPEC:
-        feature_sizes, pt_path = CNN_SPEC[name]
-        model = CNN(feature_sizes)
+        layer_params, model_path, dataset, need_normalization = CNN_SPEC[name]
+        model = CNN(layer_params)
     elif name == "fcbase":
         model = FLN(28, [50, 50, 50, 10])
-        pt_path = os.path.join(folder, "fcbase.pt")
+        model_path = str(MODEL_DIR/"fcbase")
+        dataset = "MNIST"
+        need_normalization = False
     else:
         assert False, f"Invalid network name: {name}"
 
-    model.load_state_dict(torch.load(pt_path, weights_only=True))
+    if need_normalization and add_affine_normalization:
+        if dataset == "MNIST":
+            normalization_layer = get_affine_normalization_mnist()
+        elif dataset == "CIFAR10":
+            normalization_layer = get_affine_normalization_cifar10()
+        else:
+            raise ValueError(f"Unknown dataset: {dataset}")
+        model.insert(0, normalization_layer)
+    model.load_state_dict(torch.load(model_path + ".pt", weights_only=True))
     model.eval()
 
     return model.to(device=device)
