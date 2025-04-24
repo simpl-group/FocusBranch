@@ -2,26 +2,25 @@
 
 import os
 import onnx
-from models import FCN_SPEC, CNN_SPEC
-from networks import FCN, CNN, get_affine_normalization_mnist, get_affine_normalization_cifar10
+from models import MODEL_SPECS
+from models.networks import FCN, CNN, get_affine_normalization
 from collections import defaultdict
 import torch
 import itertools
 from torch import nn
-from data import MNIST_MEAN, MNIST_STD, CIFAR10_MEAN, CIFAR10_STD
-from data.data_reader import *
+from data import DatasetName
+from data.data_reader import load_mnist_from_csv, load_cifar10_from_csv
 
 def test_accuracy(net: nn.Sequential, images: torch.Tensor, labels: torch.Tensor) -> float:
     preds: torch.Tensor = net(images).argmax(dim=1)
     return (preds == labels).sum().item() / labels.size(0)
 
 def load_from_onnx(onnx_path: str, torch_net: nn.Sequential) -> None:
-    onnx_fullpath = onnx_path + ".onnx"
     try:
-        onnx_net = onnx.load(onnx_fullpath)
+        onnx_net = onnx.load(onnx_path)
         onnx.checker.check_model(onnx_net)
     except:
-        raise ValueError(f"Ill-formed networks: {onnx_fullpath}")
+        raise ValueError(f"Ill-formed networks: {onnx_path}")
 
     wb_data = defaultdict(lambda: {"bias": None, "weight": None})
     for initializer in onnx_net.graph.initializer:
@@ -64,34 +63,30 @@ if __name__ == "__main__":
         mnist_imgs, mnist_labels = load_mnist_from_csv(normalize=args.normalize)
     if not args.mnist_only:
         cifar10_imgs, cifar10_labels = load_cifar10_from_csv(normalize=args.normalize)
-    for layer_params, model_path, dataset, need_normalization in {**FCN_SPEC, **CNN_SPEC}.values():
-        if len(layer_params[0]) == 2:
-            if args.cnn_only: continue
-            torch_net = FCN(layer_params)
-        else:
-            if args.fcn_only: continue
-            torch_net = CNN(layer_params)
-        if dataset == "MNIST":
+    for model_spec in MODEL_SPECS.values():
+        if args.cnn_only and model_spec.constructor == FCN: continue
+        if args.fcn_only and model_spec.constructor == CNN: continue
+        torch_net = model_spec.constructor(model_spec.layer_params)
+        if model_spec.dataset == DatasetName.MNIST:
             if args.cifar10_only: continue
             imgs, labels = mnist_imgs, mnist_labels
-        elif dataset == "CIFAR10":
+        elif model_spec.dataset == DatasetName.CIFAR10:
             if args.mnist_only: continue
             imgs, labels = cifar10_imgs, cifar10_labels
         else: assert False, "Unknown dataset"
 
-        load_from_onnx(model_path, torch_net)
+        load_from_onnx(model_spec.onnx_path, torch_net)
 
-        if args.add_normalization_layer and need_normalization:
-            if dataset == "MNIST": normalization_layer = get_affine_normalization_mnist(MNIST_MEAN, MNIST_STD)
-            elif dataset == "CIFAR10": normalization_layer = get_affine_normalization_cifar10(CIFAR10_MEAN, CIFAR10_STD)
+        if args.add_normalization_layer and model_spec.need_normalization:
+            normalization_layer = get_affine_normalization[model_spec.dataset]
             torch_net.insert(0, normalization_layer)
 
         acc = test_accuracy(torch_net.eval(), imgs, labels)
-        print(f"The accuracy of {os.path.basename(model_path)} on {dataset} testset is {acc:.2%}")
+        print(f"The accuracy of {os.path.basename(model_spec.model_path)} on {model_spec.dataset} testset is {acc:.2%}")
 
         if args.save:
-            if not args.force and os.path.exists(model_path + ".pt"):
-                print(f"Model {model_path}.pt already exists. Use --force to overwrite.")
+            if not args.force and os.path.exists(model_spec.pt_path):
+                print(f"Model {model_spec.pt_path} already exists. Use --force to overwrite.")
                 continue
-            torch.save(torch_net.state_dict(), model_path + ".pt")
-            print(f"Model {model_path}.pt saved.")
+            torch.save(torch_net.state_dict(), model_spec.pt_path)
+            print(f"Model {model_spec.pt_path} saved.")

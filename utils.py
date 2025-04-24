@@ -2,11 +2,9 @@ import torch
 from torchvision.transforms import ToTensor, Compose, Normalize
 from torchvision.datasets import MNIST
 from torch.utils.data import DataLoader, Subset, TensorDataset
-from networks import get_network, Normalization
-from AbstractInterpreter import SequentialAT, L0BoundedInput
 from torch.nn import Sequential
-from typing import Iterable, Tuple
-from data import MNIST_TEST_PT
+from data import DATASETS, DatasetName
+from models import MODEL_SPECS
 import argparse
 import signal
 
@@ -24,12 +22,8 @@ def get_args():
     parser = argparse.ArgumentParser(
         description="Verify L0 robustness of a neural network.",
     )
-    parser.add_argument("--net", type=str,
-        choices=["fc1", "fc2", "fc3", "fc4", "fc5", "fc6", "fc7", "fcbase",
-                 "conv1", "conv2", "conv3", "conv4"], default="fc2",
-        help="Neural network architecture",
-    )
-    parser.add_argument("-md", "--models-dir", type=str, default="models")
+    parser.add_argument("--net", type=str, choices=MODEL_SPECS.keys(), default="fc2",
+        help="Neural network architecture",)
     parser.add_argument("-e", "--epsilon", type=int, default=0, help="L0 norm bound.")
     parser.add_argument("-bs", "--batch-size", type=int, required=True)
     parser.add_argument("-t", "--target-label", type=int, default=None)
@@ -45,20 +39,8 @@ def get_args():
     signal.signal(signal.SIGALRM, timeout_handler)
     return args
 
-def get_pure_network(args: argparse.Namespace) -> Tuple[Sequential, float, float]:
-    """Returns the network and its input bounds."""
-    net = get_network(args.net, args.models_dir, device=DEVICE)
-    net_head = net[0]
-    if isinstance(net_head, Normalization):
-        net.pop(0)
-        mean, sigma = net_head.mean, net_head.sigma
-    else:
-        mean, sigma = 0, 1
-
-    return net, mean, sigma
-
 def get_mnist_loader(args: argparse.Namespace) -> DataLoader:
-    images, labels = torch.load(MNIST_TEST_PT)
+    images, labels = torch.load(DATASETS[DatasetName.MNIST].pt_file, map_location="cpu")
     if args.target_label is not None:
         non_targeted_indices = (labels != args.target_label).nonzero().squeeze(1)
         images, labels = images[non_targeted_indices], labels[non_targeted_indices]
@@ -94,11 +76,3 @@ def preprocess(args: argparse.Namespace, net: Sequential, mean: float=0, sigma: 
 
     return correct_loader
 
-def abstraction_loader(seqAT: SequentialAT, data_loader: DataLoader,
-                       L: float, U: float, target_label: int, epsilon: int
-                       ) -> Iterable[Tuple[SequentialAT, L0BoundedInput]]:
-    for images, pred_labels in data_loader:
-        x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-        seqAT.tail.make_marginal(true_labels=pred_labels, target_label=target_label)
-        bounded_x0 = L0BoundedInput(x0, epsilon, (L, U))
-        yield seqAT, bounded_x0

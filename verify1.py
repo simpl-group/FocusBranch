@@ -1,6 +1,7 @@
 import time
 from typing import List
-from utils import get_args, tqdm_bar_format, DEVICE, get_pure_network, TimeoutException, get_mnist_loader
+from models import get_network
+from utils import get_args, tqdm_bar_format, DEVICE, TimeoutException, get_mnist_loader
 import torch
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from tqdm import tqdm
@@ -142,8 +143,8 @@ if __name__ == "__main__":
     args = get_args()
     batch_size = args.batch_size if args.batch_size < MAX_BATCH_SIZE else MAX_BATCH_SIZE
     args.batch_size = 1
-    net, mean, sigma = get_pure_network(args)
-    L, U = (0 - mean) / sigma, (1 - mean) / sigma
+    net = get_network(args.net, device=DEVICE)
+    L, U = 0, 1
     # data_loader = preprocess(args, net, mean, sigma, demo=True)
     data_loader = get_mnist_loader(args)
     x_ = torch.zeros(1, 1, 28, 28).to(DEVICE)

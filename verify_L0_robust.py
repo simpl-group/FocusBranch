@@ -3,7 +3,8 @@ import torch
 from solver_check import solver_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from typing import List
-from utils import get_args, get_pure_network, tqdm_bar_format, DEVICE, TimeoutException, get_mnist_loader
+from utils import get_args, tqdm_bar_format, DEVICE, TimeoutException, get_mnist_loader
+from models import get_network
 from split_and_prune import split_and_prune
 from tqdm import tqdm
 from signal import alarm
@@ -75,8 +76,8 @@ def check(comb: torch.Tensor, debug=False, mute=True) -> bool:
 if __name__ == "__main__":
     args = get_args()
     assert args.target_label is not None, "Target label must be specified."
-    net, mean, sigma = get_pure_network(args)
-    L, U = (0 - mean) / sigma, (1 - mean) / sigma
+    net = get_network(args.net, device=DEVICE)
+    L, U = 0, 1
     # data_loader = preprocess(args, net, mean, sigma, demo=True)
     data_loader = get_mnist_loader(args)
     x_ = torch.zeros(min(args.batch_size, len(data_loader)), 1, 28, 28).to(DEVICE)
