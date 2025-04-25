@@ -1,7 +1,7 @@
 import torch
 from tqdm import tqdm
 import bimm
-from utils import DEVICE, tqdm_bar_format
+from utils import DEVICE, TQDM_BAR_FORMAT
 from data import DATASETS, DatasetName
 
 chunk_size = 2000  # Adjust based on GPU memory availability
@@ -76,7 +76,7 @@ def prune_by_safe(new_bitmasks: torch.Tensor, safe_bitmasks: torch.Tensor, demo:
     new_bitmasks_pruned_list = []
 
     with tqdm(total=new_bitmasks.shape[0], desc="Pruning next level combs", disable=not demo,
-                    bar_format=tqdm_bar_format) as pbar:
+                    bar_format=TQDM_BAR_FORMAT) as pbar:
         for i in range(0, new_bitmasks.shape[0], chunk_size):
             new_bitmasks_ichunk = new_bitmasks[i:i + chunk_size]
             superset_cnt = torch.zeros(new_bitmasks_ichunk.shape[0], dtype=torch.uint8, device=DEVICE)
@@ -98,7 +98,7 @@ def prune_by_unk(new_bitmasks: torch.Tensor, unk_bitmasks: torch.Tensor, level: 
     new_bitmasks_pruned_list = []
 
     with tqdm(total=new_bitmasks.shape[0], desc="Pruning next level combs", disable=not demo,
-                bar_format=tqdm_bar_format) as pbar:
+                bar_format=TQDM_BAR_FORMAT) as pbar:
         for i in range(0, new_bitmasks.shape[0], chunk_size):
             new_bitmasks_ichunk = new_bitmasks[i:i + chunk_size]
             superset_cnt = torch.zeros(new_bitmasks_ichunk.shape[0], dtype=torch.uint8, device=DEVICE)

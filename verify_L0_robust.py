@@ -4,7 +4,7 @@ from solver_check import solver_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from data.prepare import get_loader
 from data import DATASETS
-from utils import get_args, tqdm_bar_format, DEVICE, TimeoutException
+from utils import get_args, TQDM_BAR_FORMAT, DEVICE, TimeoutException
 from models import get_network
 from split_and_prune import split_and_prune
 from tqdm import tqdm
@@ -17,7 +17,7 @@ def check_and_branch(combs_to_check: torch.Tensor, safe_combs: list[list[int]]) 
     solver_time_temp = .0
     solver_checks_temp = 0
     watchout = safe_combs is not []
-    with tqdm(total=len(combs_to_check), disable=(level == 0), desc=f"Level {level}", bar_format=tqdm_bar_format) as pbar:
+    with tqdm(total=len(combs_to_check), disable=(level == 0), desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT) as pbar:
         for comb in combs_to_check:
             if check(comb):
                 safe_combs.append(comb.tolist())

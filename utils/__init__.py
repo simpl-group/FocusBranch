@@ -10,7 +10,7 @@ def timeout_handler(signum, frame) -> None:
     raise TimeoutException()
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-tqdm_bar_format = "{desc}: {n_fmt}/{total_fmt} |{percentage:3.2f}% {elapsed}<{remaining} {postfix} {rate_fmt}"
+TQDM_BAR_FORMAT = "{desc}: {n_fmt}/{total_fmt} |{percentage:3.2f}% {elapsed}<{remaining} {postfix} {rate_fmt}"
 
 def get_args():
     parser = argparse.ArgumentParser(

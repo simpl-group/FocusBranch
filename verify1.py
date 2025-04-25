@@ -2,7 +2,7 @@ import time
 from models import get_network
 from data.prepare import get_loader
 from data import DATASETS
-from utils import get_args, tqdm_bar_format, DEVICE, TimeoutException
+from utils import get_args, TQDM_BAR_FORMAT, DEVICE, TimeoutException
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from tqdm import tqdm
 import torch
@@ -26,7 +26,7 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
             min_value = float("inf")
             min_comb = None
         t0 = time.time()
-        with tqdm(total=num_to_check, desc=f"Level {level}", bar_format=tqdm_bar_format, disable=not demo) as pbar:
+        with tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not demo) as pbar:
             for i in range(0, num_to_check, batch_size):
                 combs_to_check_batch = combs_to_check[i:i + batch_size]
 
@@ -90,7 +90,7 @@ def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0Bounded
         unk_combs: list[list[int]]  = []
         new_safe_combs: list[list[int]] = []
         t0 = time.time()
-        with tqdm(total=num_to_check, desc=f"Level {level}", bar_format=tqdm_bar_format, disable=not demo) as pbar:
+        with tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not demo) as pbar:
             for i in range(0, num_to_check, batch_size):
                 combs_to_check_batch = combs_to_check[i:i + batch_size]
 
