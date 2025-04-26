@@ -239,7 +239,12 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 .idea/
 
-data
+data/MNIST
+data/cifar-10-batches-py
 test*.py
-models
 .vscode/
+*.json
+*.png
+*.pdf
+*.pt
+*.gz
