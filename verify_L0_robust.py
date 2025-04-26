@@ -4,11 +4,11 @@ from solver_check import solver_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from data.prepare import get_loader
 from data import DATASETS
-from utils import get_args, TQDM_BAR_FORMAT, DEVICE, TimeoutException
+from utils import *
 from models import get_network
 from split_and_prune import split_and_prune
 from tqdm import tqdm
-from signal import alarm
+import signal
 
 def check_and_branch(combs_to_check: torch.Tensor, safe_combs: list[list[int]]) -> bool:
     global splits, level, solver_time_temp, solver_checks_temp
@@ -75,15 +75,22 @@ def check(comb: torch.Tensor, debug=False, mute=True) -> bool:
     return ret
 
 if __name__ == "__main__":
-    args = get_args()
+    parser = argparse.ArgumentParser(
+        description="A demonstration of verifying the robustness of a neural network on a batch of images."
+    )
+    add_shared_arguments(parser)
+    parser.add_argument("-si", '--select-indices', type=int, nargs='*', default=[])
+    parser.add_argument("-d", "--debug", action="store_true", help="Inspect a specific node.")
+    args = parser.parse_args()
+    signal.signal(signal.SIGALRM, timeout_handler)
     assert args.target_label is not None, "Target label must be specified."
     net, spec = get_network(args.net, device=DEVICE)
-    data_loader = get_loader(spec.dataset_name, batch_size=args.batch_size, target_label=args.target_label, num_batches=args.seed+1)
+    data_loader = get_loader(spec.dataset_name, batch_size=args.batch_size, target_label=args.target_label, num_batches=args.start_idx+1)
     x_ = torch.zeros(args.batch_size, *DATASETS[spec.dataset_name].image_shape).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
     i = 0
     for images, pred_labels in data_loader:
-        if i < args.seed:
+        if i < args.start_idx:
             i += 1
             continue
         assert net.cpu()(images).argmax(dim=1).eq(pred_labels).all()
@@ -111,9 +118,9 @@ if __name__ == "__main__":
 
     ret = False
     try:
-        alarm(args.timeout)
+        signal.alarm(args.timeout)
         ret = check_and_branch(root_combs, safe_combs)
-        alarm(0)
+        signal.alarm(0)
     except TimeoutException:
         print("Timeout")
 

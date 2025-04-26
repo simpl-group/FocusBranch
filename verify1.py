@@ -2,12 +2,13 @@ import time
 from models import get_network
 from data.prepare import get_loader
 from data import DATASETS
-from utils import get_args, TQDM_BAR_FORMAT, DEVICE, TimeoutException
+from utils import *
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from tqdm import tqdm
 import torch
 from split_and_prune import split_and_prune
-from signal import alarm
+import signal
+import argparse
 MAX_BATCH_SIZE = 25000
 
 def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batch_size: int=2000, demo: bool=False, timeout: int=0) -> bool:
@@ -54,7 +55,7 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
                         if ((num_to_check - i) / batch_size) * rate > timeout:
                             return False
                     elif (pbar.total - pbar.n) / pbar.format_dict['rate'] > timeout:
-                        alarm(0)
+                        signal.alarm(0)
                         raise TimeoutException()
 
         if len(unk_combs) == 0: return True
@@ -116,7 +117,7 @@ def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0Bounded
                         if ((num_to_check - i) / batch_size) * rate > timeout:
                             return False
                     elif (pbar.total - pbar.n) / pbar.format_dict['rate'] > timeout:
-                        alarm(0)
+                        signal.alarm(0)
                         raise TimeoutException()
 
         if len(unk_combs) == 0: return True
@@ -140,15 +141,20 @@ def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0Bounded
     return False
 
 if __name__ == "__main__":
-    args = get_args()
+    parser = argparse.ArgumentParser(
+        description="A demonstration of verifying the robustness of a neural network on a single image."
+    )
+    add_shared_arguments(parser)
+    args = parser.parse_args()
+    signal.signal(signal.SIGALRM, timeout_handler)
     batch_size = args.batch_size if args.batch_size < MAX_BATCH_SIZE else MAX_BATCH_SIZE
     net, spec = get_network(args.net, device=DEVICE)
-    data_loader = get_loader(spec.dataset_name, batch_size=1, target_label=args.target_label, num_batches=args.seed+1)
+    data_loader = get_loader(spec.dataset_name, batch_size=1, target_label=args.target_label, num_batches=args.start_idx+1)
     x_ = torch.zeros(1, *DATASETS[spec.dataset_name].image_shape).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
     i = 0
     for images, pred_labels in data_loader:
-        if i < args.seed:
+        if i < args.start_idx:
             i += 1
             continue
         assert net.cpu()(images).argmax(dim=1).eq(pred_labels).all()
@@ -170,12 +176,12 @@ if __name__ == "__main__":
 
     ret = False
     try:
-        alarm(args.timeout)
+        signal.alarm(args.timeout)
         if args.target_label is not None:
             ret = check_and_branch_batch(seqAT, bounded_x0, batch_size, demo=not args.mute, timeout=args.timeout)
         else:
             ret = check_and_branch_batch_untargeted(seqAT, bounded_x0, batch_size, demo=not args.mute, timeout=args.timeout)
-        alarm(0)
+        signal.alarm(0)
     except TimeoutException:
         print("Timeout")
 
