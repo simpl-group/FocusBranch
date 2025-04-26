@@ -111,7 +111,9 @@ if __name__ == "__main__":
     start = time.time()
 
     if args.debug:
-        comb = frozenset(args.select_indices)
+        if len(args.select_indices) > 0:
+            print(f"Checking a specific combination of indices {args.select_indices}")
+        comb = torch.Tensor(args.select_indices).to(device=DEVICE, dtype=torch.long)
         ret = check(comb, debug=True, mute=args.mute)
         print(f"Collectively Safe: {ret}; Checks: {total_checks}({solver_checks})")
         exit(0)
