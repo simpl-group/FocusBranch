@@ -3,6 +3,8 @@ import torch.nn as nn
 from typing import Self
 import warnings
 from contextlib import contextmanager
+from typing import NamedTuple
+import torch
 
 torch.set_default_dtype(torch.float32)
 
@@ -24,32 +26,9 @@ class RelationalPolyhedra:
     def negW(self) -> torch.Tensor:
         return self.W.clamp_max(0)
 
-class Bounds:
-    def __init__(self, lbounds: torch.Tensor, ubounds: torch.Tensor):
-        self.l = lbounds  # (batch_size, features, 1)
-        self.u = ubounds
-
-    @classmethod
-    def clone(cls, other: Self) -> Self:
-        return cls(other.l.clone(), other.u.clone())
-
-    def __add__(self, other: torch.Tensor | Self) -> Self:
-        if isinstance(other, Bounds):
-            return Bounds(self.l + other.l, self.u + other.u)
-        else:
-            return Bounds(self.l + other, self.u + other)
-
-    def __radd__(self, other: torch.Tensor) -> Self:
-        return self.__add__(other)
-
-    def __sub__(self, other: torch.Tensor | Self) -> Self:
-        if isinstance(other, Bounds):
-            return Bounds(self.l - other.l, self.u - other.u)
-        else:
-            return Bounds(self.l - other, self.u - other)
-
-    def __rsub__(self, other: torch.Tensor) -> Self:
-        return Bounds(other - self.l, other - self.u)
+class Bounds(NamedTuple):
+    l: torch.Tensor
+    u: torch.Tensor
 
 class BoundedInput:
     def __init__(self, x: torch.Tensor, eps, pixel_value_range=(0, 1)):
@@ -67,7 +46,7 @@ class BoundedInput:
         raise NotImplementedError
 
     def compute_bounds(self, lrp: RelationalPolyhedra, urp: RelationalPolyhedra) -> Bounds:
-        return Bounds(lbounds=self.compute_lbound(lrp), ubounds=self.compute_ubound(urp))
+        return Bounds(self.compute_lbound(lrp), self.compute_ubound(urp))
 
 class L0BoundedInput(BoundedInput):
     def __init__(self, x: torch.Tensor, eps: int, pixel_value_range=(0, 1)):
