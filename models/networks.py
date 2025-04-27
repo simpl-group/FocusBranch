@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 from data import DatasetName, DATASETS
 
@@ -14,6 +15,7 @@ def FCN(layer_params: list[dict[str, int]]) -> nn.Sequential:
         if idx < len(layer_params) - 1:
             layers += [nn.ReLU()]
     return nn.Sequential(*layers)
+
 
 def CNN(layer_params: list[dict[str, int]]) -> nn.Sequential:
     """
@@ -75,3 +77,18 @@ get_affine_normalization = {
         sigma=DATASETS[DatasetName.CIFAR10].std)
 }
 
+
+def make_marginal_tail(true_label: int, target_label: int, base_out_dim: int=10) -> nn.Sequential:
+    tail = nn.Linear(base_out_dim, 1, bias=False)
+    tail.weight.requires_grad = False
+    tail.weight.data = torch.zeros(1, base_out_dim)
+    tail.weight.data[0, true_label] = 1
+    tail.weight.data[0, target_label] = -1
+    return nn.Sequential(tail)
+
+def make_marginals_tail(true_label: int, base_out_dim: int=10) -> nn.Sequential:
+    tail = nn.Linear(base_out_dim, 1, bias=False)
+    tail.weight.requires_grad = False
+    tail.weight.data = -torch.eye(base_out_dim)
+    tail.weight.data[:, true_label] += 1
+    return nn.Sequential(tail)
