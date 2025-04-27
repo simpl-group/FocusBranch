@@ -9,7 +9,7 @@ import torch
 from split_and_prune import split_and_prune
 import signal
 import argparse
-MAX_BATCH_SIZE = 25000
+from json import dump
 
 def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batch_size: int=2000, demo: bool=False, timeout: int=0) -> bool:
     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
@@ -141,52 +141,74 @@ def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0Bounded
     return False
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGALRM, timeout_handler)
     parser = argparse.ArgumentParser(
-        description="A demonstration of verifying the robustness of a neural network on a single image."
+        description="Sample-wise (local) L0 robustness verification of neural networks"
     )
     add_shared_arguments(parser)
     args = parser.parse_args()
-    signal.signal(signal.SIGALRM, timeout_handler)
-    batch_size = args.batch_size if args.batch_size < MAX_BATCH_SIZE else MAX_BATCH_SIZE
+    if args.demo:
+        args.test_batches = 1
+        splits = 0
+        total_nodes = 0
+        branching_time = .0
+
     net, spec = get_network(args.net, device=DEVICE)
-    data_loader = get_loader(spec.dataset_name, batch_size=1, target_label=args.target_label, num_batches=args.start_idx+1)
+    data_loader = get_loader(spec.dataset_name, batch_size=1, target_label=args.target_label, num_batches=args.start_idx+args.test_batches)
     x_ = torch.zeros(1, *DATASETS[spec.dataset_name].image_shape).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
+
+    checker = check_and_branch_batch_untargeted if args.target_label is None else check_and_branch_batch
+
+    total_time = 0.
+    num_verified = 0
+    record: list[tuple[bool, float]] = []
+    net.cpu()
+    pbar = tqdm(total=args.test_batches, bar_format=TQDM_BAR_FORMAT, disable=args.demo)
     i = 0
     for images, pred_labels in data_loader:
         if i < args.start_idx:
             i += 1
             continue
-        assert net.cpu()(images).argmax(dim=1).eq(pred_labels).all()
+        assert net(images).argmax(dim=1).eq(pred_labels).all()
         x0 = images.to(DEVICE).flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
         bounded_x0 = L0BoundedInput(x0, args.epsilon)
         if args.target_label is not None:
             seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device=DEVICE)
         else:
             seqAT.tail.make_marginals(true_labels=pred_labels, device=DEVICE)
-        break
-    del net
 
-    if not args.mute:
-        print("Preprocessing done")
-        splits = 0
-        total_nodes = 0
-        branching_time = .0
-    start = time.time()
+        success = False
+        elapsed_time = 0.
+        try:
+            signal.alarm(args.timeout)
+            t0 = time.time()
+            if checker(seqAT, bounded_x0, args.batch_size, demo=args.demo, timeout=args.timeout):
+                elapsed_time = time.time() - t0
+                total_time += elapsed_time
+                success = True
+                num_verified += 1
+            signal.alarm(0)
+        except TimeoutException:
+            if args.demo: print("Timeout")
+        except torch.OutOfMemoryError as e:
+            if args.demo: print(e)
+        finally:
+            bounded_x0.clear_cache()
+            torch.cuda.empty_cache()
 
-    ret = False
-    try:
-        signal.alarm(args.timeout)
-        if args.target_label is not None:
-            ret = check_and_branch_batch(seqAT, bounded_x0, batch_size, demo=not args.mute, timeout=args.timeout)
-        else:
-            ret = check_and_branch_batch_untargeted(seqAT, bounded_x0, batch_size, demo=not args.mute, timeout=args.timeout)
-        signal.alarm(0)
-    except TimeoutException:
-        print("Timeout")
+        if args.demo:
+            print(f"Total: Splits {splits}; Nodes {total_nodes}; Time {time.time() - t0:.2f}s; Branching Time {branching_time:.2f}s")
+            print(f"Safe: {success}")
+            break
 
-    if not args.mute:
-        print(f"Total: Splits {splits}; Nodes {total_nodes}; Time {time.time() - start:.2f}s; Branching Time {branching_time:.2f}s")
-    else:
-        print(f"Time {time.time() - start:.2f}s")
-    print(f"Safe: {ret}")
+        pbar.update(1)
+        mean_time = total_time / num_verified if num_verified > 0 else 0
+        pbar.set_postfix({"Verified": f"{num_verified}/{pbar.n}|{100*num_verified/pbar.n:.2f}%",
+                            "Avg":f"{mean_time:.2f}s/img"})
+
+        record.append((success, elapsed_time))
+        with open(args.output, "w") as f:
+            dump(record, f, indent=2)
+        if pbar.n == args.test_batches: break
+    pbar.close()

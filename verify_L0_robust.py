@@ -79,11 +79,13 @@ if __name__ == "__main__":
         description="A demonstration of verifying the robustness of a neural network on a batch of images."
     )
     add_shared_arguments(parser)
+    parser.add_argument("-m", "--mute", action="store_true", help="Mute gurobi output.")
     parser.add_argument("-si", '--select-indices', type=int, nargs='*', default=[])
     parser.add_argument("-d", "--debug", action="store_true", help="Inspect a specific node.")
     args = parser.parse_args()
     signal.signal(signal.SIGALRM, timeout_handler)
     assert args.target_label is not None, "Target label must be specified."
+    assert args.demo, "--demo flag must be set to True for now."  # TODO: remove this restriction
     net, spec = get_network(args.net, device=DEVICE)
     data_loader = get_loader(spec.dataset_name, batch_size=args.batch_size, target_label=args.target_label, num_batches=args.start_idx+1)
     x_ = torch.zeros(args.batch_size, *DATASETS[spec.dataset_name].image_shape).to(DEVICE)
