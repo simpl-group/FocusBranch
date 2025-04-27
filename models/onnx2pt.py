@@ -9,7 +9,7 @@ import torch
 import itertools
 from torch import nn
 from data import DatasetName
-from data.data_reader import load_mnist_from_csv, load_cifar10_from_csv
+from data.load_from_csv import load_mnist_from_csv, load_cifar10_from_csv
 
 def test_accuracy(net: nn.Sequential, images: torch.Tensor, labels: torch.Tensor) -> float:
     preds: torch.Tensor = net(images).argmax(dim=1)

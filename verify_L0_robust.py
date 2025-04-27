@@ -1,6 +1,6 @@
 import time
 import torch
-from solver_check import solver_check_unsat
+from solver_check import gurobi_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from data.prepare import get_loader
 from data import DATASETS
@@ -67,7 +67,7 @@ def check(comb: torch.Tensor, debug=False, mute=True) -> bool:
     else: x0 = x0_
 
     t0 = time.time()
-    ret = solver_check_unsat(x0=x0, coefficients=coef,
+    ret = gurobi_check_unsat(x0=x0, coefficients=coef,
             bias=bias, eps=bounded_x0.eps, selected_idx=comb.tolist(),
             pixel_value_range=(bounded_x0.L, bounded_x0.U), mute=mute)
     solver_time += time.time() - t0
