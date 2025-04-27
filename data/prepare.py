@@ -26,7 +26,7 @@ def filter_testset(dataset_name: DatasetName, batch_size: int=256, device: str="
     nets: list[torch.nn.Sequential] = []
     for name, model_spec in MODEL_SPECS.items():
         if model_spec.dataset_name == dataset_name and not model_spec.debug:
-            nets.append(get_network(name, device=device))
+            nets.append(get_network(name, device=device)[0])
     print(f"Loaded {len(nets)} {dataset_name} networks for filtering.")
     test_loader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
 
