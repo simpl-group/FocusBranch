@@ -1,7 +1,7 @@
 import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
-from AbstractInterpreter import SequentialAT, L0BoundedInput, ActivationAT, Bounds
+from AbstractInterpreter import SequentialAT, L0BoundedInput, ActivationAT, Bounds, AffineAT, ReLUAT
 from utils import *
 from models import get_network
 from data.prepare import get_loader
@@ -11,6 +11,7 @@ import torch
 import signal
 
 env = gp.Env(params={"OutputFlag": 0, "SolutionLimit": 1})
+
 
 def gurobi_check_unsat(x0: np.ndarray, coefficients: np.ndarray, bias: np.ndarray,
                 eps: int, selected_idx: list[int]=[], pixel_value_range=(0, 1),
@@ -47,10 +48,63 @@ def gurobi_check_unsat(x0: np.ndarray, coefficients: np.ndarray, bias: np.ndarra
         print(f"Solver status: {model.Status}")
     return False
 
-def gurobi_complete_check(bounded_x0: L0BoundedInput, seqAT: SequentialAT, pre_activation_bounds_list: list[Bounds]) -> bool:
+
+def gurobi_complete_check(bounded_x0: L0BoundedInput, seqAT: SequentialAT,
+                          pre_activation_bounds_list: list[Bounds]) -> bool:
     model = gp.Model("check_unsat", env=env)
-    delta = ...
-    ...
+    img = bounded_x0.x[0, ..., 0].numpy()  # input: [786]
+    delta = model.addMVar(img.shape, vtype=GRB.CONTINUOUS, name="delta")  # delta: [786]
+    x = img + delta  # input
+    # 0 <= img + delta <= 1
+    model.addConstr(bounded_x0.L <= x, name="input_lower_bound")
+    model.addConstr(x <= bounded_x0.U, name="input_upper_bound")
+
+    # L0 norm
+    epsilon = bounded_x0.eps
+    l0_loss = model.addVar(lb=epsilon, ub=epsilon)
+    model.addGenConstrNorm(l0_loss, delta, 0., name="L0_norm")
+
+    # forward
+    relu_layer_idx = 0
+    for layer_idx, AT in enumerate(seqAT.ATs):
+        if isinstance(AT, AffineAT):  # FC, ConV2D
+            weight, bias = AT.W[0, ...].numpy(), AT.b[0, ..., 0].numpy()
+            # x = x @ weight.T + bias
+            x = weight @ x + bias
+        elif isinstance(AT, ReLUAT):  # ReLU
+            lbound, ubound = pre_activation_bounds_list[relu_layer_idx]
+
+            # x:MLinExpr -> intermediate_x:MVar
+            intermediate_x = model.addMVar(x.shape, vtype=GRB.CONTINUOUS, name=f"ReLU{layer_idx}_ix")
+            model.addConstr(x == intermediate_x)
+
+            y = model.addMVar(x.shape, vtype=GRB.CONTINUOUS, name=f"ReLU{layer_idx}_y")
+            for idx, (lb, ub) in enumerate(zip(lbound, ubound)):
+                if ub <= 0:
+                    # Case 1: ubound <= 0
+                    model.addConstr(y[idx] == 0)
+                elif lb >= 0:
+                    # Case 2: lbound >= 0
+                    model.addConstr(y[idx] == intermediate_x[idx])
+                else:
+                    # Case 3: lbound <= 0 <= ubound
+                    model.addGenConstrPWL(intermediate_x[idx], y[idx], [lb, 0, ub], [0, 0, ub],
+                                          name=f"ReLU{layer_idx}_appr")
+            x = y
+            relu_layer_idx += 1
+        else:
+            raise NotImplementedError(type(AT))
+
+    model.addConstr(x >= 0., name="output_greater_than_0")
+    model.optimize()
+
+    if model.Status == GRB.Status.INFEASIBLE: return True
+    if model.Status == GRB.Status.OPTIMAL:
+        print("Solution found:")
+    else:
+        print(f"Solver status: {model.Status}")
+    return False
+
 
 if __name__ == "__main__":
     signal.signal(signal.SIGALRM, timeout_handler)
@@ -60,7 +114,8 @@ if __name__ == "__main__":
     add_shared_arguments(parser)
     args = parser.parse_args()
     net, spec = get_network(args.net)
-    data_loader = get_loader(spec.dataset_name, batch_size=1, target_label=args.target_label, num_batches=args.start_idx+args.test_batches)
+    data_loader = get_loader(spec.dataset_name, batch_size=1, target_label=args.target_label,
+                             num_batches=args.start_idx + args.test_batches)
     x_ = torch.zeros(1, *DATASETS[spec.dataset_name].image_shape)
     seqAT = SequentialAT.from_sequential(net, x_)
     i = 0
@@ -81,10 +136,10 @@ if __name__ == "__main__":
             pre_activation_bounds = bounded_x0.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs)
             AT.lrp, AT.urp = AT.compute_rp(pre_activation_bounds)
             # convert to np.ndarray
-
             # delete batch dimension
-
-            pre_activation_bounds_list.append(pre_activation_bounds)  # ndarry bounds
+            pre_activation_bounds_list.append([
+                pre_activation_bounds.l[0, ..., 0].numpy(),  # lower bound
+                pre_activation_bounds.u[0, ..., 0].numpy(),  # upper bound
+            ])
 
     res = gurobi_complete_check(bounded_x0, seqAT, pre_activation_bounds_list)
-
