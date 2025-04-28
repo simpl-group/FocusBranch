@@ -5,8 +5,8 @@ setup(
     name='bimm',
     ext_modules=[
         CUDAExtension('bimm', [
-            'bimm_bindings.cpp',
-            'bimm.cu',
+            'bimm/bimm_bindings.cpp',
+            'bimm/bimm.cu',
         ]),
     ],
     cmdclass={'build_ext': BuildExtension}
