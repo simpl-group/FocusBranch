@@ -50,7 +50,7 @@ def gurobi_check_unsat(x0: np.ndarray, coefficients: np.ndarray, bias: np.ndarra
 
 
 def gurobi_complete_check(bounded_x0: L0BoundedInput, seqAT: SequentialAT,
-                          pre_activation_bounds_list: list[Bounds]) -> bool:
+        pre_activation_bounds_list: list[tuple[np.ndarray, np.ndarray]]) -> bool:
     model = gp.Model("check_unsat", env=env)
     img = bounded_x0.x[0, ..., 0].numpy()  # input: [784]
     delta = model.addMVar(img.shape, vtype=GRB.CONTINUOUS, name="delta")  # delta: [784]
@@ -68,7 +68,7 @@ def gurobi_complete_check(bounded_x0: L0BoundedInput, seqAT: SequentialAT,
     relu_layer_idx = 0
     for layer_idx, AT in enumerate(seqAT.ATs):
         if isinstance(AT, AffineAT):  # FC, ConV2D
-            weight, bias = AT.W[0, ...].numpy(), AT.b[0, ..., 0].numpy()
+            weight, bias = AT.rp.W[0, ...].numpy(), AT.rp.b[0, ..., 0].numpy()
             # x = x @ weight.T + bias
             x = weight @ x + bias
         elif isinstance(AT, ReLUAT):  # ReLU
@@ -95,7 +95,7 @@ def gurobi_complete_check(bounded_x0: L0BoundedInput, seqAT: SequentialAT,
         else:
             raise NotImplementedError(type(AT))
 
-    model.addConstr(x >= 0., name="output_greater_than_0")
+    model.addConstr(x <= 0., name="output_greater_than_0")
     model.optimize()
 
     if model.Status == GRB.Status.INFEASIBLE: return True
