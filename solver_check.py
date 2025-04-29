@@ -52,8 +52,8 @@ def gurobi_check_unsat(x0: np.ndarray, coefficients: np.ndarray, bias: np.ndarra
 def gurobi_complete_check(bounded_x0: L0BoundedInput, seqAT: SequentialAT,
                           pre_activation_bounds_list: list[Bounds]) -> bool:
     model = gp.Model("check_unsat", env=env)
-    img = bounded_x0.x[0, ..., 0].numpy()  # input: [786]
-    delta = model.addMVar(img.shape, vtype=GRB.CONTINUOUS, name="delta")  # delta: [786]
+    img = bounded_x0.x[0, ..., 0].numpy()  # input: [784]
+    delta = model.addMVar(img.shape, vtype=GRB.CONTINUOUS, name="delta")  # delta: [784]
     x = img + delta  # input
     # 0 <= img + delta <= 1
     model.addConstr(bounded_x0.L <= x, name="input_lower_bound")
@@ -126,7 +126,7 @@ if __name__ == "__main__":
         assert net(images).argmax(dim=1).eq(pred_labels).all()
         x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
         bounded_x0 = L0BoundedInput(x0, args.epsilon)
-        seqAT.tail.make_marginals(true_labels=pred_labels, device="cpu")
+        seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device="cpu")
         break
 
     pre_activation_bounds_list = []
@@ -143,3 +143,4 @@ if __name__ == "__main__":
             ])
 
     res = gurobi_complete_check(bounded_x0, seqAT, pre_activation_bounds_list)
+    print(res)
