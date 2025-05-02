@@ -81,6 +81,17 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         dataset_name=DatasetName.MNIST,
         need_normalization=False
     ),
+    'fc4': ModelSpec(
+        model_path=str(BASE_DIR / "mlp_3layer_l0adv"),
+        constructor=FCN,
+        layer_params=[
+            {"in_features": 784, "out_features": 256},
+            {"in_features": 256, "out_features": 128},
+            {"in_features": 128, "out_features": 10},
+        ],
+        dataset_name=DatasetName.MNIST,
+        need_normalization=False
+    ),
     'conv1': ModelSpec(
         model_path=str(BASE_DIR / "mnist/mnist_0.1"),
         constructor=CNN,
