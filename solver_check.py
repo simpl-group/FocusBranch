@@ -50,19 +50,19 @@ def gurobi_check_unsat(x0: np.ndarray, coefficients: np.ndarray, bias: np.ndarra
 
 
 def gurobi_complete_check(bounded_x0: L0BoundedInput, seqAT: SequentialAT,
-        pre_activation_bounds_list: list[tuple[np.ndarray, np.ndarray]]) -> bool:
+                          pre_activation_bounds_list: list[tuple[np.ndarray, np.ndarray]],
+                          demo: bool = True, ) -> bool:
     model = gp.Model("check_unsat", env=env)
     img = bounded_x0.x[0, ..., 0].numpy()  # input: [784]
     delta = model.addMVar(img.shape, vtype=GRB.CONTINUOUS, name="delta")  # delta: [784]
+    for i in range(img.shape[0]):
+        model.addConstr(delta[i] <= bounded_x0.U - img[i])
+        model.addConstr(bounded_x0.L - img[i] <= delta[i])
     x = img + delta  # input
-    # 0 <= img + delta <= 1
-    model.addConstr(bounded_x0.L <= x, name="input_lower_bound")
-    model.addConstr(x <= bounded_x0.U, name="input_upper_bound")
 
-    # L0 norm
     epsilon = bounded_x0.eps
     l0_loss = model.addVar(lb=epsilon, ub=epsilon)
-    model.addGenConstrNorm(l0_loss, delta, 0., name="L0_norm")
+    model.addGenConstrNorm(l0_loss, delta, 0.0)
 
     # forward
     relu_layer_idx = 0
@@ -71,37 +71,47 @@ def gurobi_complete_check(bounded_x0: L0BoundedInput, seqAT: SequentialAT,
             weight, bias = AT.rp.W[0, ...].numpy(), AT.rp.b[0, ..., 0].numpy()
             x = weight @ x + bias
         elif isinstance(AT, ReLUAT):  # ReLU
-            # lbound, ubound = pre_activation_bounds_list[relu_layer_idx]
-
-            # # x:MLinExpr -> intermediate_x:MVar
-            intermediate_x = model.addMVar(x.shape, vtype=GRB.CONTINUOUS, name=f"ReLU{layer_idx}_ix")
-            model.addConstr(x == intermediate_x)
+            lbound, ubound = pre_activation_bounds_list[relu_layer_idx]
 
             y = model.addMVar(x.shape, vtype=GRB.CONTINUOUS, name=f"ReLU{layer_idx}_y")
-            # for idx, (lb, ub) in enumerate(zip(lbound, ubound)):
-            #     if ub <= 0:
-            #         # Case 1: ubound <= 0
-            #         model.addConstr(y[idx] == 0)
-            #     elif lb >= 0:
-            #         # Case 2: lbound >= 0
-            #         model.addConstr(y[idx] == intermediate_x[idx])
-            #     else:
-            #         # Case 3: lbound <= 0 <= ubound
-            #         model.addGenConstrPWL(intermediate_x[idx], y[idx], [lb, 0, ub], [0, 0, ub],
-            #                               name=f"ReLU{layer_idx}_appr")
-            model.addConstrs(y[j] == gp.max_(intermediate_x[j], 0) for j in range(x.shape[0]))
+            for idx, (lb, ub) in enumerate(zip(lbound, ubound)):
+                if ub <= 0:
+                    # Case 1: ubound <= 0
+                    model.addConstr(y[idx] == 0)
+                elif lb >= 0:
+                    # Case 2: lbound >= 0
+                    model.addConstr(y[idx] == x[idx])
+                else:
+                    # Case 3: lbound <= 0 <= ubound
+                    a = model.addVar(vtype=GRB.BINARY)  # ReLU auxiliary var
+                    model.addConstr(y[idx] <= x[idx] - lb * (1 - a))
+                    model.addConstr(y[idx] >= x[idx])
+                    model.addConstr(y[idx] <= ub * a)
+                    model.addConstr(y[idx] >= 0)
+
             x = y
             relu_layer_idx += 1
         else:
             raise NotImplementedError(type(AT))
 
-    model.setObjective(x, GRB.MINIMIZE)
+    model.setObjective(x, GRB.MINIMIZE)  # x = prob(gt) - prob(target)
     model.optimize()
 
-    if model.Status == GRB.Status.INFEASIBLE: return True
-    if model.Status == GRB.Status.OPTIMAL:
-        print("Solution found:")
-    if model.Status == GRB.Status.INF_OR_UNBD:
+    if model.Status == GRB.Status.INFEASIBLE:
+        print("INFEASIBLE")
+    if model.Status in {GRB.Status.OPTIMAL, GRB.Status.SOLUTION_LIMIT}:
+        if demo:
+            print(f"Solution found")
+            delta_values = np.asarray(delta.X)
+            xs = np.nonzero(delta_values)
+            print(f"Delta indices: {xs}, value: {delta_values[xs]}")
+            print(f"Obj value: {x[0].getValue()}")
+            # check model input
+            print(img[xs])
+            print(img[xs] + delta.X[xs])
+        if x[0].getValue() > 0:
+            return True
+    elif model.Status == GRB.Status.INF_OR_UNBD:  # unsolvable
         print("Model is infeasible or unbounded")
     else:
         print(f"Solver status: {model.Status}")
@@ -144,5 +154,5 @@ if __name__ == "__main__":
                 pre_activation_bounds.u[0, ..., 0].numpy(),  # upper bound
             ))
 
-    res = gurobi_complete_check(bounded_x0, seqAT, pre_activation_bounds_list)
+    res = gurobi_complete_check(bounded_x0, seqAT, pre_activation_bounds_list, demo=args.demo)
     print(res)
