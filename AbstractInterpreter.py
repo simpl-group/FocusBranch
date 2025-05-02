@@ -31,7 +31,7 @@ class Bounds(NamedTuple):
     u: torch.Tensor
 
 class BoundedInput:
-    def __init__(self, x: torch.Tensor, eps, pixel_value_range=(0, 1)):
+    def __init__(self, x: torch.Tensor, eps, pixel_value_range: tuple[float, float]=(0., 1.)):
         self.x = x
         self.device = x.device
         self.eps = eps
@@ -49,10 +49,16 @@ class BoundedInput:
         return Bounds(self.compute_lbound(lrp), self.compute_ubound(urp))
 
 class L0BoundedInput(BoundedInput):
-    def __init__(self, x: torch.Tensor, eps: int, pixel_value_range=(0, 1)):
+    def __init__(self, x: torch.Tensor, eps: int, pixel_value_range: tuple[float, float]=(0., 1.), channel_size: int=1, num_pixels: int=784):
         super().__init__(x, eps, pixel_value_range)
         self.selected_idx: torch.Tensor = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
         """indices pre-selected before the ranking to compute the sum which is then added to the diff"""
+        self.channel_size = channel_size
+        self.num_pixels = int(self.num_features / channel_size)
+        assert self.num_pixels == num_pixels, f"num_pixels should be {num_pixels}, but got {self.num_pixels}"
+        X = self.x.transpose(-1,-2)
+        self.U_X = (self.U - X).clamp_min(0)
+        self.L_X = (self.L - X).clamp_max(0)
 
     def num_selected(self):
         return self.selected_idx[0].numel()
@@ -93,49 +99,47 @@ class L0BoundedInput(BoundedInput):
         return WX_diff.gather(dim=2, index=indices).sum(dim=-1, keepdim=True)
 
     def compute_udiff(self, rpW: torch.Tensor) -> torch.Tensor:
-        X = self.x.transpose(-1,-2) # rpW.shape[1]: number of nuerons in next layer
-        WX_diff = torch.where(rpW > 0, rpW * (self.U - X), rpW * (self.L - X))
+        WX_diff = torch.where(rpW > 0, rpW * self.U_X, rpW * self.L_X)
+        if self.channel_size > 1:
+            WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, self.num_pixels).sum(dim=2)
         if WX_diff.shape[0] != self.batch_size:
-            WX_diff = WX_diff.expand(self.batch_size, -1, -1).clone()
+            WX_diff = WX_diff.repeat(self.batch_size, 1, 1)
 
         WX_selected_sum = self.wx_selected_sum(WX_diff)
         if self.eps == 0: return WX_selected_sum
         WX_diff[self.batch_indices, :, self.selected_idx] = 0
 
         WX_tope_diff = WX_diff.topk(self.eps, dim=2, largest=True, sorted=False).values
-        return WX_tope_diff.sum(dim=-1, keepdim=True) + WX_selected_sum
+        WX_tope_sum = WX_tope_diff.sum(dim=-1, keepdim=True)
+        return WX_tope_sum + WX_selected_sum
 
     def compute_ldiff(self, rpW: torch.Tensor) -> torch.Tensor:
-        X = self.x.transpose(-1,-2)
-        WX_diff = torch.where(rpW < 0, rpW * (self.U - X), rpW * (self.L - X))
+        WX_diff = torch.where(rpW < 0, rpW * self.U_X, rpW * self.L_X)
+        if self.channel_size > 1:
+            WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, self.num_pixels).sum(dim=2)
         if WX_diff.shape[0] != self.batch_size:
-            WX_diff = WX_diff.expand(self.batch_size, -1, -1).clone()
+            WX_diff = WX_diff.repeat(self.batch_size, 1, 1)
 
         WX_selected_sum = self.wx_selected_sum(WX_diff)
         if self.eps == 0: return WX_selected_sum
         WX_diff[self.batch_indices, :, self.selected_idx] = 0
 
         WX_tope_diff = WX_diff.topk(self.eps, dim=2, largest=False, sorted=False).values
-        return WX_tope_diff.sum(dim=-1, keepdim=True) + WX_selected_sum
+        WX_tope_sum = WX_tope_diff.sum(dim=-1, keepdim=True)
+        return WX_tope_sum + WX_selected_sum
 
     def compute_ubound(self, rp: RelationalPolyhedra) -> torch.Tensor:
         center = rp.W @ self.x + rp.b
         diff = self.compute_udiff(rp.W)
-        result = center + diff
-        if result.shape[0] != self.batch_size:
-            result = result.expand(self.batch_size, -1, -1)
-        return result
+        return center + diff
 
     def compute_lbound(self, rp: RelationalPolyhedra) -> torch.Tensor:
         center = rp.W @ self.x + rp.b
         diff = self.compute_ldiff(rp.W)
-        result = center + diff
-        if result.shape[0] != self.batch_size:
-            result = result.expand(self.batch_size, -1, -1)
-        return result
+        return center + diff
 
 class LinfBoundedInput(BoundedInput):
-    def __init__(self, x: torch.Tensor, eps: float, pixel_value_range=(0, 1), bounds: Bounds=None):
+    def __init__(self, x: torch.Tensor, eps: float, pixel_value_range: tuple[float, float]=(0., 1.), bounds: Bounds=None):
         super().__init__(x, eps, pixel_value_range)
         if bounds is not None:
             self.bounds = bounds

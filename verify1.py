@@ -1,7 +1,7 @@
 import time
 from models import get_network
 from data.prepare import get_loader
-from data import DATASETS
+from data import DATASETS, DatasetName
 from utils import *
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from tqdm import tqdm
@@ -11,7 +11,14 @@ import signal
 import argparse
 from json import dump
 
-def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batch_size: int=2000, demo: bool=False, timeout: int=0) -> bool:
+def check_and_branch_batch(
+    seqAT: SequentialAT,
+    bounded_x0: L0BoundedInput,
+    batch_size: int=2000,
+    demo: bool=False,
+    timeout: int=0,
+    dataset: DatasetName=DatasetName.MNIST
+) -> bool:
     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
     safe_combs: list[list[int]] = []
     level = 0
@@ -68,7 +75,7 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
         del combs_to_check, combs_to_check_batch, lb_l, lrp, new_safe_combs
         torch.cuda.empty_cache()
         t0 = time.time()
-        combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo, watchout)
+        combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo, watchout, dataset)
         if demo:
             branching_time += time.time() - t0
             total_nodes += num_to_check
@@ -78,7 +85,14 @@ def check_and_branch_batch(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batc
         level += 1
     return False
 
-def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0BoundedInput, batch_size: int=2000, demo: bool=False, timeout: int=0) -> bool:
+def check_and_branch_batch_untargeted(
+    seqAT: SequentialAT,
+    bounded_x0: L0BoundedInput,
+    batch_size: int=2000,
+    demo: bool=False,
+    timeout: int=0,
+    dataset: DatasetName=DatasetName.MNIST
+) -> bool:
     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
     safe_combs: list[list[int]] = []
     level = 0
@@ -130,7 +144,7 @@ def check_and_branch_batch_untargeted(seqAT: SequentialAT, bounded_x0: L0Bounded
         del combs_to_check, combs_to_check_batch, lb_l, lrp, new_safe_combs
         torch.cuda.empty_cache()
         t0 = time.time()
-        combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo, watchout)
+        combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo, watchout, dataset)
         if demo:
             branching_time += time.time() - t0
             total_nodes += num_to_check
@@ -157,6 +171,10 @@ if __name__ == "__main__":
     data_loader = get_loader(spec.dataset_name, batch_size=1, target_label=args.target_label, num_batches=args.start_idx+args.test_batches)
     x_ = torch.zeros(1, *DATASETS[spec.dataset_name].image_shape).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
+    bounded_x0 = L0BoundedInput(x=x_.reshape(1, -1, 1),
+                                eps=args.epsilon,
+                                channel_size=DATASETS[spec.dataset_name].image_shape[0],
+                                num_pixels=DATASETS[spec.dataset_name].num_pixels)
 
     checker = check_and_branch_batch_untargeted if args.target_label is None else check_and_branch_batch
 
@@ -172,7 +190,7 @@ if __name__ == "__main__":
             continue
         assert net(images).argmax(dim=1).eq(pred_labels).all()
         x0 = images.to(DEVICE).flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-        bounded_x0 = L0BoundedInput(x0, args.epsilon)
+        bounded_x0.x = x0
         if args.target_label is not None:
             seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device=DEVICE)
         else:
@@ -183,7 +201,7 @@ if __name__ == "__main__":
         try:
             signal.alarm(args.timeout)
             t0 = time.time()
-            if checker(seqAT, bounded_x0, args.batch_size, demo=args.demo, timeout=args.timeout):
+            if checker(seqAT, bounded_x0, args.batch_size, demo=args.demo, timeout=args.timeout, dataset=spec.dataset_name):
                 elapsed_time = time.time() - t0
                 total_time += elapsed_time
                 success = True

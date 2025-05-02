@@ -11,7 +11,7 @@ from tqdm import tqdm
 import signal
 
 def check_and_branch(combs_to_check: torch.Tensor, safe_combs: list[list[int]]) -> bool:
-    global splits, level, solver_time_temp, solver_checks_temp
+    global splits, level, solver_time_temp, solver_checks_temp, spec
     unk_combs: list[list[int]] = []
     unk_num = 0
     solver_time_temp = .0
@@ -31,7 +31,7 @@ def check_and_branch(combs_to_check: torch.Tensor, safe_combs: list[list[int]]) 
     if level == bounded_x0.eps: return False
     del combs_to_check
     torch.cuda.empty_cache()
-    next_level_combs = split_and_prune(unk_combs, safe_combs, level, True, watchout)
+    next_level_combs = split_and_prune(unk_combs, safe_combs, level, True, watchout, spec.dataset_name)
     level += 1
     splits += unk_num
     torch.cuda.empty_cache()
@@ -97,7 +97,9 @@ if __name__ == "__main__":
             continue
         assert net.cpu()(images).argmax(dim=1).eq(pred_labels).all()
         x0 = images.to(DEVICE).flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-        bounded_x0 = L0BoundedInput(x0, args.epsilon)
+        bounded_x0 = L0BoundedInput(x0, args.epsilon,
+                                    channel_size=DATASETS[spec.dataset_name].image_shape[0],
+                                    num_pixels=DATASETS[spec.dataset_name].num_pixels)
         seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device=DEVICE)
         break
     x0_ = bounded_x0.x.squeeze(2).cpu().numpy()
