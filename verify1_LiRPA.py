@@ -23,6 +23,8 @@ if __name__ == "__main__":
     )
     add_shared_arguments(parser)
     parser.add_argument("-mi", "--max-iteration", type=int, default=1000)
+    parser.add_argument("--method", type=str, default="CROWN-Optimized",
+                        choices=["CROWN-Optimized", 'backward'])
     args = parser.parse_args()
     net, spec = get_network(args.net, device=DEVICE)
     data_loader = get_loader(spec.dataset_name, batch_size=1, target_label=args.target_label, num_batches=args.start_idx+args.test_batches)
@@ -54,7 +56,7 @@ if __name__ == "__main__":
             signal.alarm(args.timeout)
             t0 = time.time()
             lb, _ = lirpa_model.compute_bounds(
-                x=(bounded_images,), bound_upper=False, method='CROWN-Optimized')
+                x=(bounded_images,), bound_upper=False, method=args.method)
             signal.alarm(0)
             if (lb >= 0).all():
                 success = True
