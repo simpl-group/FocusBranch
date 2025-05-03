@@ -56,7 +56,7 @@ class L0BoundedInput(BoundedInput):
         self.channel_size = channel_size
         self.num_pixels = int(self.num_features / channel_size)
         assert self.num_pixels == num_pixels, f"num_pixels should be {num_pixels}, but got {self.num_pixels}"
-        X = self.x.transpose(-1,-2)
+        X = self.x.transpose(1, 2)
         self.U_X = (self.U - X).clamp_min(0)
         self.L_X = (self.L - X).clamp_max(0)
 
@@ -87,7 +87,7 @@ class L0BoundedInput(BoundedInput):
     @contextmanager
     def selecting(self, idx: torch.Tensor):
         if idx.ndim == 1:
-            idx = idx.unsqueeze(0).expand(self.batch_size, -1)
+            idx = idx.expand(self.batch_size, -1)
         self.select_idx(idx)
         try:
             yield
@@ -96,7 +96,7 @@ class L0BoundedInput(BoundedInput):
 
     def wx_selected_sum(self, WX_diff: torch.Tensor) -> torch.Tensor:
         indices = self.selected_idx.unsqueeze(1).expand(-1, WX_diff.shape[1], -1)
-        return WX_diff.gather(dim=2, index=indices).sum(dim=-1, keepdim=True)
+        return WX_diff.gather(dim=2, index=indices).sum(dim=2, keepdim=True)
 
     def compute_udiff(self, rpW: torch.Tensor) -> torch.Tensor:
         WX_diff = torch.where(rpW > 0, rpW * self.U_X, rpW * self.L_X)
@@ -110,7 +110,7 @@ class L0BoundedInput(BoundedInput):
         WX_diff[self.batch_indices, :, self.selected_idx] = 0
 
         WX_tope_diff = WX_diff.topk(self.eps, dim=2, largest=True, sorted=False).values
-        WX_tope_sum = WX_tope_diff.sum(dim=-1, keepdim=True)
+        WX_tope_sum = WX_tope_diff.sum(dim=2, keepdim=True)
         return WX_tope_sum + WX_selected_sum
 
     def compute_ldiff(self, rpW: torch.Tensor) -> torch.Tensor:
@@ -125,7 +125,7 @@ class L0BoundedInput(BoundedInput):
         WX_diff[self.batch_indices, :, self.selected_idx] = 0
 
         WX_tope_diff = WX_diff.topk(self.eps, dim=2, largest=False, sorted=False).values
-        WX_tope_sum = WX_tope_diff.sum(dim=-1, keepdim=True)
+        WX_tope_sum = WX_tope_diff.sum(dim=2, keepdim=True)
         return WX_tope_sum + WX_selected_sum
 
     def compute_ubound(self, rp: RelationalPolyhedra) -> torch.Tensor:
@@ -291,8 +291,8 @@ class ReLUAT(ActivationAT):
         # Case b: lbound + ubound <= 0
         lrp.W = torch.where(bounds.l + bounds.u <= 0, 0, lrp.W)
 
-        lrp.W.transpose_(-1, -2)
-        urp.W.transpose_(-1, -2)
+        lrp.W.transpose_(1, 2)
+        urp.W.transpose_(1, 2)
         return lrp, urp
 
 class SequentialAT:
