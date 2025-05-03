@@ -203,7 +203,12 @@ class AffineAT(AbstractTransformer):
 
     @classmethod
     def from_linear(cls, layer: nn.Linear) -> Self:
-        return cls(layer.weight.detach().unsqueeze(0), layer.bias.detach().reshape(1, -1, 1))
+        weight = layer.weight.detach().unsqueeze(0)
+        if layer.bias is None:
+            bias = torch.zeros(1, layer.out_features, 1, device=weight.device)
+        else:
+            bias = layer.bias.detach().reshape(1, layer.out_features, 1)
+        return cls(weight, bias)
 
     @classmethod
     def from_conv2d(cls, layer: nn.Conv2d, input_shape) -> Self:
@@ -297,16 +302,15 @@ class ReLUAT(ActivationAT):
 
 class SequentialAT:
     def __init__(self, ATs: list[AbstractTransformer]):
-        tail = ATs[-1]
-        assert isinstance(tail, AffineAT)
-        self.ATs = ATs
-        self.tail = tail
-        self.tail.W = self.tail.W.cpu()
-        self.tail.b = self.tail.b.cpu()
+        self.ATs = SequentialAT.merge_consecutive_affine_layers(ATs)
+        self.tail = self.ATs[-1]
+        assert isinstance(self.tail, AffineAT)
+        self.tail.W = self.tail.rp.W.cpu()
+        self.tail.b = self.tail.rp.b.cpu()
 
     @staticmethod
     def parse_layers(seq_net: nn.Sequential, x: torch.Tensor, prev: AbstractTransformer | None=None) -> list[AbstractTransformer]:
-        ATs = []
+        ATs: list[AbstractTransformer] = []
         current: AbstractTransformer | None = None
         for layer in seq_net:
             x_in = x
@@ -336,6 +340,26 @@ class SequentialAT:
     @classmethod
     def from_sequential(cls, seq_net: nn.Sequential, x: torch.Tensor, prev: AbstractTransformer | None=None) -> Self:
         return cls(SequentialAT.parse_layers(seq_net, x, prev))
+
+    @staticmethod
+    def merge_consecutive_affine_layers(ATs: list[AbstractTransformer]) -> list[AbstractTransformer]:
+        merged_ATs: list[AbstractTransformer] = []
+        prev_affine: AffineAT | None = None
+        for AT in ATs:
+            if isinstance(AT, AffineAT):
+                if prev_affine is None:
+                    prev_affine = AT
+                else:
+                    prev_affine.rp.W = AT.rp.W @ prev_affine.rp.W
+                    prev_affine.rp.b = AT.rp.W @ prev_affine.rp.b + AT.rp.b
+            else:
+                if prev_affine is not None:
+                    merged_ATs.append(prev_affine)
+                    AT.parent = prev_affine
+                    prev_affine = None
+                merged_ATs.append(AT)
+        merged_ATs.append(prev_affine)
+        return merged_ATs
 
     def update_activation_rp(self, bounded_in: BoundedInput) -> None:
         for AT in self.ATs:
