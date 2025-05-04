@@ -109,9 +109,12 @@ class L0BoundedInput(BoundedInput):
         if self.eps == 0: return WX_selected_sum
         WX_diff[self.batch_indices, :, self.selected_idx] = 0
 
-        WX_tope_diff = WX_diff.topk(self.eps, dim=2, largest=True, sorted=False).values
-        WX_tope_sum = WX_tope_diff.sum(dim=2, keepdim=True)
-        return WX_tope_sum + WX_selected_sum
+        for _ in range(self.eps):
+            v, idx = WX_diff.max(-1, keepdim=True)
+            WX_selected_sum += v
+            WX_diff.scatter_(-1, idx, 0)
+
+        return WX_selected_sum
 
     def compute_ldiff(self, rpW: torch.Tensor) -> torch.Tensor:
         WX_diff = torch.where(rpW < 0, rpW * self.U_X, rpW * self.L_X)
@@ -124,9 +127,12 @@ class L0BoundedInput(BoundedInput):
         if self.eps == 0: return WX_selected_sum
         WX_diff[self.batch_indices, :, self.selected_idx] = 0
 
-        WX_tope_diff = WX_diff.topk(self.eps, dim=2, largest=False, sorted=False).values
-        WX_tope_sum = WX_tope_diff.sum(dim=2, keepdim=True)
-        return WX_tope_sum + WX_selected_sum
+        for _ in range(self.eps):
+            v, idx = WX_diff.min(-1, keepdim=True)
+            WX_selected_sum += v
+            WX_diff.scatter_(-1, idx, 0)
+
+        return WX_selected_sum
 
     def compute_ubound(self, rp: RelationalPolyhedra) -> torch.Tensor:
         center = rp.W @ self.x + rp.b
