@@ -7,7 +7,9 @@ __global__ void bimm64_kernel(
     const uint64_t* __restrict__ A,
     const uint64_t* __restrict__ B,
     uint8_t* __restrict__ C,
-    const int na, const int nb, const int nv
+    const int na,
+    const int nb,
+    const int nv
 ) {
     const int ia = blockIdx.y * blockDim.y + threadIdx.y;
     const int ib = blockIdx.x * blockDim.x + threadIdx.x;
@@ -23,10 +25,13 @@ __global__ void bimm64_kernel(
         C[ia * nb + ib] = sum;
     }
 }
-
 void bimm64_cuda(
-    const at::Tensor A, const at::Tensor B, at::Tensor C,
-    const int na, const int nb, const int nv
+    const at::Tensor& A,
+    const at::Tensor& B,
+    at::Tensor& C,
+    const int na,
+    const int nb,
+    const int nv
 ) {
     dim3 threads(16, 16);
     dim3 blocks((nb + 15) / 16, (na + 15) / 16);
@@ -35,7 +40,9 @@ void bimm64_cuda(
         reinterpret_cast<const uint64_t*>(A.data_ptr<int64_t>()),
         reinterpret_cast<const uint64_t*>(B.data_ptr<int64_t>()),
         C.data_ptr<uint8_t>(),
-        na, nb, nv
+        na,
+        nb,
+        nv
     );
 }
 
@@ -43,7 +50,10 @@ __global__ void superset_popc_kernel(
     const uint64_t* __restrict__ A,
     const uint64_t* __restrict__ B,
     uint8_t* __restrict__ C,
-    const int na, const int nb, const int nv, const int nb_div8
+    const int na,
+    const int nb,
+    const int nv,
+    const int nb_div8
 ) {
     const int ia = blockIdx.y * blockDim.y + threadIdx.y;
     const int ib = blockIdx.x * blockDim.x + threadIdx.x;
@@ -73,8 +83,13 @@ __global__ void superset_popc_kernel(
     }
 }
 void superset_popc_cuda(
-    const at::Tensor A, const at::Tensor B, at::Tensor C,
-    const int na, const int nb, const int nv, const int nb_div8
+    const at::Tensor& A,
+    const at::Tensor& B,
+    at::Tensor& C,
+    const int na,
+    const int nb,
+    const int nv,
+    const int nb_div8
 ) {
     dim3 threads(16, 16);
     dim3 blocks((nb + 15) / 16, (na + 15) / 16);
@@ -83,14 +98,19 @@ void superset_popc_cuda(
         reinterpret_cast<const uint64_t*>(A.data_ptr<int64_t>()),
         reinterpret_cast<const uint64_t*>(B.data_ptr<int64_t>()),
         C.data_ptr<uint8_t>(),
-        na, nb, nv, nb_div8
+        na,
+        nb,
+        nv,
+        nb_div8
     );
 }
 
 __global__ void bitmask2comb_kernel(
     const uint64_t* __restrict__ bitmasks,
     u_int64_t* __restrict__ combs,
-    const int num_rows, const int nv, const int popc
+    const int num_rows,
+    const int nv,
+    const int popc
 ) {
     const int row = blockIdx.x * blockDim.x + threadIdx.x;
     if (row < num_rows) {
@@ -110,7 +130,7 @@ __global__ void bitmask2comb_kernel(
     }
 }
 void bitmask2comb_cuda(
-    const at::Tensor bitmasks, at::Tensor combs,
+    const at::Tensor& bitmasks, at::Tensor& combs,
     const int num_rows, const int nv, const int popc
 ) {
     dim3 threads(MAX_THREADS_PER_BLOCK);
@@ -119,14 +139,18 @@ void bitmask2comb_cuda(
     bitmask2comb_kernel<<<blocks, threads>>>(
         reinterpret_cast<const uint64_t*>(bitmasks.data_ptr<int64_t>()),
         reinterpret_cast<uint64_t*>(combs.data_ptr<int64_t>()),
-        num_rows, nv, popc
+        num_rows,
+        nv,
+        popc
     );
 }
 
 __global__ void comb2bitmask_kernel(
     const uint64_t* __restrict__ combs,
     uint64_t* __restrict__ bitmasks,
-    const int num_rows, const int nv, const int popc
+    const int num_rows,
+    const int nv,
+    const int popc
 ) {
     const int row = blockIdx.x * blockDim.x + threadIdx.x;
     if (row < num_rows) {
@@ -140,8 +164,11 @@ __global__ void comb2bitmask_kernel(
     }
 }
 void comb2bitmask_cuda(
-    const at::Tensor combs, at::Tensor bitmasks,
-    const int num_rows, const int nv, const int popc
+    const at::Tensor& combs,
+    at::Tensor& bitmasks,
+    const int num_rows,
+    const int nv,
+    const int popc
 ) {
     dim3 threads(MAX_THREADS_PER_BLOCK);
     dim3 blocks((num_rows + MAX_THREADS_PER_BLOCK - 1) / MAX_THREADS_PER_BLOCK);
@@ -149,15 +176,21 @@ void comb2bitmask_cuda(
     comb2bitmask_kernel<<<blocks, threads>>>(
         reinterpret_cast<const uint64_t*>(combs.data_ptr<int64_t>()),
         reinterpret_cast<uint64_t*>(bitmasks.data_ptr<int64_t>()),
-        num_rows, nv, popc
+        num_rows,
+        nv,
+        popc
     );
 }
 
 template <typename scalar_t>
 __global__ void wipe_selected_kernel(
-    scalar_t* __restrict__ W, const long* __restrict__ selected_idx,
-    const int batch_size, const int num_rows, const int num_cols,
-    const int rows_per_thread, const int num_selected
+    scalar_t* __restrict__ W,
+    const long* __restrict__ selected_idx,
+    const int batch_size,
+    const int num_rows,
+    const int num_cols,
+    const int rows_per_thread,
+    const int num_selected
 ) {
     const int b = blockIdx.x;
     const long* sib = selected_idx + b * num_selected;
@@ -170,20 +203,31 @@ __global__ void wipe_selected_kernel(
         }
     }
 }
-
 void wipe_selected_cuda(
-    at::Tensor WX_diff, const at::Tensor selected_idx,
-    const int batch_size, const int num_rows, const int num_cols,
+    at::Tensor& WX_diff,
+    const at::Tensor& selected_idx,
+    const int batch_size,
+    const int num_rows,
+    const int num_cols,
     const int num_selected
 ) {
     dim3 threads(MAX_THREADS_PER_BLOCK);
     dim3 blocks(batch_size); // each block handles one batch element
     const int rows_per_thread = (num_rows + MAX_THREADS_PER_BLOCK - 1) / MAX_THREADS_PER_BLOCK;
 
-    AT_DISPATCH_FLOATING_TYPES(WX_diff.scalar_type(), "wipe_selected_cuda", ([&] {
-        wipe_selected_kernel<scalar_t><<<blocks, threads>>>(
-            WX_diff.data_ptr<scalar_t>(), selected_idx.data_ptr<long>(),
-            batch_size, num_rows, num_cols, rows_per_thread, num_selected
-        );
-    }));
+    AT_DISPATCH_FLOATING_TYPES(
+        WX_diff.scalar_type(),
+        "wipe_selected_cuda",
+        ([&] {
+            wipe_selected_kernel<scalar_t><<<blocks, threads>>>(
+                WX_diff.data_ptr<scalar_t>(),
+                selected_idx.data_ptr<long>(),
+                batch_size,
+                num_rows,
+                num_cols,
+                rows_per_thread,
+                num_selected
+            );
+        })
+    );
 }
