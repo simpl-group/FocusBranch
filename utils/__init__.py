@@ -15,7 +15,7 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--net", type=str, choices=MODEL_SPECS.keys(), default="fc2",
         help="Neural network architecture",)
     parser.add_argument("-e", "--epsilon", type=int, required=True, help="L0 norm bound.")
-    parser.add_argument("-bs", "--batch-size", type=int, required=True)
+    parser.add_argument("-bs", "--batch-size", type=int, default=5)
     parser.add_argument("-tl", "--target-label", type=int, default=None)
     parser.add_argument("-to", "--timeout", type=int, default=0)
     parser.add_argument("-s", "--start-idx", type=int, default=0)
