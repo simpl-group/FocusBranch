@@ -70,32 +70,9 @@ at::Tensor bitmask2comb_laucher(const at::Tensor& bitmasks, const int popc) {
     return combs;
 }
 
-void wipe_selected_cuda(
-    at::Tensor& WX_diff,
-    const at::Tensor& selected_idx,
-    const int batch_size,
-    const int num_rows,
-    const int num_cols,
-    const int num_selected
-);
-at::Tensor& wipe_selected_laucher(at::Tensor& WX_diff, const at::Tensor& selected_idx) {
-    CHECK_CUDA(WX_diff);
-    CHECK_CUDA(selected_idx);
-
-    const int batch_size   = WX_diff.size(0);
-    const int num_rows     = WX_diff.size(1);
-    const int num_cols     = WX_diff.size(2);
-    const int num_selected = selected_idx.size(1);
-
-    wipe_selected_cuda(WX_diff, selected_idx, batch_size, num_rows, num_cols, num_selected);
-
-    return WX_diff;
-}
-
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("bimm64", &bimm64_laucher, "Binary Matmul 64 (CUDA)");
     m.def("superset_sum", &superset_sum_laucher, "Superset Sum (CUDA)");
     m.def("comb2bitmask", &comb2bitmask_laucher, "Combination to Bitmask (CUDA)");
     m.def("bitmask2comb", &bitmask2comb_laucher, "Bitmask to Combination (CUDA)");
-    m.def("wipe_selected", &wipe_selected_laucher, "Wipe Selected Elements (CUDA)");
 }

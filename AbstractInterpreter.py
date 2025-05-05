@@ -5,6 +5,7 @@ import warnings
 from contextlib import contextmanager
 from typing import NamedTuple
 import torch
+import topksum
 
 torch.set_default_dtype(torch.float32)
 
@@ -105,6 +106,8 @@ class L0BoundedInput(BoundedInput):
         if WX_diff.shape[0] != self.batch_size:
             WX_diff = WX_diff.repeat(self.batch_size, 1, 1)
 
+        if WX_diff.is_cuda: return topksum.selected_top_k_sum(WX_diff, self.selected_idx, self.eps)
+
         WX_selected_sum = self.wx_selected_sum(WX_diff)
         if self.eps == 0: return WX_selected_sum
         WX_diff[self.batch_indices, :, self.selected_idx] = 0
@@ -122,6 +125,8 @@ class L0BoundedInput(BoundedInput):
             WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, self.num_pixels).sum(dim=2)
         if WX_diff.shape[0] != self.batch_size:
             WX_diff = WX_diff.repeat(self.batch_size, 1, 1)
+
+        if WX_diff.is_cuda: return topksum.selected_bottom_k_sum(WX_diff, self.selected_idx, self.eps)
 
         WX_selected_sum = self.wx_selected_sum(WX_diff)
         if self.eps == 0: return WX_selected_sum
