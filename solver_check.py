@@ -9,6 +9,10 @@ from data import DATASETS
 import argparse
 import torch
 import signal
+import warnings
+from tqdm import tqdm
+import time
+from json import dump
 
 env = gp.Env(params={"OutputFlag": 0, "SolutionLimit": 1})
 
@@ -49,9 +53,9 @@ def gurobi_check_unsat(x0: np.ndarray, coefficients: np.ndarray, bias: np.ndarra
     return False
 
 
-def gurobi_complete_check(bounded_x0: L0BoundedInput, seqAT: SequentialAT,
+def gurobi_complete_check(seqAT: SequentialAT, bounded_x0: L0BoundedInput,
                           pre_activation_bounds_list: list[tuple[np.ndarray, np.ndarray]],
-                          demo: bool = True, ) -> bool:
+                          demo: bool = True, ground_truth_label: int | None = None, ) -> bool:
     model = gp.Model("check_unsat", env=env)
     img = bounded_x0.x[0, ..., 0].numpy()  # input: [784]
     delta = model.addMVar(img.shape, vtype=GRB.CONTINUOUS, name="delta")  # delta: [784]
@@ -94,27 +98,36 @@ def gurobi_complete_check(bounded_x0: L0BoundedInput, seqAT: SequentialAT,
         else:
             raise NotImplementedError(type(AT))
 
-    model.setObjective(x, GRB.MINIMIZE)  # x = prob(gt) - prob(target)
+    if ground_truth_label is None:
+        model.addConstr(x[0] <= 0)
+    else:
+        any_not_safe = [model.addVar(vtype=GRB.BINARY) for _ in range(10)]
+        for i in range(10):
+            if i == ground_truth_label:
+                model.addConstr(any_not_safe[i] == 0)
+                continue
+            model.addGenConstrIndicator(any_not_safe[i], True, x[i] <= 0)
+
+        res = model.addVar(vtype=GRB.BINARY, lb=1, ub=1)  # True constant
+        model.addGenConstrOr(res, any_not_safe)
+
     model.optimize()
 
     if model.Status == GRB.Status.INFEASIBLE:
-        print("INFEASIBLE")
+        return True
     if model.Status in {GRB.Status.OPTIMAL, GRB.Status.SOLUTION_LIMIT}:
         if demo:
             print(f"Solution found")
             delta_values = np.asarray(delta.X)
             xs = np.nonzero(delta_values)
             print(f"Delta indices: {xs}, value: {delta_values[xs]}")
-            print(f"Obj value: {x[0].getValue()}")
             # check model input
             print(img[xs])
             print(img[xs] + delta.X[xs])
-        if x[0].getValue() > 0:
-            return True
     elif model.Status == GRB.Status.INF_OR_UNBD:  # unsolvable
-        print("Model is infeasible or unbounded")
+        warnings.warn("Model is infeasible or unbounded")
     else:
-        print(f"Solver status: {model.Status}")
+        warnings.warn(f"Solver status: {model.Status}")
     return False
 
 
@@ -125,11 +138,20 @@ if __name__ == "__main__":
     )
     add_shared_arguments(parser)
     args = parser.parse_args()
+    if args.demo:
+        args.test_batches = 1
+
     net, spec = get_network(args.net)
     data_loader = get_loader(spec.dataset_name, batch_size=1, target_label=args.target_label,
                              num_batches=args.start_idx + args.test_batches)
     x_ = torch.zeros(1, *DATASETS[spec.dataset_name].image_shape)
     seqAT = SequentialAT.from_sequential(net, x_)
+
+    total_time = 0.
+    num_verified = 0
+    record: list[tuple[bool, float]] = []
+    net.cpu()
+    pbar = tqdm(total=args.test_batches, bar_format=TQDM_BAR_FORMAT, disable=args.demo)
     i = 0
     for images, pred_labels in data_loader:
         if i < args.start_idx:
@@ -138,21 +160,55 @@ if __name__ == "__main__":
         assert net(images).argmax(dim=1).eq(pred_labels).all()
         x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
         bounded_x0 = L0BoundedInput(x0, args.epsilon)
-        seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device="cpu")
-        break
+        if args.target_label is not None:
+            seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device="cpu")
+        else:
+            seqAT.tail.make_marginals(true_labels=pred_labels, device="cpu")
 
-    pre_activation_bounds_list = []
-    for AT in seqAT.ATs:
-        if isinstance(AT, ActivationAT):
-            lrp_wrt_inputs, urp_wrt_inputs = AT.parent.backsubstitution()
-            pre_activation_bounds = bounded_x0.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs)
-            AT.lrp, AT.urp = AT.compute_rp(pre_activation_bounds)
-            # convert to np.ndarray
-            # delete batch dimension
-            pre_activation_bounds_list.append((
-                pre_activation_bounds.l[0, ..., 0].numpy(),  # lower bound
-                pre_activation_bounds.u[0, ..., 0].numpy(),  # upper bound
-            ))
+        pre_activation_bounds_list = []
+        for AT in seqAT.ATs:
+            if isinstance(AT, ActivationAT):
+                lrp_wrt_inputs, urp_wrt_inputs = AT.parent.backsubstitution()
+                pre_activation_bounds = bounded_x0.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs)
+                AT.lrp, AT.urp = AT.compute_rp(pre_activation_bounds)
+                # convert to np.ndarray
+                # delete batch dimension
+                pre_activation_bounds_list.append((
+                    pre_activation_bounds.l[0, ..., 0].numpy(),  # lower bound
+                    pre_activation_bounds.u[0, ..., 0].numpy(),  # upper bound
+                ))
 
-    res = gurobi_complete_check(bounded_x0, seqAT, pre_activation_bounds_list, demo=args.demo)
-    print(res)
+        timeout = True
+        safe = False
+        elapsed_time = 0.
+        try:
+            signal.alarm(args.timeout)
+            t0 = time.time()
+            safe = gurobi_complete_check(seqAT, bounded_x0, pre_activation_bounds_list, demo=args.demo,
+                                         ground_truth_label=pred_labels.item() if args.target_label is None else None)
+            timeout = False
+            elapsed_time = time.time() - t0
+            total_time += elapsed_time
+            num_verified += 1
+            signal.alarm(0)
+        except TimeoutException:
+            if args.demo: print("Timeout")
+        except torch.OutOfMemoryError as e:
+            if args.demo: print(e)
+        finally:
+            bounded_x0.clear_cache()
+
+        if args.demo:
+            print(f"Safe: {safe}")
+            break
+
+        pbar.update(1)
+        mean_time = total_time / num_verified if num_verified > 0 else 0
+        pbar.set_postfix({"Verified": f"{num_verified}/{pbar.n}|{100 * num_verified / pbar.n:.2f}%",
+                          "Avg": f"{mean_time:.2f}s/img"})
+
+        record.append((safe, elapsed_time, timeout))
+        with open(args.output, "w") as f:
+            dump(record, f, indent=2)
+        if pbar.n == args.test_batches: break
+    pbar.close()
