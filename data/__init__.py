@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from torchvision.datasets import MNIST, CIFAR10, VisionDataset
 import torch
+from bimm import comb2bitmask
 
 
 class DatasetName(Enum):
@@ -43,34 +44,14 @@ class DatasetUtils:
     def get_empty_bitmask(self, device: str = "cpu") -> torch.Tensor:
         return torch.empty((0, self.bitmask_length), dtype=torch.int64, device=device)
 
-    def one_hot_bitmasks(self, device: str = "cpu") -> torch.Tensor:
-        cache_attr = "_one_hot_bitmasks_cache"
-        if not hasattr(self, cache_attr):
-            object.__setattr__(self, cache_attr, {})
-        cache: dict[str, torch.Tensor] = getattr(self, cache_attr)
-        if device not in cache:
-            # Create the tensor directly on the desired device.
-            masks = torch.zeros(
-                (self.num_pixels, self.bitmask_length),
-                dtype=torch.uint64,
-                device=device
-            )
-            for i in range(self.num_pixels):
-                masks[i, i // 64] |= (torch.tensor(1, dtype=torch.int64, device=device) << i % 64)
-            # Store a CPU copy or leave on device as desired.
-            cache[device] = masks
-        return cache[device]
+    def combs2bitmasks(self, combs: torch.Tensor) -> torch.Tensor:
+        return comb2bitmask(combs, self.bitmask_length)
 
-    @cached_property
-    def one_hot_bitmasks_cuda(self) -> torch.Tensor:
-        """
-        Precompute a one-hot bitmask for each pixel as a tensor of shape (num_pixels, bitmask_length).
-        Each row has one nonzero element at the block corresponding to the pixel.
-        """
-        masks = torch.zeros((self.num_pixels, self.bitmask_length), dtype=torch.int64, device="cuda")
-        for i in range(self.num_pixels):
-            masks[i, i // 64] |= (torch.tensor(1, dtype=torch.int64, device="cuda") << i % 64)
-        return masks
+    def comb2bitmask(self, comb: list[int]) -> torch.Tensor:
+        mask = torch.zeros(self.bitmask_length, dtype=torch.int64)
+        for idx in comb:
+            mask[idx // 64] |= (torch.tensor(1, dtype=torch.int64) << idx % 64)
+        return mask
 
 DATASETS: dict[DatasetName, DatasetUtils] = {
     DatasetName.MNIST: DatasetUtils(

@@ -6,11 +6,19 @@ from data import DATASETS, DatasetName, DatasetUtils
 
 chunk_size = 2000  # Adjust based on GPU memory availability
 
-def comb2bitmask64(comb: list[int], bitmask_length: int) -> torch.Tensor:
-    mask = torch.zeros(bitmask_length, dtype=torch.int64)
-    for idx in comb:
-        mask[idx // 64] |= (torch.tensor(1, dtype=torch.int64) << idx % 64)
-    return mask
+def canonical_split(prefix: torch.Tensor, N: int) -> torch.Tensor:
+    # prefix are natrually sorted
+    num_prefix, k = prefix.shape  # level != 0
+    last_item = prefix[:, -1] if k > 0 else torch.Tensor([-1]).to(prefix.device, dtype=torch.int64)
+    num_children = N - last_item - 1
+    children_start_offset = num_children.cumsum(dim=0) - num_children
+    total_children = int(children_start_offset[-1] + num_children[-1])
+    prefix_idx = torch.arange(num_prefix, device=prefix.device).repeat_interleave(num_children)
+    arange_within = torch.arange(total_children, device=prefix.device) - children_start_offset[prefix_idx]
+    supersets = torch.empty((total_children, k + 1), dtype=torch.int64, device=prefix.device)
+    supersets[:, :k] = prefix[prefix_idx]
+    supersets[:, k] = last_item[prefix_idx] + arange_within + 1
+    return supersets
 
 def split_and_prune(
     unk_combs: list[list[int]],
@@ -21,53 +29,33 @@ def split_and_prune(
     dataset_utils: DatasetUtils=DATASETS[DatasetName.MNIST]
 ) -> torch.Tensor:
     unk_combs_tensor = torch.tensor(unk_combs, dtype=torch.int64, device=DEVICE)
-    unk_bitmasks = bimm.comb2bitmask(unk_combs_tensor, dataset_utils.bitmask_length)
-
-    new_bm_list = []
-    for i in range(dataset_utils.num_pixels):
-        new_bm_i = unk_bitmasks.clone()
-        # filter out those combs that already have the i-th feature
-        prune = new_bm_i.bitwise_and(dataset_utils.one_hot_bitmasks_cuda[i]).any(dim=1)
-        if prune.all() : continue
-        new_bm_i = new_bm_i[~prune].bitwise_or(dataset_utils.one_hot_bitmasks_cuda[i])
-        new_bm_list.append(new_bm_i)
-
-    new_bitmasks = dataset_utils.get_empty_bitmask(DEVICE)
-    while len(new_bm_list) > 0:
-        new_chunk = torch.cat(new_bm_list[:100], dim=0)
-        new_bitmasks = torch.cat((new_bitmasks, new_chunk), dim=0)
-        new_bm_list[:100] = []
-        del new_chunk
-        torch.cuda.empty_cache()
-        new_bitmasks = new_bitmasks.unique(dim=0)
-    torch.cuda.empty_cache()
+    new_bitmasks = dataset_utils.combs2bitmasks(canonical_split(unk_combs_tensor, dataset_utils.num_pixels))
 
     if len(unk_combs) < len(safe_combs):
+        unk_bitmasks = dataset_utils.combs2bitmasks(unk_combs_tensor)
+        del unk_combs_tensor
         new_bitmasks_pruned_list = prune_by_unk(new_bitmasks, unk_bitmasks, level, demo)
-    else:
         del unk_bitmasks
+    else:
+        del unk_combs_tensor
         torch.cuda.empty_cache()
         if safe_combs:
             if watchout:
-                safe_bitmasks = torch.stack([comb2bitmask64(s, dataset_utils.bitmask_length) for s in safe_combs], dim=0).to(DEVICE)
+                safe_bitmasks = torch.stack([dataset_utils.comb2bitmask(s) for s in safe_combs], dim=0).to(DEVICE)
             else:
-                safe_bitmasks = bimm.comb2bitmask(
-                    torch.tensor(safe_combs, dtype=torch.int64, device=DEVICE),
-                    dataset_utils.bitmask_length)
+                safe_bitmasks = dataset_utils.combs2bitmasks(torch.tensor(safe_combs, dtype=torch.int64, device=DEVICE))
         else:
             safe_bitmasks = dataset_utils.get_empty_bitmask(DEVICE)
 
         new_bitmasks_pruned_list = prune_by_safe(new_bitmasks, safe_bitmasks, demo)
-
         del safe_bitmasks
-
 
     if new_bitmasks_pruned_list:
         combs_to_check_tensor = torch.cat(new_bitmasks_pruned_list, dim=0)
     else:
         combs_to_check_tensor = dataset_utils.get_empty_bitmask(DEVICE)
 
-    del new_bitmasks_pruned_list
+    del new_bitmasks_pruned_list, new_bitmasks
     torch.cuda.empty_cache()
 
     return bimm.bitmask2comb(combs_to_check_tensor, level + 1)
