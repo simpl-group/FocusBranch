@@ -313,8 +313,9 @@ class ReLUAT(ActivationAT):
 class SequentialAT:
     def __init__(self, ATs: list[AbstractTransformer]):
         self.ATs = SequentialAT.merge_consecutive_affine_layers(ATs)
-        self.tail = self.ATs[-1]
-        assert isinstance(self.tail, AffineAT)
+        tail = self.ATs[-1]
+        assert isinstance(tail, AffineAT)
+        self.tail = tail
         self.tail.W = self.tail.rp.W.cpu()
         self.tail.b = self.tail.rp.b.cpu()
 

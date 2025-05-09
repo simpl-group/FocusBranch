@@ -7,9 +7,9 @@ from data import DATASETS, DatasetName, DatasetUtils
 chunk_size = 2000  # Adjust based on GPU memory availability
 
 def canonical_split(prefix: torch.Tensor, N: int) -> torch.Tensor:
-    # prefix are natrually sorted
+    # prefix are naturally sorted in each row
     num_prefix, k = prefix.shape  # level != 0
-    last_item = prefix[:, -1] if k > 0 else torch.Tensor([-1]).to(prefix.device, dtype=torch.int64)
+    last_item = prefix[:, -1] if k > 0 else torch.tensor([-1], dtype=torch.int64, device=prefix.device)
     num_children = N - last_item - 1
     children_start_offset = num_children.cumsum(dim=0) - num_children
     total_children = int(children_start_offset[-1] + num_children[-1])
