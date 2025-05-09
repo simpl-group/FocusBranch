@@ -1,6 +1,6 @@
 import torch
 from tqdm import tqdm
-import bimm
+from bimm import bitmasks2combs, superset_sum
 from utils import DEVICE, TQDM_BAR_FORMAT
 from data import DATASETS, DatasetName, DatasetUtils
 
@@ -58,7 +58,7 @@ def split_and_prune(
     del new_bitmasks_pruned_list, new_bitmasks
     torch.cuda.empty_cache()
 
-    return bimm.bitmask2comb(combs_to_check_tensor, level + 1)
+    return bitmasks2combs(combs_to_check_tensor, level + 1)
 
 def prune_by_safe(new_bitmasks: torch.Tensor, safe_bitmasks: torch.Tensor, demo: bool=False) -> list[torch.Tensor]:
     new_bitmasks_pruned_list = []
@@ -71,7 +71,7 @@ def prune_by_safe(new_bitmasks: torch.Tensor, safe_bitmasks: torch.Tensor, demo:
 
             for j in range(0, safe_bitmasks.shape[0], chunk_size*8):
                 safe_bitmasks_jchunk = safe_bitmasks[j:j + chunk_size*8]
-                superset_cnt += bimm.superset_sum(new_bitmasks_ichunk, safe_bitmasks_jchunk)
+                superset_cnt += superset_sum(new_bitmasks_ichunk, safe_bitmasks_jchunk)
 
             # Filter out new_combs that are a subset of any safe_combs
             valid_new_combs = new_bitmasks_ichunk[superset_cnt == 0]
@@ -93,7 +93,7 @@ def prune_by_unk(new_bitmasks: torch.Tensor, unk_bitmasks: torch.Tensor, level: 
 
             for j in range(0, unk_bitmasks.shape[0], chunk_size*8):
                 unk_bitmasks_jchunk = unk_bitmasks[j:j + chunk_size*8]
-                superset_cnt += bimm.superset_sum(new_bitmasks_ichunk, unk_bitmasks_jchunk)
+                superset_cnt += superset_sum(new_bitmasks_ichunk, unk_bitmasks_jchunk)
 
             # Only keep those new_combs whose superset_cnt == level + 1
             valid_new_combs = new_bitmasks_ichunk[superset_cnt == level + 1]

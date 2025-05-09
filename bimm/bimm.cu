@@ -105,7 +105,7 @@ void superset_popc_cuda(
     );
 }
 
-__global__ void bitmask2comb_kernel(
+__global__ void bitmasks2combs_kernel(
     const uint64_t* __restrict__ bitmasks,
     u_int64_t* __restrict__ combs,
     const int num_rows,
@@ -129,14 +129,14 @@ __global__ void bitmask2comb_kernel(
         }
     }
 }
-void bitmask2comb_cuda(
+void bitmasks2combs_cuda(
     const at::Tensor& bitmasks, at::Tensor& combs,
     const int num_rows, const int nv, const int popc
 ) {
     dim3 threads(MAX_THREADS_PER_BLOCK);
     dim3 blocks((num_rows + MAX_THREADS_PER_BLOCK - 1) / MAX_THREADS_PER_BLOCK);
 
-    bitmask2comb_kernel<<<blocks, threads>>>(
+    bitmasks2combs_kernel<<<blocks, threads>>>(
         reinterpret_cast<const uint64_t*>(bitmasks.data_ptr<int64_t>()),
         reinterpret_cast<uint64_t*>(combs.data_ptr<int64_t>()),
         num_rows,
@@ -145,7 +145,7 @@ void bitmask2comb_cuda(
     );
 }
 
-__global__ void comb2bitmask_kernel(
+__global__ void combs2bitmasks_kernel(
     const uint64_t* __restrict__ combs,
     uint64_t* __restrict__ bitmasks,
     const int num_rows,
@@ -163,7 +163,7 @@ __global__ void comb2bitmask_kernel(
         }
     }
 }
-void comb2bitmask_cuda(
+void combs2bitmasks_cuda(
     const at::Tensor& combs,
     at::Tensor& bitmasks,
     const int num_rows,
@@ -173,7 +173,7 @@ void comb2bitmask_cuda(
     dim3 threads(MAX_THREADS_PER_BLOCK);
     dim3 blocks((num_rows + MAX_THREADS_PER_BLOCK - 1) / MAX_THREADS_PER_BLOCK);
 
-    comb2bitmask_kernel<<<blocks, threads>>>(
+    combs2bitmasks_kernel<<<blocks, threads>>>(
         reinterpret_cast<const uint64_t*>(combs.data_ptr<int64_t>()),
         reinterpret_cast<uint64_t*>(bitmasks.data_ptr<int64_t>()),
         num_rows,

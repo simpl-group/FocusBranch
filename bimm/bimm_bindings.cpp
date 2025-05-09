@@ -39,40 +39,40 @@ at::Tensor superset_sum_laucher(const at::Tensor& A, const at::Tensor& B) {
     return C.sum(1);
 }
 
-void comb2bitmask_cuda(
+void combs2bitmasks_cuda(
     const at::Tensor& combs,
     at::Tensor& bitmasks,
     const int num_rows,
     const int nv,
     const int popc
 );
-at::Tensor comb2bitmask_laucher(const at::Tensor& combs, const int nv) {
+at::Tensor combs2bitmasks_laucher(const at::Tensor& combs, const int nv) {
     CHECK_CUDA(combs);
     const int num_rows = combs.size(0);
     const int popc = combs.size(1);
     auto bitmasks = torch::zeros({num_rows, nv}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
-    comb2bitmask_cuda(combs, bitmasks, num_rows, nv, popc);
+    combs2bitmasks_cuda(combs, bitmasks, num_rows, nv, popc);
     return bitmasks;
 }
 
-void bitmask2comb_cuda(
+void bitmasks2combs_cuda(
     const at::Tensor& bitmasks,
     at::Tensor& combs,
     const int num_rows,
     const int nv,
     const int popc
 );
-at::Tensor bitmask2comb_laucher(const at::Tensor& bitmasks, const int popc) {
+at::Tensor bitmasks2combs_laucher(const at::Tensor& bitmasks, const int popc) {
     CHECK_CUDA(bitmasks);
     const int num_rows = bitmasks.size(0);
     auto combs = torch::zeros({num_rows, popc}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
-    bitmask2comb_cuda(bitmasks, combs, num_rows, bitmasks.size(1), popc);
+    bitmasks2combs_cuda(bitmasks, combs, num_rows, bitmasks.size(1), popc);
     return combs;
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("bimm64", &bimm64_laucher, "Binary Matmul 64 (CUDA)");
     m.def("superset_sum", &superset_sum_laucher, "Superset Sum (CUDA)");
-    m.def("comb2bitmask", &comb2bitmask_laucher, "Combination to Bitmask (CUDA)");
-    m.def("bitmask2comb", &bitmask2comb_laucher, "Bitmask to Combination (CUDA)");
+    m.def("combs2bitmasks", &combs2bitmasks_laucher, "Combination to Bitmask (CUDA)");
+    m.def("bitmasks2combs", &bitmasks2combs_laucher, "Bitmask to Combination (CUDA)");
 }

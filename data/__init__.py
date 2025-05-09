@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from torchvision.datasets import MNIST, CIFAR10, VisionDataset
 import torch
-from bimm import comb2bitmask
+from bimm import combs2bitmasks
 
 
 class DatasetName(Enum):
@@ -45,7 +45,7 @@ class DatasetUtils:
         return torch.empty((0, self.bitmask_length), dtype=torch.int64, device=device)
 
     def combs2bitmasks(self, combs: torch.Tensor) -> torch.Tensor:
-        return comb2bitmask(combs, self.bitmask_length)
+        return combs2bitmasks(combs, self.bitmask_length)
 
     def comb2bitmask(self, comb: list[int]) -> torch.Tensor:
         mask = torch.zeros(self.bitmask_length, dtype=torch.int64)

@@ -4,8 +4,7 @@ from typing import Self
 import warnings
 from contextlib import contextmanager
 from typing import NamedTuple
-import torch
-import topksum
+from topksum import selected_top_k_sum, selected_bottom_k_sum
 
 torch.set_default_dtype(torch.float32)
 
@@ -106,7 +105,7 @@ class L0BoundedInput(BoundedInput):
         if WX_diff.shape[0] != self.batch_size:
             WX_diff = WX_diff.repeat(self.batch_size, 1, 1)
 
-        if WX_diff.is_cuda: return topksum.selected_top_k_sum(WX_diff, self.selected_idx, self.eps)
+        if WX_diff.is_cuda: return selected_top_k_sum(WX_diff, self.selected_idx, self.eps)
 
         WX_selected_sum = self.wx_selected_sum(WX_diff)
         if self.eps == 0: return WX_selected_sum
@@ -126,7 +125,7 @@ class L0BoundedInput(BoundedInput):
         if WX_diff.shape[0] != self.batch_size:
             WX_diff = WX_diff.repeat(self.batch_size, 1, 1)
 
-        if WX_diff.is_cuda: return topksum.selected_bottom_k_sum(WX_diff, self.selected_idx, self.eps)
+        if WX_diff.is_cuda: return selected_bottom_k_sum(WX_diff, self.selected_idx, self.eps)
 
         WX_selected_sum = self.wx_selected_sum(WX_diff)
         if self.eps == 0: return WX_selected_sum
