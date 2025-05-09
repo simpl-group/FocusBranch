@@ -1,7 +1,7 @@
 import time
 from models import get_network
 from data.prepare import get_loader
-from data import DATASETS, DatasetName
+from data import DATASETS, DatasetName, DatasetUtils
 from utils import *
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from tqdm import tqdm
@@ -17,7 +17,7 @@ def check_and_branch_batch(
     batch_size: int=2000,
     demo: bool=False,
     timeout: int=0,
-    dataset: DatasetName=DatasetName.MNIST
+    dataset_utils: DatasetUtils=DATASETS[DatasetName.MNIST]
 ) -> bool:
     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
     safe_combs: list[list[int]] = []
@@ -75,7 +75,7 @@ def check_and_branch_batch(
         del combs_to_check, combs_to_check_batch, lb_l, lrp, new_safe_combs
         torch.cuda.empty_cache()
         t0 = time.time()
-        combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo, watchout, dataset)
+        combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo, watchout, dataset_utils)
         if demo:
             branching_time += time.time() - t0
             total_nodes += num_to_check
@@ -91,7 +91,7 @@ def check_and_branch_batch_untargeted(
     batch_size: int=2000,
     demo: bool=False,
     timeout: int=0,
-    dataset: DatasetName=DatasetName.MNIST
+    dataset_utils: DatasetUtils=DATASETS[DatasetName.MNIST]
 ) -> bool:
     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
     safe_combs: list[list[int]] = []
@@ -144,7 +144,7 @@ def check_and_branch_batch_untargeted(
         del combs_to_check, combs_to_check_batch, lb_l, lrp, new_safe_combs
         torch.cuda.empty_cache()
         t0 = time.time()
-        combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo, watchout, dataset)
+        combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo, watchout, dataset_utils)
         if demo:
             branching_time += time.time() - t0
             total_nodes += num_to_check
@@ -167,14 +167,21 @@ if __name__ == "__main__":
         total_nodes = 0
         branching_time = .0
 
-    net, spec = get_network(args.net, device=DEVICE)
-    data_loader = get_loader(spec.dataset_name, batch_size=1, target_label=args.target_label, num_batches=args.start_idx+args.test_batches)
-    x_ = torch.zeros(1, *DATASETS[spec.dataset_name].image_shape).to(DEVICE)
+    net, dataset_utils = get_network(args.net, device=DEVICE)
+    data_loader = get_loader(
+        dataset_utils.pt_file,
+        batch_size=1,
+        target_label=args.target_label,
+        num_batches=args.start_idx+args.test_batches
+    )
+    x_ = torch.zeros(1, *dataset_utils.image_shape).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
-    bounded_x0 = L0BoundedInput(x=x_.reshape(1, -1, 1),
-                                eps=args.epsilon,
-                                channel_size=DATASETS[spec.dataset_name].image_shape[0],
-                                num_pixels=DATASETS[spec.dataset_name].num_pixels)
+    bounded_x0 = L0BoundedInput(
+        x=x_.reshape(1, -1, 1),
+        eps=args.epsilon,
+        channel_size=dataset_utils.channel_size,
+        num_pixels=dataset_utils.num_pixels
+    )
 
     checker = check_and_branch_batch_untargeted if args.target_label is None else check_and_branch_batch
 
@@ -201,7 +208,7 @@ if __name__ == "__main__":
         try:
             signal.alarm(args.timeout)
             t0 = time.time()
-            if checker(seqAT, bounded_x0, args.batch_size, demo=args.demo, timeout=args.timeout, dataset=spec.dataset_name):
+            if checker(seqAT, bounded_x0, args.batch_size, demo=args.demo, timeout=args.timeout, dataset_utils=dataset_utils):
                 elapsed_time = time.time() - t0
                 total_time += elapsed_time
                 success = True

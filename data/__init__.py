@@ -18,7 +18,7 @@ class DatasetName(Enum):
 BASE_DIR = Path(__file__).parent
 
 @dataclass(frozen=True)
-class DatasetConfig:
+class DatasetUtils:
     csv_file: Path
     pt_file: Path
     classes: tuple[str, ...]
@@ -26,6 +26,10 @@ class DatasetConfig:
     std: tuple[float, ...]
     image_shape: tuple[int, int, int]
     dataset_class: type[VisionDataset]
+
+    @property
+    def channel_size(self) -> int:
+        return self.image_shape[0]
 
     @cached_property
     def num_pixels(self) -> int:
@@ -68,8 +72,8 @@ class DatasetConfig:
             masks[i, i // 64] |= (torch.tensor(1, dtype=torch.int64, device="cuda") << i % 64)
         return masks
 
-DATASETS: dict[DatasetName, DatasetConfig] = {
-    DatasetName.MNIST: DatasetConfig(
+DATASETS: dict[DatasetName, DatasetUtils] = {
+    DatasetName.MNIST: DatasetUtils(
         csv_file=BASE_DIR / "mnist_test.csv",
         pt_file=BASE_DIR / "mnist_test.pt",
         classes=tuple(str(i) for i in range(10)),
@@ -78,7 +82,7 @@ DATASETS: dict[DatasetName, DatasetConfig] = {
         image_shape=(1, 28, 28),
         dataset_class=MNIST,
     ),
-    DatasetName.CIFAR10: DatasetConfig(
+    DatasetName.CIFAR10: DatasetUtils(
         csv_file=BASE_DIR / "cifar10_test.csv",
         pt_file=BASE_DIR / "cifar10_test.pt",
         classes=(

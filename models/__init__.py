@@ -1,7 +1,7 @@
 # -*- coding:utf-8 -*-
 
 from pathlib import Path
-from data import DatasetName
+from data import DatasetName, DatasetUtils, DATASETS
 from dataclasses import dataclass
 from typing import Callable
 from torch.nn import Sequential
@@ -144,7 +144,7 @@ MODEL_SPECS: dict[str, ModelSpec] = {
 }
 
 
-def get_network(name: str, device: str="cpu", add_affine_normalization: bool=True) -> tuple[Sequential, ModelSpec]:
+def get_network(name: str, device: str="cpu", add_affine_normalization: bool=True) -> tuple[Sequential, DatasetUtils]:
     if name in MODEL_SPECS:
         model_spec = MODEL_SPECS[name]
     else:
@@ -156,4 +156,4 @@ def get_network(name: str, device: str="cpu", add_affine_normalization: bool=Tru
     model.load_state_dict(torch.load(model_spec.pt_path, weights_only=True))
     model.eval()
 
-    return model.to(device=device), model_spec
+    return model.to(device=device), DATASETS[model_spec.dataset_name]

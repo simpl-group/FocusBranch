@@ -4,11 +4,12 @@ from torchvision.transforms import ToTensor
 from torch.utils.data import DataLoader, TensorDataset
 from models import MODEL_SPECS, get_network
 from utils import DEVICE
+from pathlib import Path
 
 
-def get_loader(dataset_name: DatasetName, batch_size: int, target_label: int | None=None, num_batches: int | None=None) -> DataLoader:
+def get_loader(pt_file: Path, batch_size: int, target_label: int | None=None, num_batches: int | None=None) -> DataLoader:
     """Load dataset and return a DataLoader"""
-    images, labels = torch.load(DATASETS[dataset_name].pt_file, map_location="cpu")
+    images, labels = torch.load(pt_file, map_location="cpu")
     if target_label is not None:
         non_targeted_indices = (labels != target_label).nonzero().squeeze(1)
         images, labels = images[non_targeted_indices], labels[non_targeted_indices]

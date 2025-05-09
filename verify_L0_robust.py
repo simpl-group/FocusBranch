@@ -3,7 +3,6 @@ import torch
 from solver_check import gurobi_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from data.prepare import get_loader
-from data import DATASETS
 from utils import *
 from models import get_network
 from split_and_prune import split_and_prune
@@ -11,7 +10,7 @@ from tqdm import tqdm
 import signal
 
 def check_and_branch(combs_to_check: torch.Tensor, safe_combs: list[list[int]]) -> bool:
-    global splits, level, solver_time_temp, solver_checks_temp, spec
+    global splits, level, solver_time_temp, solver_checks_temp, dataset_utils
     unk_combs: list[list[int]] = []
     unk_num = 0
     solver_time_temp = .0
@@ -31,7 +30,7 @@ def check_and_branch(combs_to_check: torch.Tensor, safe_combs: list[list[int]]) 
     if level == bounded_x0.eps: return False
     del combs_to_check
     torch.cuda.empty_cache()
-    next_level_combs = split_and_prune(unk_combs, safe_combs, level, True, watchout, spec.dataset_name)
+    next_level_combs = split_and_prune(unk_combs, safe_combs, level, True, watchout, dataset_utils)
     level += 1
     splits += unk_num
     torch.cuda.empty_cache()
@@ -86,9 +85,14 @@ if __name__ == "__main__":
     signal.signal(signal.SIGALRM, timeout_handler)
     assert args.target_label is not None, "Target label must be specified."
     assert args.demo, "--demo flag must be set to True for now."  # TODO: remove this restriction
-    net, spec = get_network(args.net, device=DEVICE)
-    data_loader = get_loader(spec.dataset_name, batch_size=args.batch_size, target_label=args.target_label, num_batches=args.start_idx+1)
-    x_ = torch.zeros(args.batch_size, *DATASETS[spec.dataset_name].image_shape).to(DEVICE)
+    net, dataset_utils = get_network(args.net, device=DEVICE)
+    data_loader = get_loader(
+        dataset_utils.pt_file,
+        batch_size=args.batch_size,
+        target_label=args.target_label,
+        num_batches=args.start_idx+1
+    )
+    x_ = torch.zeros(args.batch_size, *dataset_utils.image_shape).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
     i = 0
     for images, pred_labels in data_loader:
@@ -97,9 +101,12 @@ if __name__ == "__main__":
             continue
         assert net.cpu()(images).argmax(dim=1).eq(pred_labels).all()
         x0 = images.to(DEVICE).flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-        bounded_x0 = L0BoundedInput(x0, args.epsilon,
-                                    channel_size=DATASETS[spec.dataset_name].image_shape[0],
-                                    num_pixels=DATASETS[spec.dataset_name].num_pixels)
+        bounded_x0 = L0BoundedInput(
+            x0,
+            args.epsilon,
+            channel_size=dataset_utils.channel_size,
+            num_pixels=dataset_utils.num_pixels
+        )
         seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device=DEVICE)
         break
     x0_ = bounded_x0.x.squeeze(2).cpu().numpy()

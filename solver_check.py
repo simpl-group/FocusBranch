@@ -141,10 +141,14 @@ if __name__ == "__main__":
     if args.demo:
         args.test_batches = 1
 
-    net, spec = get_network(args.net)
-    data_loader = get_loader(spec.dataset_name, batch_size=1, target_label=args.target_label,
-                             num_batches=args.start_idx + args.test_batches)
-    x_ = torch.zeros(1, *DATASETS[spec.dataset_name].image_shape)
+    net, dataset_utils = get_network(args.net)
+    data_loader = get_loader(
+        dataset_utils.pt_file,
+        batch_size=1,
+        target_label=args.target_label,
+        num_batches=args.start_idx + args.test_batches
+    )
+    x_ = torch.zeros(1, *dataset_utils.image_shape)
     seqAT = SequentialAT.from_sequential(net, x_)
 
     total_time = 0.

@@ -26,8 +26,13 @@ if __name__ == "__main__":
     parser.add_argument("--method", type=str, default="CROWN-Optimized",
                         choices=["CROWN-Optimized", 'backward'])
     args = parser.parse_args()
-    net, spec = get_network(args.net, device=DEVICE)
-    data_loader = get_loader(spec.dataset_name, batch_size=1, target_label=args.target_label, num_batches=args.start_idx+args.test_batches)
+    net, dataset_utils = get_network(args.net, device=DEVICE)
+    data_loader = get_loader(
+        dataset_utils.pt_file,
+        batch_size=1,
+        target_label=args.target_label,
+        num_batches=args.start_idx+args.test_batches
+    )
 
     total_time = 0.
     num_verified = 0
