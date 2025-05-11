@@ -4,10 +4,11 @@ from bimm import bitmasks2combs, superset_sum
 from utils import DEVICE, TQDM_BAR_FORMAT
 from data import DATASETS, DatasetName, DatasetUtils
 
-chunk_size = 2000  # Adjust based on GPU memory availability
+chunk_size = 4000  # Adjust based on GPU memory availability
 
 def canonical_split(prefix: torch.Tensor, N: int) -> torch.Tensor:
     # prefix are naturally sorted in each row
+    # Purely on CPU, in case of CUDA out of memory
     num_prefix, k = prefix.shape  # level != 0
     last_item = prefix[:, -1] if k > 0 else torch.tensor([-1], dtype=torch.int64, device=prefix.device)
     num_children = N - last_item - 1
@@ -28,77 +29,40 @@ def split_and_prune(
     watchout: bool=False,
     dataset_utils: DatasetUtils=DATASETS[DatasetName.MNIST]
 ) -> torch.Tensor:
-    unk_combs_tensor = torch.tensor(unk_combs, dtype=torch.int64, device=DEVICE)
-    new_bitmasks = dataset_utils.combs2bitmasks(canonical_split(unk_combs_tensor, dataset_utils.num_pixels))
+    unk_combs_tensor = torch.tensor(unk_combs, dtype=torch.int64)
+    new_combs = canonical_split(unk_combs_tensor, dataset_utils.num_pixels)
+    if not safe_combs: return new_combs.to(DEVICE)  # no safe_combs, no pruning
 
     if len(unk_combs) < len(safe_combs):
-        unk_bitmasks = dataset_utils.combs2bitmasks(unk_combs_tensor)
-        del unk_combs_tensor
-        new_bitmasks_pruned_list = prune_by_unk(new_bitmasks, unk_bitmasks, level, demo)
-        del unk_bitmasks
+        reference_bitmasks = dataset_utils.combs2bitmasks(unk_combs_tensor.to(DEVICE))
+        target_s_cnt = level + 1
     else:
-        del unk_combs_tensor
-        torch.cuda.empty_cache()
-        if safe_combs:
-            if watchout:
-                safe_bitmasks = torch.stack([dataset_utils.comb2bitmask(s) for s in safe_combs], dim=0).to(DEVICE)
-            else:
-                safe_bitmasks = dataset_utils.combs2bitmasks(torch.tensor(safe_combs, dtype=torch.int64, device=DEVICE))
+        if watchout:
+            reference_bitmasks = torch.stack([dataset_utils.comb2bitmask(s) for s in safe_combs], dim=0).to(DEVICE)
         else:
-            safe_bitmasks = dataset_utils.get_empty_bitmask(DEVICE)
+            reference_bitmasks = dataset_utils.combs2bitmasks(torch.tensor(safe_combs, dtype=torch.int64).to(DEVICE))
+        target_s_cnt = 0
+    del unk_combs_tensor
+    new_bitmasks_pruned_list = []
 
-        new_bitmasks_pruned_list = prune_by_safe(new_bitmasks, safe_bitmasks, demo)
-        del safe_bitmasks
+    pbar = tqdm(total=new_combs.shape[0], desc="Pruning next level combs", disable=not demo, bar_format=TQDM_BAR_FORMAT)
+    while new_combs.shape[0] > 0:
+        new_bitmasks_chunk = dataset_utils.combs2bitmasks(new_combs[:chunk_size].to(DEVICE))  # only the chunk is on GPU
+        superset_cnt = torch.zeros(new_bitmasks_chunk.shape[0], dtype=torch.uint8, device=DEVICE)
 
-    if new_bitmasks_pruned_list:
-        combs_to_check_tensor = torch.cat(new_bitmasks_pruned_list, dim=0)
-    else:
-        combs_to_check_tensor = dataset_utils.get_empty_bitmask(DEVICE)
+        for j in range(0, reference_bitmasks.shape[0], chunk_size*4):
+            superset_cnt += superset_sum(new_bitmasks_chunk, reference_bitmasks[j:j + chunk_size*4])
 
-    del new_bitmasks_pruned_list, new_bitmasks
+        # == 0: Filter out new_combs that are a subset of any safe_combs
+        # == level+1: Only keep those new_combs who are the superset of level + 1 sets from the previous level
+        valid_new_bm_chunk = new_bitmasks_chunk[superset_cnt == target_s_cnt]
+        new_bitmasks_pruned_list.append(valid_new_bm_chunk.cpu())
+        pbar.update(new_bitmasks_chunk.shape[0])
+        new_combs = new_combs[chunk_size:]
+    pbar.close()
+
+    pruned_new_bitmasks = torch.cat(new_bitmasks_pruned_list, dim=0).to(DEVICE)
+    del reference_bitmasks, new_bitmasks_chunk, valid_new_bm_chunk, new_bitmasks_pruned_list, superset_cnt
     torch.cuda.empty_cache()
 
-    return bitmasks2combs(combs_to_check_tensor, level + 1)
-
-def prune_by_safe(new_bitmasks: torch.Tensor, safe_bitmasks: torch.Tensor, demo: bool=False) -> list[torch.Tensor]:
-    new_bitmasks_pruned_list = []
-
-    with tqdm(total=new_bitmasks.shape[0], desc="Pruning next level combs", disable=not demo,
-                    bar_format=TQDM_BAR_FORMAT) as pbar:
-        for i in range(0, new_bitmasks.shape[0], chunk_size):
-            new_bitmasks_ichunk = new_bitmasks[i:i + chunk_size]
-            superset_cnt = torch.zeros(new_bitmasks_ichunk.shape[0], dtype=torch.uint8, device=DEVICE)
-
-            for j in range(0, safe_bitmasks.shape[0], chunk_size*8):
-                safe_bitmasks_jchunk = safe_bitmasks[j:j + chunk_size*8]
-                superset_cnt += superset_sum(new_bitmasks_ichunk, safe_bitmasks_jchunk)
-
-            # Filter out new_combs that are a subset of any safe_combs
-            valid_new_combs = new_bitmasks_ichunk[superset_cnt == 0]
-            if valid_new_combs.shape[0] > 0:
-                new_bitmasks_pruned_list.append(valid_new_combs)
-            pbar.update(new_bitmasks_ichunk.shape[0])
-
-    return new_bitmasks_pruned_list
-
-
-def prune_by_unk(new_bitmasks: torch.Tensor, unk_bitmasks: torch.Tensor, level: int, demo: bool=False) -> list[torch.Tensor]:
-    new_bitmasks_pruned_list = []
-
-    with tqdm(total=new_bitmasks.shape[0], desc="Pruning next level combs", disable=not demo,
-                bar_format=TQDM_BAR_FORMAT) as pbar:
-        for i in range(0, new_bitmasks.shape[0], chunk_size):
-            new_bitmasks_ichunk = new_bitmasks[i:i + chunk_size]
-            superset_cnt = torch.zeros(new_bitmasks_ichunk.shape[0], dtype=torch.uint8, device=DEVICE)
-
-            for j in range(0, unk_bitmasks.shape[0], chunk_size*8):
-                unk_bitmasks_jchunk = unk_bitmasks[j:j + chunk_size*8]
-                superset_cnt += superset_sum(new_bitmasks_ichunk, unk_bitmasks_jchunk)
-
-            # Only keep those new_combs whose superset_cnt == level + 1
-            valid_new_combs = new_bitmasks_ichunk[superset_cnt == level + 1]
-            if valid_new_combs.shape[0] > 0:
-                new_bitmasks_pruned_list.append(valid_new_combs)
-            pbar.update(new_bitmasks_ichunk.shape[0])
-
-    return new_bitmasks_pruned_list
+    return bitmasks2combs(pruned_new_bitmasks, level + 1)

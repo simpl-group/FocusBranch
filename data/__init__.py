@@ -41,9 +41,6 @@ class DatasetUtils:
     def bitmask_length(self) -> int:
         return (self.num_pixels + 63) // 64
 
-    def get_empty_bitmask(self, device: str = "cpu") -> torch.Tensor:
-        return torch.empty((0, self.bitmask_length), dtype=torch.int64, device=device)
-
     def combs2bitmasks(self, combs: torch.Tensor) -> torch.Tensor:
         return combs2bitmasks(combs, self.bitmask_length)
 
