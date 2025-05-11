@@ -19,7 +19,7 @@ def check_and_branch_batch(
     timeout: int=0,
     dataset_utils: DatasetUtils=DATASETS[DatasetName.MNIST]
 ) -> bool:
-    combs_to_check = torch.empty((1, 0), dtype=torch.int64)
+    combs_to_check = torch.empty((1, 0), dtype=torch.int64, device=DEVICE)
     safe_combs: list[list[int]] = []
     level = 0
     watchout = False  # safe combs might contain combs that comes from different levels
@@ -45,7 +45,7 @@ def check_and_branch_batch(
                 with bounded_x0.selecting(combs_to_check_batch):
                     seqAT.update_activation_rp(bounded_in=bounded_x0)
                     lrp = seqAT.tail.backsubstitution_lrp()
-                    lb_l = bounded_x0.compute_lbound(lrp).reshape(-1).cpu()
+                    lb_l = bounded_x0.compute_lbound(lrp).reshape(-1)
 
                 new_safe_combs += combs_to_check_batch[lb_l >= 0].tolist()
                 unk_combs += combs_to_check_batch[lb_l < 0].tolist()
@@ -93,7 +93,7 @@ def check_and_branch_batch_untargeted(
     timeout: int=0,
     dataset_utils: DatasetUtils=DATASETS[DatasetName.MNIST]
 ) -> bool:
-    combs_to_check = torch.empty((1, 0), dtype=torch.int64)
+    combs_to_check = torch.empty((1, 0), dtype=torch.int64, device=DEVICE)
     safe_combs: list[list[int]] = []
     level = 0
     watchout = False
@@ -116,7 +116,7 @@ def check_and_branch_batch_untargeted(
                 with bounded_x0.selecting(combs_to_check_batch):
                     seqAT.update_activation_rp(bounded_in=bounded_x0)
                     lrp = seqAT.tail.backsubstitution_lrp()
-                    lb_l = bounded_x0.compute_lbound(lrp).squeeze(2).cpu()
+                    lb_l = bounded_x0.compute_lbound(lrp).squeeze(2)
 
                 safes = lb_l.ge(0).all(dim=1)
                 new_safe_combs += combs_to_check_batch[safes].tolist()
