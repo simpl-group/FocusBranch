@@ -34,7 +34,8 @@ def check_and_branch_batch(
             min_value = float("inf")
             min_comb = None
         t0 = time.time()
-        with tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not demo) as pbar:
+        pbar = tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not demo)
+        with seqAT.working_on(DEVICE):
             for i in range(0, num_to_check, batch_size):
                 combs_to_check_batch = combs_to_check[i:i + batch_size]
 
@@ -64,6 +65,7 @@ def check_and_branch_batch(
                     elif (pbar.total - pbar.n) / pbar.format_dict['rate'] > timeout:
                         signal.alarm(0)
                         raise TimeoutException()
+        pbar.close()
 
         if len(unk_combs) == 0: return True
         elif level == bounded_x0.eps: return False
@@ -105,7 +107,8 @@ def check_and_branch_batch_untargeted(
         unk_combs: list[list[int]]  = []
         new_safe_combs: list[list[int]] = []
         t0 = time.time()
-        with tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not demo) as pbar:
+        pbar = tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not demo)
+        with seqAT.working_on(DEVICE):
             for i in range(0, num_to_check, batch_size):
                 combs_to_check_batch = combs_to_check[i:i + batch_size]
 
@@ -133,6 +136,7 @@ def check_and_branch_batch_untargeted(
                     elif (pbar.total - pbar.n) / pbar.format_dict['rate'] > timeout:
                         signal.alarm(0)
                         raise TimeoutException()
+        pbar.close()
 
         if len(unk_combs) == 0: return True
         elif level == bounded_x0.eps: return False

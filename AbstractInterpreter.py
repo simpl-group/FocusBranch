@@ -26,6 +26,10 @@ class RelationalPolyhedra:
     def negW(self) -> torch.Tensor:
         return self.W.clamp_max(0)
 
+    def to_(self, device: str) -> None:
+        self.W = self.W.to(device)
+        self.b = self.b.to(device)
+
 class Bounds(NamedTuple):
     l: torch.Tensor
     u: torch.Tensor
@@ -378,3 +382,24 @@ class SequentialAT:
                 lrp_wrt_inputs, urp_wrt_inputs = AT.parent.backsubstitution()
                 pre_activation_bounds = bounded_in.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs)
                 AT.lrp, AT.urp = AT.compute_rp(pre_activation_bounds)
+
+    def remove_activation_rp(self) -> None:
+        for AT in self.ATs:
+            if isinstance(AT, ActivationAT):
+                AT.lrp = None
+                AT.urp = None
+
+    def to_(self, device: str) -> None:
+        for AT in self.ATs[:-1]:
+            if isinstance(AT, AffineAT):
+                AT.rp.to_(device)
+
+    @contextmanager
+    def working_on(self, device: str):
+        self.to_(device)
+        try:
+            yield
+        finally:
+            self.remove_activation_rp()
+            self.to_("cpu")
+            torch.cuda.empty_cache()
