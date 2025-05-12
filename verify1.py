@@ -207,38 +207,31 @@ if __name__ == "__main__":
         else:
             seqAT.tail.make_marginals(true_labels=pred_labels, device=DEVICE)
 
-        for attempt in range(2):
+        success = False
+        elapsed_time = 0.
+        try:
+            signal.alarm(args.timeout)
+            t0 = time.time()
+            if checker(
+                seqAT,
+                bounded_x0,
+                args.batch_size,
+                demo=args.demo,
+                timeout=args.timeout,
+                dataset_utils=dataset_utils
+            ):
+                elapsed_time = time.time() - t0
+                total_time += elapsed_time
+                success = True
+                num_verified += 1
+            signal.alarm(0)
+        except TimeoutException:
+            if args.demo: print("Timeout")
+        except torch.OutOfMemoryError as e:
+            if args.demo: raise(e)
+        finally:
+            bounded_x0.clear_cache()
             torch.cuda.empty_cache()
-            success = False
-            elapsed_time = 0.
-            try:
-                signal.alarm(args.timeout)
-                t0 = time.time()
-                if checker(
-                    seqAT,
-                    bounded_x0,
-                    args.batch_size,
-                    demo=args.demo,
-                    timeout=args.timeout,
-                    dataset_utils=dataset_utils
-                ):
-                    elapsed_time = time.time() - t0
-                    total_time += elapsed_time
-                    success = True
-                    num_verified += 1
-                signal.alarm(0)
-                break
-            except TimeoutException:
-                if args.demo: print("Timeout")
-                break
-            except torch.OutOfMemoryError as e:
-                if args.demo: raise e
-                break
-            except RuntimeError as e:
-                if attempt == 0: continue
-                raise e
-
-        bounded_x0.clear_cache()
 
         if args.demo:
             print(f"Total: Splits {splits}; Nodes {total_nodes}; Time {time.time() - t0:.2f}s; Branching Time {branching_time:.2f}s")
