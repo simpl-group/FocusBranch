@@ -17,94 +17,23 @@ def check_and_branch_batch(
     batch_size: int=2000,
     demo: bool=False,
     timeout: int=0,
+    targeted: bool=False,
     dataset_utils: DatasetUtils=DATASETS[DatasetName.MNIST]
 ) -> bool:
     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
-    safe_combs: list[list[int]] = []
+    safe_bitmasks: torch.Tensor = torch.empty((0, dataset_utils.bitmask_length), dtype=torch.long)
     level = 0
-    watchout = False  # safe combs might contain combs that comes from different levels
     if demo:
         global branching_time, total_nodes, splits
     while level <= bounded_x0.eps:
         num_to_check = combs_to_check.shape[0]
         if num_to_check == 0: return True
-        unk_combs: list[list[int]]  = []
-        new_safe_combs: list[list[int]] = []
+        unk_combs_lst: list[torch.Tensor]  = []
+        new_safe_bitmasks_lst: list[torch.Tensor] = [safe_bitmasks]
         if demo:
-            min_value = float("inf")
-        t0 = time.time()
-        pbar = tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not demo)
-        with seqAT.working_on(DEVICE):
-            for i in range(0, num_to_check, batch_size):
-                combs_to_check_batch = combs_to_check[i:i + batch_size].to(DEVICE)
-
-                current_batch_size = len(combs_to_check_batch)
-                if bounded_x0.batch_size != current_batch_size:
-                    bounded_x0.expand(current_batch_size)
-
-                with bounded_x0.selecting(combs_to_check_batch):
-                    seqAT.update_activation_rp(bounded_in=bounded_x0)
-                    lrp = seqAT.tail.backsubstitution_lrp()
-                    lb_l = bounded_x0.compute_lbound(lrp).reshape(-1)
-
-                new_safe_combs += combs_to_check_batch[lb_l >= 0].tolist()
-                unk_combs += combs_to_check_batch[lb_l < 0].tolist()
-
-                if demo:
-                    if lb_l.min() < min_value:
-                        min_value = lb_l.min().item()
-                        min_comb = combs_to_check_batch[lb_l.argmin()]
-                    pbar.set_postfix({"Safe:UNK": f"{len(new_safe_combs)}:{len(unk_combs)}", "Min": f"{min_value:.2f}", "Comb": min_comb.tolist()})
-                    pbar.update(current_batch_size)
-                if timeout != 0 and i == batch_size * 100:  # calculate remaining time to decide if to early stop
-                    if not demo: # calculate remaining time without pbar
-                        rate = (time.time() - t0) / 100
-                        if ((num_to_check - i) / batch_size) * rate > timeout:
-                            return False
-                    elif (pbar.total - pbar.n) / pbar.format_dict['rate'] > timeout:
-                        signal.alarm(0)
-                        raise TimeoutException()
-        pbar.close()
-
-        if len(unk_combs) == 0: return True
-        elif level == bounded_x0.eps: return False
-        if safe_combs is not []:
-            watchout = True
-            safe_combs += new_safe_combs
-        else:
-            safe_combs = new_safe_combs
-        del combs_to_check, combs_to_check_batch, lb_l, lrp, new_safe_combs
-        torch.cuda.empty_cache()
-        t0 = time.time()
-        combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo, watchout, dataset_utils)
-        if demo:
-            branching_time += time.time() - t0
-            total_nodes += num_to_check
-            splits += len(unk_combs)
-        del unk_combs
-        torch.cuda.empty_cache()
-        level += 1
-    return False
-
-def check_and_branch_batch_untargeted(
-    seqAT: SequentialAT,
-    bounded_x0: L0BoundedInput,
-    batch_size: int=2000,
-    demo: bool=False,
-    timeout: int=0,
-    dataset_utils: DatasetUtils=DATASETS[DatasetName.MNIST]
-) -> bool:
-    combs_to_check = torch.empty((1, 0), dtype=torch.int64)
-    safe_combs: list[list[int]] = []
-    level = 0
-    watchout = False
-    if demo:
-        global branching_time, total_nodes, splits
-    while level <= bounded_x0.eps:
-        num_to_check = combs_to_check.shape[0]
-        if num_to_check == 0: return True
-        unk_combs: list[list[int]]  = []
-        new_safe_combs: list[list[int]] = []
+            safe_cnt, unk_cnt = 0, 0
+            if targeted:
+                min_value = float("inf")
         t0 = time.time()
         pbar = tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not demo)
         with seqAT.working_on(DEVICE):
@@ -121,14 +50,23 @@ def check_and_branch_batch_untargeted(
                     lb_l = bounded_x0.compute_lbound(lrp).squeeze(2)
 
                 safes = lb_l.ge(0).all(dim=1)
-                new_safe_combs += combs_to_check_batch[safes].tolist()
-                unk_combs += combs_to_check_batch[~safes].tolist()
+                new_safe_bitmasks_lst.append(dataset_utils.combs2bitmasks(combs_to_check_batch[safes]).cpu())
+                unk_combs_lst.append(combs_to_check_batch[~safes].cpu())
 
                 if demo:
-                    pbar.set_postfix({"Safe:UNK": f"{len(new_safe_combs)}:{len(unk_combs)}"})
+                    safe_cnt += new_safe_bitmasks_lst[-1].shape[0]
+                    unk_cnt += unk_combs_lst[-1].shape[0]
+                    posfix: dict = {"Safe:UNK": f"{safe_cnt}:{unk_cnt}"}
+                    if targeted:
+                        if lb_l.min() < min_value:
+                            min_value = lb_l.min().item()
+                            min_comb = combs_to_check_batch[lb_l.argmin()]
+                        posfix["Min"] = f"{min_value:.2f}"
+                        posfix["Comb"] = min_comb.tolist()
+                    pbar.set_postfix(posfix)
                     pbar.update(current_batch_size)
-                if timeout != 0 and i == batch_size * 100:
-                    if not demo:
+                if timeout != 0 and i == batch_size * 100:  # calculate remaining time to decide if to early stop
+                    if not demo: # calculate remaining time without pbar
                         rate = (time.time() - t0) / 100
                         if ((num_to_check - i) / batch_size) * rate > timeout:
                             return False
@@ -137,22 +75,18 @@ def check_and_branch_batch_untargeted(
                         raise TimeoutException()
         pbar.close()
 
-        if len(unk_combs) == 0: return True
+        unk_combs = torch.cat(unk_combs_lst, dim=0)
+        if unk_combs.shape[0] == 0: return True
         elif level == bounded_x0.eps: return False
-        if safe_combs is not []:
-            watchout = True
-            safe_combs += new_safe_combs
-        else:
-            safe_combs = new_safe_combs
-        del combs_to_check, combs_to_check_batch, lb_l, lrp, new_safe_combs
+        safe_bitmasks = torch.cat(new_safe_bitmasks_lst, dim=0)
+        del combs_to_check, combs_to_check_batch, lb_l, lrp, new_safe_bitmasks_lst, unk_combs_lst, safes
         torch.cuda.empty_cache()
         t0 = time.time()
-        combs_to_check = split_and_prune(unk_combs, safe_combs, level, demo, watchout, dataset_utils)
+        combs_to_check = split_and_prune(unk_combs, safe_bitmasks, level, demo, dataset_utils)
         if demo:
             branching_time += time.time() - t0
             total_nodes += num_to_check
             splits += len(unk_combs)
-        del unk_combs
         torch.cuda.empty_cache()
         level += 1
     return False
@@ -186,8 +120,6 @@ if __name__ == "__main__":
         num_pixels=dataset_utils.num_pixels
     )
 
-    checker = check_and_branch_batch_untargeted if args.target_label is None else check_and_branch_batch
-
     total_time = 0.
     num_verified = 0
     record: list[tuple[bool, float]] = []
@@ -211,12 +143,13 @@ if __name__ == "__main__":
         try:
             signal.alarm(args.timeout)
             t0 = time.time()
-            if checker(
+            if check_and_branch_batch(
                 seqAT,
                 bounded_x0,
                 args.batch_size,
                 demo=args.demo,
                 timeout=args.timeout,
+                targeted=args.target_label is not None,
                 dataset_utils=dataset_utils
             ):
                 elapsed_time = time.time() - t0

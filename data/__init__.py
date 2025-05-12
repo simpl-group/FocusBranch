@@ -44,12 +44,6 @@ class DatasetUtils:
     def combs2bitmasks(self, combs: torch.Tensor) -> torch.Tensor:
         return combs2bitmasks(combs, self.bitmask_length)
 
-    def comb2bitmask(self, comb: list[int]) -> torch.Tensor:
-        mask = torch.zeros(self.bitmask_length, dtype=torch.int64)
-        for idx in comb:
-            mask[idx // 64] |= (torch.tensor(1, dtype=torch.int64) << idx % 64)
-        return mask
-
 DATASETS: dict[DatasetName, DatasetUtils] = {
     DatasetName.MNIST: DatasetUtils(
         csv_file=BASE_DIR / "mnist_test.csv",

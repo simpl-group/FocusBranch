@@ -8,16 +8,14 @@ chunk_size = 4000  # Adjust based on GPU memory availability
 MEM_BUDGET = 128 * 1024**3  # 128 Giga Bytes
 
 def split_and_prune(
-    unk_combs: list[list[int]],
-    safe_combs: list[list[int]],
+    unk_combs: torch.Tensor,
+    safe_bitmasks: torch.Tensor,
     level: int,
     demo: bool=False,
-    watchout: bool=False,
     dataset_utils: DatasetUtils=DATASETS[DatasetName.MNIST]
 ) -> torch.Tensor:
-    unk_combs_tensor = torch.tensor(unk_combs, dtype=torch.int64)
-    # unk_combs_tensor are naturally sorted in each row
-    last_item = unk_combs_tensor[:, -1] if level > 0 else torch.tensor([-1], dtype=torch.int64)
+    # unk_combs are naturally sorted in each row
+    last_item = unk_combs[:, -1] if level > 0 else torch.tensor([-1], dtype=torch.int64)
     num_children = dataset_utils.num_pixels - last_item - 1
     children_start_offset = num_children.cumsum(dim=0) - num_children
     total_children = int(children_start_offset[-1] + num_children[-1])
@@ -26,23 +24,20 @@ def split_and_prune(
             f"Memory budget exceeded: {total_children * (level + 3) * 8/1024**3:.1f}GB > {MEM_BUDGET/1024**3:.1f}GB. "
             "Consider reducing the number of prefixes or increasing the memory budget."
         )
-    prefix_idx = torch.arange(unk_combs_tensor.shape[0]).repeat_interleave(num_children)
+    prefix_idx = torch.arange(unk_combs.shape[0]).repeat_interleave(num_children)
     arange_within = torch.arange(total_children) - children_start_offset[prefix_idx]
     new_combs = torch.empty((total_children, level + 1), dtype=torch.int64)
-    new_combs[:, :level] = unk_combs_tensor[prefix_idx]
+    new_combs[:, :level] = unk_combs[prefix_idx]
     new_combs[:, level] = last_item[prefix_idx] + arange_within + 1
-    if not safe_combs: return new_combs  # no safe_combs, no pruning
+    if safe_bitmasks.shape[0] == 0: return new_combs  # no safe_bitmasks, no pruning
 
-    if len(unk_combs) < len(safe_combs):
-        reference_bitmasks = dataset_utils.combs2bitmasks(unk_combs_tensor.to(DEVICE))
+    if len(unk_combs) < len(safe_bitmasks):
+        reference_bitmasks = dataset_utils.combs2bitmasks(unk_combs.to(DEVICE))
         target_s_cnt = level + 1
     else:
-        if watchout:
-            reference_bitmasks = torch.stack([dataset_utils.comb2bitmask(s) for s in safe_combs], dim=0).to(DEVICE)
-        else:
-            reference_bitmasks = dataset_utils.combs2bitmasks(torch.tensor(safe_combs, dtype=torch.int64).to(DEVICE))
+        reference_bitmasks = safe_bitmasks.to(DEVICE)
         target_s_cnt = 0
-    del unk_combs_tensor
+    del unk_combs
     pruned_new_combs_list = []
 
     pbar = tqdm(total=new_combs.shape[0], desc="Pruning next level combs", disable=not demo, bar_format=TQDM_BAR_FORMAT)
