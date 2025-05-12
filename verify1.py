@@ -1,4 +1,4 @@
-import time
+from time import perf_counter
 from models import get_network
 from data.prepare import get_loader
 from data import DATASETS, DatasetName, DatasetUtils
@@ -34,7 +34,7 @@ def check_and_branch_batch(
             safe_cnt, unk_cnt = 0, 0
             if targeted:
                 min_value = float("inf")
-        t0 = time.time()
+        t0 = perf_counter()
         pbar = tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not demo)
         with seqAT.working_on(DEVICE):
             for i in range(0, num_to_check, batch_size):
@@ -67,7 +67,7 @@ def check_and_branch_batch(
                     pbar.update(current_batch_size)
                 if timeout != 0 and i == batch_size * 100:  # calculate remaining time to decide if to early stop
                     if not demo: # calculate remaining time without pbar
-                        rate = (time.time() - t0) / 100
+                        rate = (perf_counter() - t0) / 100
                         if ((num_to_check - i) / batch_size) * rate > timeout:
                             return False
                     elif (pbar.total - pbar.n) / pbar.format_dict['rate'] > timeout:
@@ -81,10 +81,10 @@ def check_and_branch_batch(
         safe_bitmasks = torch.cat(new_safe_bitmasks_lst, dim=0)
         del combs_to_check, combs_to_check_batch, lb_l, lrp, new_safe_bitmasks_lst, unk_combs_lst, safes
         torch.cuda.empty_cache()
-        t0 = time.time()
+        t0 = perf_counter()
         combs_to_check = split_and_prune(unk_combs, safe_bitmasks, level, demo, dataset_utils)
         if demo:
-            branching_time += time.time() - t0
+            branching_time += perf_counter() - t0
             total_nodes += num_to_check
             splits += len(unk_combs)
         torch.cuda.empty_cache()
@@ -142,7 +142,7 @@ if __name__ == "__main__":
         elapsed_time = 0.
         try:
             signal.alarm(args.timeout)
-            t0 = time.time()
+            t0 = perf_counter()
             if check_and_branch_batch(
                 seqAT,
                 bounded_x0,
@@ -152,7 +152,7 @@ if __name__ == "__main__":
                 targeted=args.target_label is not None,
                 dataset_utils=dataset_utils
             ):
-                elapsed_time = time.time() - t0
+                elapsed_time = perf_counter() - t0
                 total_time += elapsed_time
                 success = True
                 num_verified += 1
@@ -166,7 +166,7 @@ if __name__ == "__main__":
             torch.cuda.empty_cache()
 
         if args.demo:
-            print(f"Total: Splits {splits}; Nodes {total_nodes}; Time {time.time() - t0:.2f}s; Branching Time {branching_time:.2f}s")
+            print(f"Total: Splits {splits}; Nodes {total_nodes}; Time {perf_counter() - t0:.2f}s; Branching Time {branching_time:.2f}s")
             print(f"Safe: {success}")
             break
 

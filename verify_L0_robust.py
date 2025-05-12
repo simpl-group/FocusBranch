@@ -1,4 +1,4 @@
-import time
+from time import perf_counter
 import torch
 from solver_check import gurobi_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
@@ -66,12 +66,12 @@ def check(comb: torch.Tensor, debug=False, mute=True) -> bool:
         bias = bias[keep_indices]
     else: x0 = x0_
 
-    t0 = time.time()
+    t0 = perf_counter()
     ret = gurobi_check_unsat(x0=x0, coefficients=coef,
             bias=bias, eps=bounded_x0.eps, selected_idx=comb.tolist(),
             pixel_value_range=(bounded_x0.L, bounded_x0.U), mute=mute)
-    solver_time += time.time() - t0
-    solver_time_temp += time.time() - t0
+    solver_time += perf_counter() - t0
+    solver_time_temp += perf_counter() - t0
     return ret
 
 if __name__ == "__main__":
@@ -120,7 +120,7 @@ if __name__ == "__main__":
     splits = 0
     solver_time, solver_time_temp = .0, .0
     level = 0
-    start = time.time()
+    start = perf_counter()
 
     if args.debug:
         if len(args.select_indices) > 0:
@@ -138,5 +138,5 @@ if __name__ == "__main__":
     except TimeoutException:
         print("Timeout")
 
-    print(f"Total: Splits {splits}; Time: {time.time() - start:.2f}; Nodes: {total_checks}; GRB Checks: {solver_checks}({solver_time:.2f}s)")
+    print(f"Total: Splits {splits}; Time: {perf_counter() - start:.2f}; Nodes: {total_checks}; GRB Checks: {solver_checks}({solver_time:.2f}s)")
     print(f"Collectively Safe: {ret}")

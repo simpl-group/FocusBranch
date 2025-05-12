@@ -1,5 +1,5 @@
 import torch
-import time
+from time import perf_counter
 from utils import *
 from tqdm import tqdm
 from auto_LiRPA import BoundedModule, BoundedTensor
@@ -59,13 +59,13 @@ if __name__ == "__main__":
         elapsed_time = 0.
         try:
             signal.alarm(args.timeout)
-            t0 = time.time()
+            t0 = perf_counter()
             lb, _ = lirpa_model.compute_bounds(
                 x=(bounded_images,), bound_upper=False, method=args.method)
             signal.alarm(0)
             if (lb >= 0).all():
                 success = True
-                elapsed_time = time.time() - t0
+                elapsed_time = perf_counter() - t0
                 total_time += elapsed_time
                 num_verified += 1
         except TimeoutException:
@@ -73,7 +73,7 @@ if __name__ == "__main__":
 
         if args.demo:
             print(f"Lower bounds: {lb[0].tolist()}")
-            print(f"Verified safe: {success}, Time: {time.time() - t0:.2f}s")
+            print(f"Verified safe: {success}, Time: {perf_counter() - t0:.2f}s")
             break
 
         del images, pred_labels, bounded_images, lirpa_model, marginal_tail

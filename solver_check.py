@@ -11,7 +11,7 @@ import torch
 import signal
 import warnings
 from tqdm import tqdm
-import time
+from time import perf_counter
 from json import dump
 
 env = gp.Env(params={"OutputFlag": 0, "SolutionLimit": 1})
@@ -187,11 +187,11 @@ if __name__ == "__main__":
         elapsed_time = 0.
         try:
             signal.alarm(args.timeout)
-            t0 = time.time()
+            t0 = perf_counter()
             safe = gurobi_complete_check(seqAT, bounded_x0, pre_activation_bounds_list, demo=args.demo,
                                          ground_truth_label=pred_labels.item() if args.target_label is None else None)
             timeout = False
-            elapsed_time = time.time() - t0
+            elapsed_time = perf_counter() - t0
             total_time += elapsed_time
             num_verified += 1
             signal.alarm(0)
