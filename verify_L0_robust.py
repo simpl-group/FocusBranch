@@ -18,6 +18,7 @@ def check_and_branch(combs_to_check: torch.Tensor, safe_combs: list[list[int]]) 
     watchout = safe_combs is not []
     with tqdm(total=len(combs_to_check), disable=(level == 0), desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT) as pbar:
         for comb in combs_to_check:
+            comb = comb.to(device=DEVICE)
             if check(comb):
                 safe_combs.append(comb.tolist())
             else:

@@ -19,7 +19,7 @@ def check_and_branch_batch(
     timeout: int=0,
     dataset_utils: DatasetUtils=DATASETS[DatasetName.MNIST]
 ) -> bool:
-    combs_to_check = torch.empty((1, 0), dtype=torch.int64, device=DEVICE)
+    combs_to_check = torch.empty((1, 0), dtype=torch.int64)
     safe_combs: list[list[int]] = []
     level = 0
     watchout = False  # safe combs might contain combs that comes from different levels
@@ -32,12 +32,11 @@ def check_and_branch_batch(
         new_safe_combs: list[list[int]] = []
         if demo:
             min_value = float("inf")
-            min_comb = None
         t0 = time.time()
         pbar = tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not demo)
         with seqAT.working_on(DEVICE):
             for i in range(0, num_to_check, batch_size):
-                combs_to_check_batch = combs_to_check[i:i + batch_size]
+                combs_to_check_batch = combs_to_check[i:i + batch_size].to(DEVICE)
 
                 current_batch_size = len(combs_to_check_batch)
                 if bounded_x0.batch_size != current_batch_size:
@@ -95,7 +94,7 @@ def check_and_branch_batch_untargeted(
     timeout: int=0,
     dataset_utils: DatasetUtils=DATASETS[DatasetName.MNIST]
 ) -> bool:
-    combs_to_check = torch.empty((1, 0), dtype=torch.int64, device=DEVICE)
+    combs_to_check = torch.empty((1, 0), dtype=torch.int64)
     safe_combs: list[list[int]] = []
     level = 0
     watchout = False
@@ -110,7 +109,7 @@ def check_and_branch_batch_untargeted(
         pbar = tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not demo)
         with seqAT.working_on(DEVICE):
             for i in range(0, num_to_check, batch_size):
-                combs_to_check_batch = combs_to_check[i:i + batch_size]
+                combs_to_check_batch = combs_to_check[i:i + batch_size].to(DEVICE)
 
                 current_batch_size = len(combs_to_check_batch)
                 if bounded_x0.batch_size != current_batch_size:
