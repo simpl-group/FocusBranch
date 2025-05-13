@@ -32,28 +32,27 @@ def split_and_prune(
     if safe_bitmasks.shape[0] == 0: return new_combs  # no safe_bitmasks, no pruning
 
     if len(unk_combs) < len(safe_bitmasks):
-        reference_bitmasks = dataset_utils.combs2bitmasks(unk_combs.to(DEVICE))
+        reference_bitmasks_chunks = dataset_utils.combs2bitmasks(unk_combs.to(DEVICE)).split(chunk_size*4)
         target_s_cnt = level + 1
     else:
-        reference_bitmasks = safe_bitmasks.to(DEVICE)
+        reference_bitmasks_chunks = safe_bitmasks.to(DEVICE).split(chunk_size*4)
         target_s_cnt = 0
     del unk_combs
     pruned_new_combs_list = []
 
     pbar = tqdm(total=new_combs.shape[0], desc="Pruning next level combs", disable=not demo, bar_format=TQDM_BAR_FORMAT)
-    while new_combs.shape[0] > 0:
-        new_bitmasks_chunk = dataset_utils.combs2bitmasks(new_combs[:chunk_size].to(DEVICE))  # only the chunk is on GPU
+    for i in range(0, new_combs.shape[0], chunk_size):
+        new_bitmasks_chunk = dataset_utils.combs2bitmasks(new_combs[i:i + chunk_size].to(DEVICE))  # only the chunk is on GPU
         superset_cnt = torch.zeros(new_bitmasks_chunk.shape[0], dtype=torch.uint8, device=DEVICE)
 
-        for j in range(0, reference_bitmasks.shape[0], chunk_size*4):
-            superset_cnt += superset_sum(new_bitmasks_chunk, reference_bitmasks[j:j + chunk_size*4])
+        for reference_bitmasks_chunk in reference_bitmasks_chunks:
+            superset_cnt += superset_sum(new_bitmasks_chunk, reference_bitmasks_chunk)
 
         # == 0: Filter out new_combs that are a subset of any safe_combs
         # == level+1: Only keep those new_combs who are the superset of level + 1 sets from the previous level
         valid_new_bm_chunk = new_bitmasks_chunk[superset_cnt == target_s_cnt]
         pruned_new_combs_list.append(bitmasks2combs(valid_new_bm_chunk, level + 1).cpu())
         pbar.update(new_bitmasks_chunk.shape[0])
-        new_combs = new_combs[chunk_size:]
     pbar.close()
 
     return torch.cat(pruned_new_combs_list, dim=0)  # on CPU
