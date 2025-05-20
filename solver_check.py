@@ -17,10 +17,16 @@ from json import dump
 env = gp.Env(params={"OutputFlag": 0, "SolutionLimit": 1})
 
 
-def gurobi_check_unsat(x0: np.ndarray, coefficients: np.ndarray, bias: np.ndarray,
-                eps: int, selected_idx: list[int]=[], pixel_value_range=(0, 1),
-                mute=False) -> bool:
-    num_batch, num_pixel = len(x0), len(x0[0])
+def gurobi_check_unsat(
+    x0: np.ndarray,
+    coefficients: np.ndarray,
+    bias: np.ndarray,
+    eps: int,
+    selected_idx: np.ndarray,
+    pixel_value_range=(0, 1),
+    mute=False
+) -> bool:
+    num_batch, num_pixel = x0.shape
     L, U = pixel_value_range
 
     model = gp.Model("check_unsat", env=env)
@@ -31,7 +37,6 @@ def gurobi_check_unsat(x0: np.ndarray, coefficients: np.ndarray, bias: np.ndarra
     # l0=eps constraint
     model.addConstr(controllers.sum() == eps)
     if len(selected_idx) > 0:
-        selected_idx = np.array(list(selected_idx))
         assert len(selected_idx) <= eps
         model.addConstr(controllers[selected_idx] == 1)
 
