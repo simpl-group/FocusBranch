@@ -77,7 +77,7 @@ def check_and_branch_batch(
 
         unk_combs = torch.cat(unk_combs_lst, dim=0)
         if unk_combs.shape[0] == 0: return True
-        elif level == bounded_x0.eps: return False
+        if level == bounded_x0.eps: return False
         safe_bitmasks = torch.cat(new_safe_bitmasks_lst, dim=0)
         del combs_to_check, combs_to_check_batch, lb_l, lrp, new_safe_bitmasks_lst, unk_combs_lst, safes
         torch.cuda.empty_cache()
@@ -87,6 +87,7 @@ def check_and_branch_batch(
             branching_time += perf_counter() - t0
             total_nodes += num_to_check
             splits += len(unk_combs)
+        del unk_combs
         torch.cuda.empty_cache()
         level += 1
     return False

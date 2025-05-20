@@ -37,7 +37,6 @@ def split_and_prune(
     else:
         reference_bitmasks_chunks = safe_bitmasks.to(DEVICE).split(chunk_size*4)
         target_s_cnt = 0
-    del unk_combs
     pruned_new_combs_list = []
 
     pbar = tqdm(total=new_combs.shape[0], desc="Pruning next level combs", disable=not demo, bar_format=TQDM_BAR_FORMAT)
