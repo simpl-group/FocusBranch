@@ -160,6 +160,21 @@ if __name__ == "__main__":
             lb_u = lb_range.u.reshape(-1).cpu().numpy()
             print("x0 with ltrigger:\t", lb_l)
             print("x0 with utrigger:\t", lb_u)
+            if (lb_range.l > 0).any():
+                is_safe = True
+            elif (lb_range.u > 0).sum() < 2:
+                is_safe = False
+            else:
+                is_safe = gurobi_check_unsat(
+                    x0=x0_,
+                    coefficients=lrp.W.squeeze(1).cpu().numpy(),
+                    bias=lrp.b.reshape(-1).cpu().numpy(),
+                    eps=bounded_x0.eps,
+                    selected_idx=comb.cpu().numpy(),
+                    pixel_value_range=(bounded_x0.L, bounded_x0.U),
+                    mute=args.mute
+                )
+            print("Safe:", is_safe)
             exit(0)
 
         success = False
@@ -196,4 +211,3 @@ if __name__ == "__main__":
                             "Avg":f"{mean_time:.2f}s/img"})
         if pbar.n == args.test_batches: break
     pbar.close()
-
