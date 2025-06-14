@@ -44,6 +44,17 @@ class DatasetUtils:
     def combs2bitmasks(self, combs: torch.Tensor) -> torch.Tensor:
         return combs2bitmasks(combs, self.bitmask_length)
 
+    def affine_normalization_layer(self) -> torch.nn.Module:
+        normalization_layer = torch.nn.Conv2d(
+            self.channel_size, self.channel_size, kernel_size=1, stride=1, padding=0
+        )
+        normalization_layer.weight.data.fill_(0.)
+        normalization_layer.bias.data.fill_(0.)
+        for i in range(self.channel_size):
+            normalization_layer.weight.data[i, i, 0, 0] = 1.0 / self.std[i]
+            normalization_layer.bias.data[i] = -self.mean[i] / self.std[i]
+        return normalization_layer
+
 DATASETS: dict[DatasetName, DatasetUtils] = {
     DatasetName.MNIST: DatasetUtils(
         csv_file=BASE_DIR / "mnist_test.csv",

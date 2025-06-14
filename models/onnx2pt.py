@@ -3,12 +3,12 @@
 import os
 import onnx
 from models import MODEL_SPECS
-from models.networks import FCN, CNN, get_affine_normalization
+from models.networks import FCN, CNN
 from collections import defaultdict
 import torch
 import itertools
 from torch import nn
-from data import DatasetName
+from data import DatasetName, DATASETS
 from data.load_from_csv import load_mnist_from_csv, load_cifar10_from_csv
 
 def test_accuracy(net: nn.Sequential, images: torch.Tensor, labels: torch.Tensor) -> float:
@@ -65,8 +65,8 @@ if __name__ == "__main__":
         cifar10_imgs, cifar10_labels = load_cifar10_from_csv(normalize=args.normalize)
     for model_spec in MODEL_SPECS.values():
         if not os.path.exists(model_spec.onnx_path): continue
-        if args.cnn_only and model_spec.constructor == FCN: continue
-        if args.fcn_only and model_spec.constructor == CNN: continue
+        if args.cnn_only and model_spec.constructor != CNN: continue
+        if args.fcn_only and model_spec.constructor != FCN: continue
         torch_net = model_spec.constructor(model_spec.layer_params)
         if model_spec.dataset_name == DatasetName.MNIST:
             if args.cifar10_only: continue
@@ -79,7 +79,7 @@ if __name__ == "__main__":
         load_from_onnx(model_spec.onnx_path, torch_net)
 
         if args.add_normalization_layer and model_spec.need_normalization:
-            normalization_layer = get_affine_normalization[model_spec.dataset_name]
+            normalization_layer = DATASETS[model_spec.dataset_name].affine_normalization_layer()
             torch_net.insert(0, normalization_layer)
 
         acc = test_accuracy(torch_net.eval(), imgs, labels)

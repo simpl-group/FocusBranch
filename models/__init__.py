@@ -5,7 +5,7 @@ from data import DatasetName, DatasetUtils, DATASETS
 from dataclasses import dataclass
 from typing import Callable
 from torch.nn import Sequential
-from .networks import FCN, CNN, FLN, get_affine_normalization
+from .networks import FCN, CNN, FLN
 import torch
 
 BASE_DIR = Path(__file__).parent
@@ -145,13 +145,11 @@ MODEL_SPECS: dict[str, ModelSpec] = {
 
 
 def get_network(name: str, device: str="cpu", add_affine_normalization: bool=True) -> tuple[Sequential, DatasetUtils]:
-    if name in MODEL_SPECS:
-        model_spec = MODEL_SPECS[name]
-    else:
-        assert False, f"Invalid network name: {name}"
+    assert name in MODEL_SPECS, f"Invalid network name: {name}"
+    model_spec = MODEL_SPECS[name]
     model = model_spec.constructor(model_spec.layer_params)
     if model_spec.need_normalization and add_affine_normalization:
-        normalization_layer = get_affine_normalization[model_spec.dataset_name]
+        normalization_layer = DATASETS[model_spec.dataset_name].affine_normalization_layer()
         model.insert(0, normalization_layer)
     model.load_state_dict(torch.load(model_spec.pt_path, weights_only=True))
     model.eval()
