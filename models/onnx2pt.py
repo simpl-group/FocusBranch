@@ -9,7 +9,6 @@ import torch
 import itertools
 from torch import nn
 from data import DatasetName, DATASETS
-from data.load_from_csv import load_mnist_from_csv, load_cifar10_from_csv
 
 def test_accuracy(net: nn.Sequential, images: torch.Tensor, labels: torch.Tensor) -> float:
     preds: torch.Tensor = net(images).argmax(dim=1)
@@ -60,19 +59,19 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if not args.cifar10_only:
-        mnist_imgs, mnist_labels = load_mnist_from_csv(normalize=args.normalize)
+        mnist_imgs, mnist_labels = DATASETS[DatasetName.MNIST].load_xy_from_csv(args.normalize)
     if not args.mnist_only:
-        cifar10_imgs, cifar10_labels = load_cifar10_from_csv(normalize=args.normalize)
+        cifar10_imgs, cifar10_labels = DATASETS[DatasetName.CIFAR10].load_xy_from_csv(args.normalize)
     for model_spec in MODEL_SPECS.values():
         if not os.path.exists(model_spec.onnx_path): continue
         if args.cnn_only and model_spec.constructor != CNN: continue
         if args.fcn_only and model_spec.constructor != FCN: continue
+        if args.cifar10_only and model_spec.dataset_name != DatasetName.CIFAR10: continue
+        if args.mnist_only and model_spec.dataset_name != DatasetName.MNIST: continue
         torch_net = model_spec.constructor(model_spec.layer_params)
         if model_spec.dataset_name == DatasetName.MNIST:
-            if args.cifar10_only: continue
             imgs, labels = mnist_imgs, mnist_labels
         elif model_spec.dataset_name == DatasetName.CIFAR10:
-            if args.mnist_only: continue
             imgs, labels = cifar10_imgs, cifar10_labels
         else: assert False, "Unknown dataset"
 

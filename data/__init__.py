@@ -5,8 +5,11 @@ from enum import Enum, auto
 from dataclasses import dataclass
 from functools import cached_property
 from torchvision.datasets import MNIST, CIFAR10, VisionDataset
-import torch
+from torchvision.transforms import ToTensor, Compose, Normalize
 from bimm import combs2bitmasks
+import torch
+import csv
+import numpy as np
 
 
 class DatasetName(Enum):
@@ -41,6 +44,10 @@ class DatasetUtils:
     def bitmask_length(self) -> int:
         return (self.num_pixels + 63) // 64
 
+    @property
+    def raw_shape(self) -> tuple[int, ...]:
+        return (*self.image_shape[1:], self.channel_size)
+
     def combs2bitmasks(self, combs: torch.Tensor) -> torch.Tensor:
         return combs2bitmasks(combs, self.bitmask_length)
 
@@ -54,6 +61,28 @@ class DatasetUtils:
             normalization_layer.weight.data[i, i, 0, 0] = 1.0 / self.std[i]
             normalization_layer.bias.data[i] = -self.mean[i] / self.std[i]
         return normalization_layer
+
+    def load_xy_from_csv(self, normalize: bool=False) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Load dataset from a CSV file into PyTorch tensors.
+
+        :param normalize: Whether to normalize the images using the mean and std of the dataset.
+        :return: Tuple of images and labels as PyTorch tensors.
+        """
+        images, labels = [], []
+        with open(self.csv_file, 'r') as reader:
+            csv_reader = csv.reader(reader, delimiter=',')
+            for line in csv_reader:
+                label, image = int(line[0]), np.array(line[1:], dtype=np.uint8).reshape(self.raw_shape)
+                images.append(image)
+                labels.append(label)
+
+        if normalize:
+            transformation = Compose([ToTensor(), Normalize(self.mean, self.std)])
+        else:
+            transformation = ToTensor()
+
+        return torch.stack([transformation(img) for img in images]), torch.tensor(labels, dtype=torch.uint8)
 
 DATASETS: dict[DatasetName, DatasetUtils] = {
     DatasetName.MNIST: DatasetUtils(
