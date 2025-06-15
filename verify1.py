@@ -75,6 +75,7 @@ def check_and_branch_batch(
                         raise TimeoutException()
         pbar.close()
 
+        if demo: total_nodes += num_to_check
         unk_combs = torch.cat(unk_combs_lst, dim=0)
         if unk_combs.shape[0] == 0: return True
         if level == bounded_x0.eps: return False
@@ -85,7 +86,6 @@ def check_and_branch_batch(
         combs_to_check = split_and_prune(unk_combs, safe_bitmasks, level, demo, dataset_utils)
         if demo:
             branching_time += perf_counter() - t0
-            total_nodes += num_to_check
             splits += len(unk_combs)
         del unk_combs
         torch.cuda.empty_cache()
