@@ -8,9 +8,9 @@ from auto_LiRPA.utils import stop_criterion_min
 from warnings import filterwarnings
 import signal
 from json import dump
-from models import get_network
+from models import get_network_and_dataset_utils
 from models.networks import make_marginal_tail, make_marginals_tail
-from data.prepare import get_loader
+from data.prepare import build_loader
 
 filterwarnings("ignore", category=DeprecationWarning)
 filterwarnings("ignore", category=ResourceWarning)
@@ -26,9 +26,14 @@ if __name__ == "__main__":
     parser.add_argument("--method", type=str, default="CROWN-Optimized",
                         choices=["CROWN-Optimized", 'backward'])
     args = parser.parse_args()
-    net, dataset_utils = get_network(args.net, device=DEVICE)
-    data_loader = get_loader(
-        dataset_utils.pt_file,
+    net, dataset_utils = get_network_and_dataset_utils(args.net, device=DEVICE)
+    if args.data_source == 'pt':
+        images, labels = dataset_utils.load_xy_from_pt()
+    elif args.data_source == 'csv':
+        images, labels = dataset_utils.load_xy_from_csv()
+    data_loader = build_loader(
+        images,
+        labels,
         batch_size=1,
         target_label=args.target_label,
         num_batches=args.start_idx+args.test_batches

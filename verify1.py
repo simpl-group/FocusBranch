@@ -1,6 +1,6 @@
 from time import perf_counter
-from models import get_network
-from data.prepare import get_loader
+from models import get_network_and_dataset_utils
+from data.prepare import build_loader
 from data import DATASETS, DatasetName, DatasetUtils
 from utils import *
 from AbstractInterpreter import L0BoundedInput, SequentialAT
@@ -105,9 +105,14 @@ if __name__ == "__main__":
         total_nodes = 0
         branching_time = .0
 
-    net, dataset_utils = get_network(args.net, device=DEVICE)
-    data_loader = get_loader(
-        dataset_utils.pt_file,
+    net, dataset_utils = get_network_and_dataset_utils(args.net, device=DEVICE)
+    if args.data_source == 'pt':
+        images, labels = dataset_utils.load_xy_from_pt()
+    elif args.data_source == 'csv':
+        images, labels = dataset_utils.load_xy_from_csv()
+    data_loader = build_loader(
+        images,
+        labels,
         batch_size=1,
         target_label=args.target_label,
         num_batches=args.start_idx+args.test_batches

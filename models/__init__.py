@@ -144,7 +144,7 @@ MODEL_SPECS: dict[str, ModelSpec] = {
 }
 
 
-def get_network(name: str, device: str="cpu", add_affine_normalization: bool=True) -> tuple[Sequential, DatasetUtils]:
+def get_network_and_dataset_utils(name: str, device: str="cpu", add_affine_normalization: bool=True) -> tuple[Sequential, DatasetUtils]:
     assert name in MODEL_SPECS, f"Invalid network name: {name}"
     model_spec = MODEL_SPECS[name]
     model = model_spec.constructor(model_spec.layer_params)

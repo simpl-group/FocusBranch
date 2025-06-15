@@ -82,7 +82,16 @@ class DatasetUtils:
         else:
             transformation = ToTensor()
 
-        return torch.stack([transformation(img) for img in images]), torch.tensor(labels, dtype=torch.uint8)
+        return torch.stack([transformation(img) for img in images]), torch.tensor(labels, dtype=torch.int64)
+
+    def load_xy_from_pt(self, normalize: bool=False) -> tuple[torch.Tensor, torch.Tensor]:
+        images, labels = torch.load(self.pt_file, map_location="cpu")
+        if not isinstance(images, torch.Tensor) or not isinstance(labels, torch.Tensor):
+            raise ValueError(f"Data in {self.pt_file} must be tensors.")
+        if normalize:
+            images = Normalize(self.mean, self.std)(images)
+        return images, labels
+
 
 DATASETS: dict[DatasetName, DatasetUtils] = {
     DatasetName.MNIST: DatasetUtils(

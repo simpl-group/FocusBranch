@@ -3,9 +3,8 @@ from gurobipy import GRB
 import numpy as np
 from AbstractInterpreter import SequentialAT, L0BoundedInput, ActivationAT, Bounds, AffineAT, ReLUAT
 from utils import *
-from models import get_network
-from data.prepare import get_loader
-from data import DATASETS
+from models import get_network_and_dataset_utils
+from data.prepare import build_loader
 import argparse
 import torch
 import signal
@@ -146,9 +145,14 @@ if __name__ == "__main__":
     if args.demo:
         args.test_batches = 1
 
-    net, dataset_utils = get_network(args.net)
-    data_loader = get_loader(
-        dataset_utils.pt_file,
+    net, dataset_utils = get_network_and_dataset_utils(args.net)
+    if args.data_source == 'pt':
+        images, labels = dataset_utils.load_xy_from_pt()
+    elif args.data_source == 'csv':
+        images, labels = dataset_utils.load_xy_from_csv()
+    data_loader = build_loader(
+        images,
+        labels,
         batch_size=1,
         target_label=args.target_label,
         num_batches=args.start_idx + args.test_batches

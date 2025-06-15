@@ -3,9 +3,9 @@ import torch
 from solver_check import gurobi_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from data import DATASETS, DatasetName, DatasetUtils
-from data.prepare import get_loader
+from data.prepare import build_loader
 from utils import *
-from models import get_network
+from models import get_network_and_dataset_utils
 from split_and_prune import split_and_prune
 from tqdm import tqdm
 import signal
@@ -116,9 +116,11 @@ if __name__ == "__main__":
         solver_time, solver_time_temp = .0, .0
         branching_time = .0
 
-    net, dataset_utils = get_network(args.net, device=DEVICE)
-    data_loader = get_loader(
-        dataset_utils.pt_file,
+    net, dataset_utils = get_network_and_dataset_utils(args.net, device=DEVICE)
+    images, labels = dataset_utils.load_xy_from_pt()
+    data_loader = build_loader(
+        images,
+        labels,
         batch_size=args.batch_size,
         target_label=args.target_label,
         num_batches=args.start_idx+1

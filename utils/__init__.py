@@ -22,3 +22,5 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--demo", action="store_true")
     parser.add_argument("-tb", "--test-batches", type=int, default=500)
     parser.add_argument("-o", "--output", type=str, default="output.json")
+    parser.add_argument("-ds", "--data-source", type=str, choices=["pt", "csv"], default="csv",
+        help="'pt' uses a .pt file preprocessed by `data.prepare`, 'csv' uses a .csv file with images and labels.")

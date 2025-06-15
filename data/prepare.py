@@ -2,14 +2,17 @@ import torch
 from data import DatasetName, DATASETS, BASE_DIR
 from torchvision.transforms import ToTensor
 from torch.utils.data import DataLoader, TensorDataset
-from models import MODEL_SPECS, get_network
+from models import MODEL_SPECS, get_network_and_dataset_utils
 from utils import DEVICE
-from pathlib import Path
 
 
-def get_loader(pt_file: Path, batch_size: int, target_label: int | None=None, num_batches: int | None=None) -> DataLoader:
-    """Load dataset and return a DataLoader"""
-    images, labels = torch.load(pt_file, map_location="cpu")
+def build_loader(
+    images: torch.Tensor,
+    labels: torch.Tensor,
+    batch_size: int,
+    target_label: int | None=None,
+    num_batches: int | None=None
+) -> DataLoader:
     if target_label is not None:
         non_targeted_indices = (labels != target_label).nonzero().squeeze(1)
         images, labels = images[non_targeted_indices], labels[non_targeted_indices]
@@ -27,7 +30,7 @@ def filter_testset(dataset_name: DatasetName, batch_size: int=256, device: str="
     nets: list[torch.nn.Sequential] = []
     for name, model_spec in MODEL_SPECS.items():
         if model_spec.dataset_name == dataset_name and not model_spec.debug:
-            nets.append(get_network(name, device=device)[0])
+            nets.append(get_network_and_dataset_utils(name, device=device)[0])
     print(f"Loaded {len(nets)} {dataset_name} networks for filtering.")
     test_loader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
 
