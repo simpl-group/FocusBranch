@@ -9,6 +9,7 @@ import torch
 import itertools
 from torch import nn
 from data import DatasetName, DATASETS
+import re
 
 def test_accuracy(net: nn.Sequential, images: torch.Tensor, labels: torch.Tensor) -> float:
     preds: torch.Tensor = net(images).argmax(dim=1)
@@ -23,14 +24,17 @@ def load_from_onnx(onnx_path: str, torch_net: nn.Sequential) -> None:
 
     wb_data = defaultdict(lambda: {"bias": None, "weight": None})
     for initializer in onnx_net.graph.initializer:
-        type = initializer.name.split('.')[-1]
+        layer_name, type = initializer.name.rsplit('.', 1)
         if type not in ["weight", "bias"]:
             warnings.warn(f"Unknown type {type} in {initializer.name}", UserWarning)
             continue
-        else:
-            idx = [int(n) for n in initializer.name.split('.') if str.isdigit(n)][0]
-            nparray = onnx.numpy_helper.to_array(initializer)
-            wb_data[idx][type] = torch.from_numpy(nparray)
+        match_idx = re.search(r'(\d+)', layer_name)
+        assert match_idx, f"Invalid initializer name {initializer.name}"
+        idx = int(match_idx.group(1))
+        if idx in wb_data and wb_data[idx][type] is not None:
+            idx += 500
+        nparray = onnx.numpy_helper.to_array(initializer)
+        wb_data[idx][type] = torch.from_numpy(nparray)
     # param_list can be generated here
     wb_data = [[wb_data[idx]["weight"], wb_data[idx]["bias"]] for idx in sorted(wb_data.keys())]
     wb_data = list(itertools.chain(*wb_data))
@@ -68,13 +72,13 @@ if __name__ == "__main__":
         if args.fcn_only and model_spec.constructor != FCN: continue
         if args.cifar10_only and model_spec.dataset_name != DatasetName.CIFAR10: continue
         if args.mnist_only and model_spec.dataset_name != DatasetName.MNIST: continue
-        torch_net = model_spec.constructor(model_spec.layer_params)
         if model_spec.dataset_name == DatasetName.MNIST:
             imgs, labels = mnist_imgs, mnist_labels
         elif model_spec.dataset_name == DatasetName.CIFAR10:
             imgs, labels = cifar10_imgs, cifar10_labels
         else: assert False, "Unknown dataset"
 
+        torch_net = model_spec.constructor(model_spec.layer_params)
         load_from_onnx(model_spec.onnx_path, torch_net)
 
         if args.add_normalization_layer and model_spec.need_normalization:

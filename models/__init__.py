@@ -140,7 +140,85 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         ],
         dataset_name=DatasetName.CIFAR10,
         need_normalization=True
-    )
+    ),
+    # Baseline models
+    'bfc1': ModelSpec(
+        model_path=str(BASE_DIR / "calzone_models/MNIST_6x200_PGD"),
+        constructor=FCN,
+        layer_params=[
+            {"in_features": 784, "out_features": 200},
+            {"in_features": 200, "out_features": 200},
+            {"in_features": 200, "out_features": 200},
+            {"in_features": 200, "out_features": 200},
+            {"in_features": 200, "out_features": 200},
+            {"in_features": 200, "out_features": 10},
+        ],
+        dataset_name=DatasetName.MNIST,
+        need_normalization=True  # from line 97, coverd.py
+    ),
+    'bcv1': ModelSpec(
+        model_path=str(BASE_DIR / "calzone_models/MNIST_ConvSmall"),
+        constructor=CNN,
+        layer_params=[
+        {"in_channels": 1, "out_channels": 16, "kernel_size": 4, "stride": 2, "padding": 0},
+        {"in_channels": 16, "out_channels": 32, "kernel_size": 4, "stride": 2, "padding": 0},
+        {"in_features": 800, "out_features": 100},
+        {"in_features": 100, "out_features": 10},
+    ],
+        dataset_name=DatasetName.MNIST,
+        need_normalization=True
+    ),
+    'bcv2': ModelSpec(
+        model_path=str(BASE_DIR / "calzone_models/MNIST_ConvSmallPGD"),
+        constructor=CNN,
+        layer_params=[
+        {"in_channels": 1, "out_channels": 16, "kernel_size": 4, "stride": 2, "padding": 0},
+        {"in_channels": 16, "out_channels": 32, "kernel_size": 4, "stride": 2, "padding": 0},
+        {"in_features": 800, "out_features": 100},
+        {"in_features": 100, "out_features": 10},
+    ],
+        dataset_name=DatasetName.MNIST,
+        need_normalization=True
+    ),
+    'bcv3': ModelSpec(
+        model_path=str(BASE_DIR / "calzone_models/MNIST_ConvMedPGD"),
+        constructor=CNN,
+        layer_params=[
+        {"in_channels": 1, "out_channels": 16, "kernel_size": 4, "stride": 2, "padding": 0},
+        {"in_channels": 16, "out_channels": 32, "kernel_size": 4, "stride": 2, "padding": 0},
+        {"in_features": 800, "out_features": 1000},
+        {"in_features": 1000, "out_features": 10},
+    ],
+        dataset_name=DatasetName.MNIST,
+        need_normalization=True
+    ),
+    'bcv4': ModelSpec(
+        model_path=str(BASE_DIR / "calzone_models/MNIST_ConvBig"),
+        constructor=CNN,
+        layer_params=[
+        {"in_channels": 1, "out_channels": 32, "kernel_size": 3, "stride": 1, "padding": 0},
+        {"in_channels": 32, "out_channels": 32, "kernel_size": 4, "stride": 2, "padding": 0},
+        {"in_channels": 32, "out_channels": 64, "kernel_size": 3, "stride": 1, "padding": 0},
+        {"in_channels": 64, "out_channels": 64, "kernel_size": 4, "stride": 2, "padding": 0},
+        {"in_features": 1024, "out_features": 512},
+        {"in_features": 512, "out_features": 512},
+        {"in_features": 512, "out_features": 10},
+    ],
+        dataset_name=DatasetName.MNIST,
+        need_normalization=True
+    ),
+    'bcv5': ModelSpec(
+        model_path=str(BASE_DIR / "calzone_models/CIFAR_ConvSmallPGD"),
+        constructor=CNN,
+        layer_params=[
+            {"in_channels": 3, "out_channels": 16, "kernel_size": 4, "stride": 2, "padding": 0},
+            {"in_channels": 16, "out_channels": 32, "kernel_size": 4, "stride": 2, "padding": 0},
+            {"in_features": 1152, "out_features": 100},
+            {"in_features": 100, "out_features": 10},
+        ],
+        dataset_name=DatasetName.CIFAR10,
+        need_normalization=True
+    ),
 }
 
 
