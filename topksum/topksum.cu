@@ -55,7 +55,7 @@ void wipe_selected_cuda(
 }
 
 template<typename scalar_t, int K> // k > 0
-__global__ void selected_top_k_sum_kernel(
+__global__ void selected_top_k_sum_warped_kernel(
     scalar_t* __restrict__ x,      // [num_rows, nv] assume all(x>0)
     const long* __restrict__ selected_idx,  // [batch,num_selected]
     scalar_t* __restrict__ out,    // [num_rows]
@@ -120,7 +120,7 @@ __global__ void selected_top_k_sum_kernel(
     if (lane == 0) *o = sum;
 }
 template<int K>
-void selected_top_k_sum_cuda(
+void selected_top_k_sum_warped_cuda(
     at::Tensor& x,
     const at::Tensor& selected_idx,
     at::Tensor& out,
@@ -134,9 +134,82 @@ void selected_top_k_sum_cuda(
 
     AT_DISPATCH_ALL_TYPES(
         x.scalar_type(),
-        "selected_top_k_sum_cuda",
+        "selected_top_k_sum_warped_cuda",
         ([&] {
-            selected_top_k_sum_kernel<scalar_t, K><<<blocks, threads>>>(
+            selected_top_k_sum_warped_kernel<scalar_t, K><<<blocks, threads>>>(
+                x.data_ptr<scalar_t>(),
+                selected_idx.data_ptr<long>(),
+                out.data_ptr<scalar_t>(),
+                num_rows,
+                nv,
+                rows_per_batch,
+                num_selected
+            );
+        })
+    );
+}
+
+template<typename scalar_t, int K> //k > 0
+__global__ void selected_top_k_sum_single_kernel(
+    scalar_t* __restrict__ x,      // [num_rows, nv] assume all(x>0)
+    const long* __restrict__ selected_idx,  // [batch,num_selected]
+    scalar_t* __restrict__ out,    // [num_rows]
+    const int num_rows,
+    const int nv,
+    const int rows_per_batch,
+    const int num_selected
+) {
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= num_rows) return;
+
+    scalar_t* x_row     = x + size_t(row) * nv;
+    scalar_t* o         = out + row;
+    const long* S       = selected_idx + int(row / rows_per_batch) * num_selected;
+
+    scalar_t sum = static_cast<scalar_t>(0);
+    #pragma unroll
+    for (int i = 0; i < num_selected; ++i) {
+        scalar_t* v = x_row + S[i];
+        sum += *v;
+        *v = static_cast<scalar_t>(0); // mark as used
+    }
+    scalar_t buf[K] = {static_cast<scalar_t>(0)};
+    #pragma unroll
+    for (int col = 0; col < nv; ++col) {
+        scalar_t v = x_row[col];
+        // if (v <= buf[K-1]) continue; // early skip
+        #pragma unroll
+        for (int i = 0; i < K; ++i) {
+            scalar_t temp = buf[i];
+            bool swap = v > temp;
+            buf[i] = swap ? v : temp;
+            v      = swap ? temp : v;
+        }
+    }
+
+    #pragma unroll
+    for (int i = 0; i < K; ++i) sum += buf[i];
+
+    *o = sum;
+}
+template<int K>
+void selected_top_k_sum_single_cuda(
+    at::Tensor& x,
+    const at::Tensor& selected_idx,
+    at::Tensor& out,
+    const int num_rows,
+    const int nv,
+    const int rows_per_batch,
+    const int num_selected
+) {
+    dim3 threads(MAX_THREADS_PER_BLOCK);
+    dim3 blocks((num_rows + threads.x - 1) / threads.x);
+
+    AT_DISPATCH_FLOATING_TYPES(
+        x.scalar_type(),
+        "selected_top_k_sum_single_cuda",
+        ([&] {
+            selected_top_k_sum_single_kernel<scalar_t, K><<<blocks, threads>>>(
                 x.data_ptr<scalar_t>(),
                 selected_idx.data_ptr<long>(),
                 out.data_ptr<scalar_t>(),
@@ -150,7 +223,7 @@ void selected_top_k_sum_cuda(
 }
 
 template<typename scalar_t, int K> // k > 0
-__global__ void selected_bottom_k_sum_kernel(
+__global__ void selected_bottom_k_sum_warped_kernel(
     scalar_t* __restrict__ x,      // [num_rows, nv] assume all(x < 0)
     const long* __restrict__ selected_idx,  // [batch,num_selected]
     scalar_t* __restrict__ out,    // [num_rows]
@@ -215,7 +288,7 @@ __global__ void selected_bottom_k_sum_kernel(
     if (lane == 0) *o = sum;
 }
 template<int K>
-void selected_bottom_k_sum_cuda(
+void selected_bottom_k_sum_warped_cuda(
     at::Tensor& x,
     const at::Tensor& selected_idx,
     at::Tensor& out,
@@ -229,9 +302,82 @@ void selected_bottom_k_sum_cuda(
 
     AT_DISPATCH_ALL_TYPES(
         x.scalar_type(),
-        "selected_bottom_k_sum_cuda",
+        "selected_bottom_k_sum_warped_cuda",
         ([&] {
-            selected_bottom_k_sum_kernel<scalar_t, K><<<blocks, threads>>>(
+            selected_bottom_k_sum_warped_kernel<scalar_t, K><<<blocks, threads>>>(
+                x.data_ptr<scalar_t>(),
+                selected_idx.data_ptr<long>(),
+                out.data_ptr<scalar_t>(),
+                num_rows,
+                nv,
+                rows_per_batch,
+                num_selected
+            );
+        })
+    );
+}
+
+template<typename scalar_t, int K> //k > 0
+__global__ void selected_bottom_k_sum_single_kernel(
+    scalar_t* __restrict__ x,      // [num_rows, nv] assume all(x<0)
+    const long* __restrict__ selected_idx,  // [batch,num_selected]
+    scalar_t* __restrict__ out,    // [num_rows]
+    const int num_rows,
+    const int nv,
+    const int rows_per_batch,
+    const int num_selected
+) {
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= num_rows) return;
+
+    scalar_t* x_row     = x + size_t(row) * nv;
+    scalar_t* o         = out + row;
+    const long* S       = selected_idx + int(row / rows_per_batch) * num_selected;
+
+    scalar_t sum = static_cast<scalar_t>(0);
+    #pragma unroll
+    for (int i = 0; i < num_selected; ++i) {
+        scalar_t* v = x_row + S[i];
+        sum += *v;
+        *v = static_cast<scalar_t>(0); // mark as used
+    }
+    scalar_t buf[K] = {static_cast<scalar_t>(0)};
+    #pragma unroll
+    for (int col = 0; col < nv; ++col) {
+        scalar_t v = x_row[col];
+        // if (v >= buf[K-1]) continue; // early skip
+        #pragma unroll
+        for (int i = 0; i < K; ++i) {
+            scalar_t temp = buf[i];
+            bool swap = v < temp;
+            buf[i] = swap ? v : temp;
+            v      = swap ? temp : v;
+        }
+    }
+
+    #pragma unroll
+    for (int i = 0; i < K; ++i) sum += buf[i];
+
+    *o = sum;
+}
+template<int K>
+void selected_bottom_k_sum_single_cuda(
+    at::Tensor& x,
+    const at::Tensor& selected_idx,
+    at::Tensor& out,
+    const int num_rows,
+    const int nv,
+    const int rows_per_batch,
+    const int num_selected
+) {
+    dim3 threads(MAX_THREADS_PER_BLOCK);
+    dim3 blocks((num_rows + threads.x - 1) / threads.x);
+
+    AT_DISPATCH_FLOATING_TYPES(
+        x.scalar_type(),
+        "selected_bottom_k_sum_single_cuda",
+        ([&] {
+            selected_bottom_k_sum_single_kernel<scalar_t, K><<<blocks, threads>>>(
                 x.data_ptr<scalar_t>(),
                 selected_idx.data_ptr<long>(),
                 out.data_ptr<scalar_t>(),
@@ -299,24 +445,46 @@ void selected_sum_cuda(
     );
 }
 
-template void selected_top_k_sum_cuda<1>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_top_k_sum_cuda<2>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_top_k_sum_cuda<3>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_top_k_sum_cuda<4>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_top_k_sum_cuda<5>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_top_k_sum_cuda<6>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_top_k_sum_cuda<7>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_top_k_sum_cuda<8>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_top_k_sum_cuda<9>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_top_k_sum_cuda<10>(at::Tensor&,const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_warped_cuda<1>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_warped_cuda<2>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_warped_cuda<3>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_warped_cuda<4>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_warped_cuda<5>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_warped_cuda<6>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_warped_cuda<7>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_warped_cuda<8>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_warped_cuda<9>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_warped_cuda<10>(at::Tensor&,const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
 
-template void selected_bottom_k_sum_cuda<1>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_bottom_k_sum_cuda<2>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_bottom_k_sum_cuda<3>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_bottom_k_sum_cuda<4>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_bottom_k_sum_cuda<5>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_bottom_k_sum_cuda<6>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_bottom_k_sum_cuda<7>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_bottom_k_sum_cuda<8>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_bottom_k_sum_cuda<9>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
-template void selected_bottom_k_sum_cuda<10>(at::Tensor&,const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_single_cuda<1>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_single_cuda<2>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_single_cuda<3>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_single_cuda<4>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_single_cuda<5>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_single_cuda<6>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_single_cuda<7>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_single_cuda<8>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_single_cuda<9>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_top_k_sum_single_cuda<10>(at::Tensor&,const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+
+template void selected_bottom_k_sum_warped_cuda<1>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_warped_cuda<2>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_warped_cuda<3>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_warped_cuda<4>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_warped_cuda<5>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_warped_cuda<6>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_warped_cuda<7>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_warped_cuda<8>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_warped_cuda<9>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_warped_cuda<10>(at::Tensor&,const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+
+template void selected_bottom_k_sum_single_cuda<1>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_single_cuda<2>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_single_cuda<3>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_single_cuda<4>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_single_cuda<5>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_single_cuda<6>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_single_cuda<7>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_single_cuda<8>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_single_cuda<9>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+template void selected_bottom_k_sum_single_cuda<10>(at::Tensor&,const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
