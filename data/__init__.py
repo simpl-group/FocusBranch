@@ -40,16 +40,9 @@ class DatasetUtils:
         _, h, w = self.image_shape
         return h * w
 
-    @cached_property
-    def bitmask_length(self) -> int:
-        return (self.num_pixels + 63) // 64
-
     @property
     def raw_shape(self) -> tuple[int, ...]:
         return (*self.image_shape[1:], self.channel_size)
-
-    def combs2bitmasks(self, combs: torch.Tensor) -> torch.Tensor:
-        return combs2bitmasks(combs, self.bitmask_length)
 
     def affine_normalization_layer(self) -> torch.nn.Module:
         normalization_layer = torch.nn.Conv2d(
@@ -91,6 +84,14 @@ class DatasetUtils:
         if normalize:
             images = Normalize(self.mean, self.std)(images)
         return images, labels
+
+    def sample_pixels(self, num: int, device: str = "cpu") -> torch.Tensor:
+        indices = torch.randperm(self.num_pixels, device=device)[:num]
+        if self.channel_size == 1: return indices
+        indices = indices.repeat(self.channel_size, -1)
+        for i in range(1, self.channel_size):
+            indices[i] += i * self.num_pixels
+        return indices.view(-1)
 
 
 DATASETS: dict[DatasetName, DatasetUtils] = {

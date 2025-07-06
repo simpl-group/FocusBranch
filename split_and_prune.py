@@ -1,8 +1,7 @@
 import torch
 from tqdm import tqdm
-from bimm import bitmasks2combs, superset_sum
+from bimm import combs2bitmasks, bitmasks2combs, superset_sum
 from utils import DEVICE, TQDM_BAR_FORMAT
-from data import DATASETS, DatasetName, DatasetUtils
 
 chunk_size = 4000  # Adjust based on GPU memory availability
 MEM_BUDGET = 128 * 1024**3  # 128 Giga Bytes
@@ -11,12 +10,12 @@ def split_and_prune(
     unk_combs: torch.Tensor,
     safe_bitmasks: torch.Tensor,
     level: int,
+    num_indices: int,
     demo: bool=False,
-    dataset_utils: DatasetUtils=DATASETS[DatasetName.MNIST]
 ) -> torch.Tensor:
     # unk_combs are naturally sorted in each row
     last_item = unk_combs[:, -1] if level > 0 else torch.tensor([-1], dtype=torch.int64)
-    num_children = dataset_utils.num_pixels - last_item - 1
+    num_children = num_indices - last_item - 1
     children_start_offset = num_children.cumsum(dim=0) - num_children
     total_children = int(children_start_offset[-1] + num_children[-1])
     if total_children * (level + 3) * 8 > MEM_BUDGET:
@@ -31,8 +30,9 @@ def split_and_prune(
     new_combs[:, level] = last_item[prefix_idx] + arange_within + 1
     if safe_bitmasks.shape[0] == 0: return new_combs  # no safe_bitmasks, no pruning
 
+    bitmask_length = (num_indices + 63) // 64
     if len(unk_combs) < len(safe_bitmasks):
-        reference_bitmasks_chunks = dataset_utils.combs2bitmasks(unk_combs.to(DEVICE)).split(chunk_size*4)
+        reference_bitmasks_chunks = combs2bitmasks(unk_combs.to(DEVICE), bitmask_length).split(chunk_size*4)
         target_s_cnt = level + 1
     else:
         reference_bitmasks_chunks = safe_bitmasks.to(DEVICE).split(chunk_size*4)
@@ -41,7 +41,7 @@ def split_and_prune(
 
     pbar = tqdm(total=new_combs.shape[0], desc="Pruning next level combs", disable=not demo, bar_format=TQDM_BAR_FORMAT)
     for i in range(0, new_combs.shape[0], chunk_size):
-        new_bitmasks_chunk = dataset_utils.combs2bitmasks(new_combs[i:i + chunk_size].to(DEVICE))  # only the chunk is on GPU
+        new_bitmasks_chunk = combs2bitmasks(new_combs[i:i + chunk_size].to(DEVICE), bitmask_length)  # only the chunk is on GPU
         superset_cnt = torch.zeros(new_bitmasks_chunk.shape[0], dtype=torch.uint8, device=DEVICE)
 
         for reference_bitmasks_chunk in reference_bitmasks_chunks:

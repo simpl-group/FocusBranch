@@ -2,7 +2,7 @@ from time import perf_counter
 import torch
 from solver_check import gurobi_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
-from data import DATASETS, DatasetName, DatasetUtils
+from bimm import combs2bitmasks
 from data.prepare import build_loader
 from utils import *
 from models import get_network_and_dataset_utils
@@ -14,10 +14,11 @@ def check_and_branch(
     seqAT: SequentialAT,
     bounded_x0: L0BoundedInput,
     demo: bool=False,
-    dataset_utils: DatasetUtils=DATASETS[DatasetName.MNIST]
 ) -> bool:
     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
-    safe_bitmasks: torch.Tensor = torch.empty((0, dataset_utils.bitmask_length), dtype=torch.long)
+    num_indices = bounded_x0.num_pixels
+    bitmask_length = (num_indices + 63) // 64
+    safe_bitmasks: torch.Tensor = torch.empty((0, bitmask_length), dtype=torch.long)
     level = 0
     if demo:
         global splits, total_checks, branching_time, solver_checks, solver_time
@@ -67,7 +68,7 @@ def check_and_branch(
                     solver_time_temp += perf_counter() - t0
 
                 if is_safe:
-                    new_safe_bitmasks_lst.append(dataset_utils.combs2bitmasks(comb.unsqueeze(0)).cpu())
+                    new_safe_bitmasks_lst.append(combs2bitmasks(comb.unsqueeze(0), bitmask_length).cpu())
                     safe_cnt += 1
                 else:
                     unk_combs_lst.append(comb.cpu())
@@ -86,7 +87,7 @@ def check_and_branch(
         del combs_to_check
         torch.cuda.empty_cache()
         t0 = perf_counter()
-        combs_to_check = split_and_prune(unk_combs, safe_bitmasks, level, demo, dataset_utils)
+        combs_to_check = split_and_prune(unk_combs, safe_bitmasks, level, num_indices, demo)
         if demo:
             branching_time += perf_counter() - t0
             total_checks += num_to_check
@@ -187,8 +188,7 @@ if __name__ == "__main__":
             if check_and_branch(
                 seqAT,
                 bounded_x0,
-                demo=args.demo,
-                dataset_utils=dataset_utils
+                demo=args.demo
             ):
                 elapsed_time = perf_counter() - t0
                 total_time += elapsed_time

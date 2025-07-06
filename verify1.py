@@ -1,7 +1,7 @@
 from time import perf_counter
 from models import get_network_and_dataset_utils
 from data.prepare import build_loader
-from data import DATASETS, DatasetName, DatasetUtils
+from bimm import combs2bitmasks
 from utils import *
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from tqdm import tqdm
@@ -18,17 +18,18 @@ def check_and_branch_batch(
     demo: bool=False,
     timeout: int=0,
     targeted: bool=False,
-    dataset_utils: DatasetUtils=DATASETS[DatasetName.MNIST]
 ) -> bool:
     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
-    safe_bitmasks: torch.Tensor = torch.empty((0, dataset_utils.bitmask_length), dtype=torch.long)
+    num_indices = bounded_x0.num_pixels
+    bitmask_length = (num_indices + 63) // 64
+    safe_bitmasks: torch.Tensor = torch.empty((0, bitmask_length), dtype=torch.long)
     level = 0
     if demo:
         global branching_time, total_nodes, splits
     while level <= bounded_x0.eps:
         num_to_check = combs_to_check.shape[0]
         if num_to_check == 0: return True
-        unk_combs_lst: list[torch.Tensor]  = []
+        unk_combs_lst: list[torch.Tensor] = []
         new_safe_bitmasks_lst: list[torch.Tensor] = [safe_bitmasks]
         if demo:
             safe_cnt, unk_cnt = 0, 0
@@ -50,7 +51,7 @@ def check_and_branch_batch(
                     lb_l = bounded_x0.compute_lbound(lrp).squeeze(2)
 
                 safes = lb_l.ge(0).all(dim=1)
-                new_safe_bitmasks_lst.append(dataset_utils.combs2bitmasks(combs_to_check_batch[safes]).cpu())
+                new_safe_bitmasks_lst.append(combs2bitmasks(combs_to_check_batch[safes], bitmask_length).cpu())
                 unk_combs_lst.append(combs_to_check_batch[~safes].cpu())
 
                 if demo:
@@ -83,7 +84,7 @@ def check_and_branch_batch(
         del combs_to_check, combs_to_check_batch, lb_l, lrp, new_safe_bitmasks_lst, unk_combs_lst, safes
         torch.cuda.empty_cache()
         t0 = perf_counter()
-        combs_to_check = split_and_prune(unk_combs, safe_bitmasks, level, demo, dataset_utils)
+        combs_to_check = split_and_prune(unk_combs, safe_bitmasks, level, num_indices, demo)
         if demo:
             branching_time += perf_counter() - t0
             splits += len(unk_combs)
@@ -155,8 +156,7 @@ if __name__ == "__main__":
                 args.batch_size,
                 demo=args.demo,
                 timeout=args.timeout,
-                targeted=args.target_label is not None,
-                dataset_utils=dataset_utils
+                targeted=args.target_label is not None
             ):
                 elapsed_time = perf_counter() - t0
                 total_time += elapsed_time
