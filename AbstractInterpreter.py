@@ -57,8 +57,30 @@ class L0BoundedInput(BoundedInput):
         self.num_pixels = int(self.num_features / channel_size)
         assert self.num_pixels == num_pixels, f"num_pixels should be {num_pixels}, but got {self.num_pixels}"
         X = self.x.transpose(1, 2)
-        self.U_X = (self.U - X).clamp_min(0)
-        self.L_X = (self.L - X).clamp_max(0)
+        self.__U_X = self.U_X = (self.U - X).clamp_min(0)
+        self.__L_X = self.L_X = (self.L - X).clamp_max(0)
+        self.partial_indices: torch.Tensor | None = None
+        """indices of the pixels to be considered in the computation of the diff, if None, all pixels are considered"""
+
+    @contextmanager
+    def partial(self, partial_indices: torch.Tensor|None):
+        if isinstance(partial_indices, torch.Tensor):
+            assert partial_indices.ndim == 1 \
+                and partial_indices.shape[0] >= self.eps + self.num_selected() \
+                and partial_indices.shape[0] <= self.x.shape[1], \
+                f"partial_indices should be 1D tensor with length between {self.eps + self.num_selected()}"\
+                f" and {self.x.shape[1]}, but got {partial_indices.shape[0]}"
+            if partial_indices.device != self.device:
+                partial_indices = partial_indices.to(self.device)
+            self.U_X = self.__U_X[:, :, partial_indices]
+            self.L_X = self.__L_X[:, :, partial_indices]
+            self.partial_indices = partial_indices
+        try:
+            yield
+        finally:
+            self.partial_indices = None
+            self.U_X = self.__U_X
+            self.L_X = self.__L_X
 
     def num_selected(self):
         return self.selected_idx[0].numel()
@@ -99,6 +121,8 @@ class L0BoundedInput(BoundedInput):
         return WX_diff.gather(dim=2, index=indices).sum(dim=2, keepdim=True)
 
     def compute_udiff(self, rpW: torch.Tensor) -> torch.Tensor:
+        if self.partial_indices is not None:
+            rpW = rpW[:, :, self.partial_indices]
         WX_diff = torch.where(rpW > 0, rpW * self.U_X, rpW * self.L_X)
         if self.channel_size > 1:
             WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, self.num_pixels).sum(dim=2)
@@ -119,6 +143,8 @@ class L0BoundedInput(BoundedInput):
         return WX_selected_sum
 
     def compute_ldiff(self, rpW: torch.Tensor) -> torch.Tensor:
+        if self.partial_indices is not None:
+            rpW = rpW[:, :, self.partial_indices]
         WX_diff = torch.where(rpW < 0, rpW * self.U_X, rpW * self.L_X)
         if self.channel_size > 1:
             WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, self.num_pixels).sum(dim=2)
