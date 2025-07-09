@@ -8,7 +8,7 @@ from split_and_prune import split_and_prune
 from tqdm import tqdm
 import signal
 
-
+# TODO: include in Verifier class
 def check_and_branch(
     seqAT: SequentialAT,
     bounded_x0: L0BoundedInput,
@@ -26,9 +26,8 @@ def check_and_branch(
         if num_to_check == 0: return True
         unk_combs_lst: list[torch.Tensor]  = []
         new_safe_bitmasks_lst: list[torch.Tensor] = [safe_bitmasks]
-        if demo:
-            safe_cnt, unk_cnt = 0, 0
-            solver_time_temp, solver_checks_temp = 0., 0
+        safe_cnt, unk_cnt = 0, 0
+        solver_time_temp, solver_checks_temp = 0., 0
         t0 = perf_counter()
         pbar = tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not demo)
         with seqAT.working_on(DEVICE):
