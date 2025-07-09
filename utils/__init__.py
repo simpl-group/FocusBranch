@@ -6,14 +6,6 @@ from verifier import Verifier
 import argparse
 import torch
 
-class TimeoutException(Exception):
-    pass
-
-def timeout_handler(signum, frame) -> None:
-    raise TimeoutException()
-
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-TQDM_BAR_FORMAT = "{desc}: {n_fmt}/{total_fmt} |{percentage:3.2f}% {elapsed}<{remaining} {postfix} {rate_fmt}"
 
 def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--net", type=str, choices=MODEL_SPECS.keys(), default="fc2",

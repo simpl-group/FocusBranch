@@ -1,6 +1,8 @@
 if __name__ != "__main__": exit(0)
 
-from utils import *
+from utils import get2, add_shared_arguments
+from utils.timeout import timeout_handler, TimeoutException
+from utils.constant import TQDM_BAR_FORMAT
 from time import perf_counter
 import signal
 import argparse

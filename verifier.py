@@ -2,6 +2,7 @@ from AbstractInterpreter import L0BoundedInput, SequentialAT
 from split_and_prune import split_and_prune
 from bimm import combs2bitmasks
 from utils.constant import DEVICE, TQDM_BAR_FORMAT
+from utils.timeout import TimeoutException
 from time import perf_counter
 from functools import lru_cache
 from collections import defaultdict

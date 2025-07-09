@@ -1,12 +1,15 @@
-from time import perf_counter
-import torch
 from solver_check import gurobi_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from bimm import combs2bitmasks
-from utils import *
+from utils import get4, add_shared_arguments
+from utils.timeout import timeout_handler
+from utils.constant import DEVICE, TQDM_BAR_FORMAT
 from split_and_prune import split_and_prune
+from time import perf_counter
+import argparse
 from tqdm import tqdm
 import signal
+import torch
 
 # TODO: include in Verifier class
 def check_and_branch(
@@ -33,7 +36,6 @@ def check_and_branch(
         with seqAT.working_on(DEVICE):
             for i in range(0, num_to_check):
                 comb = combs_to_check[i].to(device=DEVICE)  # (1, level)
-
                 with bounded_x0.selecting(comb):
                     seqAT.update_activation_rp(bounded_in=bounded_x0)
                     lrp = seqAT.tail.backsubstitution_lrp()
@@ -113,7 +115,6 @@ if __name__ == "__main__":
         splits = 0
         solver_time, solver_time_temp = .0, .0
         branching_time = .0
-
     net, seqAT, bounded_x0, data_loader = get4(args)
 
     total_time = 0.
