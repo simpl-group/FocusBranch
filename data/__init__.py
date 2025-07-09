@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from functools import cached_property
 from torchvision.datasets import MNIST, CIFAR10, VisionDataset
 from torchvision.transforms import ToTensor, Compose, Normalize
-from bimm import combs2bitmasks
 import torch
 import csv
 import numpy as np
