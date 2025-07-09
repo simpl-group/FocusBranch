@@ -1,3 +1,4 @@
+from .constant import DEVICE
 from models import MODEL_SPECS, get_network_and_dataset_utils
 from data.prepare import build_loader
 from AbstractInterpreter import L0BoundedInput, SequentialAT
