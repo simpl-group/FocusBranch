@@ -1,16 +1,14 @@
+from AbstractInterpreter import SequentialAT, L0BoundedInput, ActivationAT, AffineAT, ReLUAT
+from utils import *
+import argparse
+import signal
+import warnings
+from time import perf_counter
 import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
-from AbstractInterpreter import SequentialAT, L0BoundedInput, ActivationAT, Bounds, AffineAT, ReLUAT
-from utils import *
-from models import get_network_and_dataset_utils
-from data.prepare import build_loader
-import argparse
 import torch
-import signal
-import warnings
 from tqdm import tqdm
-from time import perf_counter
 from json import dump
 
 env = gp.Env(params={"OutputFlag": 0, "SolutionLimit": 1})
@@ -145,34 +143,16 @@ if __name__ == "__main__":
     if args.demo:
         args.test_batches = 1
 
-    net, dataset_utils = get_network_and_dataset_utils(args.net)
-    if args.data_source == 'pt':
-        images, labels = dataset_utils.load_xy_from_pt()
-    elif args.data_source == 'csv':
-        images, labels = dataset_utils.load_xy_from_csv()
-    data_loader = build_loader(
-        images,
-        labels,
-        batch_size=1,
-        target_label=args.target_label,
-        num_batches=args.start_idx + args.test_batches
-    )
-    x_ = torch.zeros(1, *dataset_utils.image_shape)
-    seqAT = SequentialAT.from_sequential(net, x_)
+    net, seqAT, bounded_x0, data_loader = get4(args)
 
     total_time = 0.
     num_verified = 0
     record: list[tuple[bool, float]] = []
     net.cpu()
     pbar = tqdm(total=args.test_batches, bar_format=TQDM_BAR_FORMAT, disable=args.demo)
-    i = 0
     for images, pred_labels in data_loader:
-        if i < args.start_idx:
-            i += 1
-            continue
         assert net(images).argmax(dim=1).eq(pred_labels).all()
-        x0 = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-        bounded_x0 = L0BoundedInput(x0, args.epsilon)
+        bounded_x0.x = images.flatten(start_dim=1).unsqueeze(2).to(DEVICE)  # (batch, d1, 1)
         if args.target_label is not None:
             seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device="cpu")
         else:
@@ -223,5 +203,4 @@ if __name__ == "__main__":
         record.append((safe, elapsed_time, timeout))
         with open(args.output, "w") as f:
             dump(record, f, indent=2)
-        if pbar.n == args.test_batches: break
     pbar.close()

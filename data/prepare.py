@@ -3,7 +3,6 @@ from data import DatasetName, DATASETS, BASE_DIR
 from torchvision.transforms import ToTensor
 from torch.utils.data import DataLoader, TensorDataset
 from models import MODEL_SPECS, get_network_and_dataset_utils
-from utils import DEVICE
 
 
 def build_loader(
@@ -11,19 +10,18 @@ def build_loader(
     labels: torch.Tensor,
     batch_size: int,
     target_label: int | None=None,
-    num_batches: int | None=None
+    start_idx: int=0,
+    num_batches: int=1
 ) -> DataLoader:
     if target_label is not None:
         non_targeted_indices = (labels != target_label).nonzero().squeeze(1)
         images, labels = images[non_targeted_indices], labels[non_targeted_indices]
-    if num_batches is not None:
-        num_samples = min(num_batches * batch_size, len(images))
-        images, labels = images[:num_samples], labels[:num_samples]
+    num_samples = min(num_batches * batch_size, len(images))
+    images, labels = images[start_idx:start_idx+num_samples], labels[start_idx:start_idx+num_samples]
     dataset = TensorDataset(images, labels)
     return DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=2)
 
-
-def filter_testset(dataset_name: DatasetName, batch_size: int=256, device: str="cpu") -> tuple[torch.Tensor, torch.Tensor]:
+def filter_testset(dataset_name: DatasetName, batch_size: int=256, device: str="cuda") -> tuple[torch.Tensor, torch.Tensor]:
     """Load and filter correctly classified test samples"""
     testset = DATASETS[dataset_name].dataset_class(BASE_DIR, train=False, transform=ToTensor(), download=True)
     print(f"Loaded {len(testset)} {dataset_name} test samples.")
@@ -57,10 +55,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--save", action="store_true", help="Save the filtered dataset")
     parser.add_argument("-bs", "--batch-size", type=int, default=256, help="Batch size for filtering")
+    parser.add_argument("--device", type=str, default="cuda", choices=["cpu", "cuda"], help="Device to use for filtering")
     args = parser.parse_args()
 
     for dataset_name in DatasetName:
-        filtered_images, filtered_labels = filter_testset(dataset_name, args.batch_size, DEVICE)
+        filtered_images, filtered_labels = filter_testset(dataset_name, args.batch_size, args.device)
         print(f"Filtered {filtered_images.shape} images and {filtered_labels.shape} labels loaded successfully.")
         if args.save:
             torch.save((filtered_images, filtered_labels), DATASETS[dataset_name].pt_file)

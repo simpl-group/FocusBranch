@@ -42,16 +42,18 @@ def selected_indices_sample(k: int, num_select: int, repetitions: int) -> torch.
 
 class Verifier:
     def __init__(self,
+        torch_net: torch.nn.Module,
         seqAT: SequentialAT,
         bounded_x0: L0BoundedInput,
         batch_size: int,
-        targeted: bool = False,
-        max_k: int = 200,
-        rep_each_k: int = 50,
-        rep_each_level: int = 1000,
-        timeout: int = 0,
-        demo: bool = False
+        targeted: bool=False,
+        max_k: int=200,
+        rep_each_k: int=50,
+        rep_each_level: int=1000,
+        timeout: int=0,
+        demo: bool=False
     ) -> None:
+        self.torch_net = torch_net.cpu()
         self.seqAT = seqAT
         self.bounded_x0 = bounded_x0
         self.eps = self.bounded_x0.eps
@@ -117,21 +119,22 @@ class Verifier:
         if self.demo: print(f"Sample Time: {perf_counter() - start:2.2}s, Sampled Nodes: {sampled_nodes}, Speed: {nodes_per_second:.2f} nodes/s, Estimated nodes: {estimated_total_nodes}\nEstimated verification time: {estimated_verification_time:.2f}s")
         return estimated_verification_time
 
-    def update_x0(self, x0: torch.Tensor, true_labels: torch.Tensor, target_label: int | None = None) -> None:
+    def adapt_target_images(self, images: torch.Tensor, true_labels: torch.Tensor, target_label: int | None=None) -> None:
         """
-        Update the input x0 and prepare the SequentialAT for verification.
+        Adapt the input image and true label for the verification process. Will first check if the image matches the true label.
 
-        :param x0: Input tensor of shape (batch_size, num_features, 1).
-        :param true_labels: True labels for the input.
+        :param image: Input tensor of shape (batch_size, channel, height, width).
+        :param true_labels: True labels for the input images.
         :param target_label: Target label for targeted verification, if any.
         """
-        self.bounded_x0.x = x0
+        assert self.torch_net(images).argmax(dim=1).eq(true_labels).all(), "The input image does not match the true label."
+        self.bounded_x0.x = images.to(DEVICE).flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
         if target_label is not None:
             self.seqAT.tail.make_marginal(true_labels=true_labels, target_label=target_label, device=DEVICE)
         else:
             self.seqAT.tail.make_marginals(true_labels=true_labels, device=DEVICE)
 
-    def verify1(self, partial_indices: torch.Tensor | None = None) -> bool:
+    def verify1(self, partial_indices: torch.Tensor | None=None) -> bool:
         # TODO: start from level 1
         combs_to_check = torch.empty((1, 0), dtype=torch.int64)
         num_indices = self.num_pixels

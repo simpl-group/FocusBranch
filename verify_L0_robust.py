@@ -3,12 +3,11 @@ import torch
 from solver_check import gurobi_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from bimm import combs2bitmasks
-from data.prepare import build_loader
 from utils import *
-from models import get_network_and_dataset_utils
 from split_and_prune import split_and_prune
 from tqdm import tqdm
 import signal
+
 
 def check_and_branch(
     seqAT: SequentialAT,
@@ -111,42 +110,20 @@ if __name__ == "__main__":
     args = parser.parse_args()
     assert args.target_label is not None, "Target label must be specified."
     if args.demo:
-        args.test_batches = 1
         total_checks, solver_checks, solver_checks_temp = 0, 0, 0
         splits = 0
         solver_time, solver_time_temp = .0, .0
         branching_time = .0
 
-    net, dataset_utils = get_network_and_dataset_utils(args.net, device=DEVICE)
-    images, labels = dataset_utils.load_xy_from_pt()
-    data_loader = build_loader(
-        images,
-        labels,
-        batch_size=args.batch_size,
-        target_label=args.target_label,
-        num_batches=args.start_idx+1
-    )
-    x_ = torch.zeros(args.batch_size, *dataset_utils.image_shape).to(DEVICE)
-    seqAT = SequentialAT.from_sequential(net, x_)
-    bounded_x0 = L0BoundedInput(
-        x=x_.reshape(args.batch_size, -1, 1),
-        eps=args.epsilon,
-        channel_size=dataset_utils.channel_size,
-        num_pixels=dataset_utils.num_pixels
-    )
+    net, seqAT, bounded_x0, data_loader = get4(args)
 
     total_time = 0.
     num_verified = 0
     net.cpu()
     pbar = tqdm(total=args.test_batches, bar_format=TQDM_BAR_FORMAT, disable=args.demo)
-    i = 0
     for images, pred_labels in data_loader:
-        if i < args.start_idx:
-            i += 1
-            continue
-        assert net.cpu()(images).argmax(dim=1).eq(pred_labels).all()
-        x0 = images.to(DEVICE).flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
-        bounded_x0.x = x0
+        assert net(images).argmax(dim=1).eq(pred_labels).all()
+        bounded_x0.x = images.to(DEVICE).flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
         x0_ = images.flatten(start_dim=1).numpy()
         seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device=DEVICE)
 
@@ -211,5 +188,4 @@ if __name__ == "__main__":
         mean_time = total_time / num_verified if num_verified > 0 else 0
         pbar.set_postfix({"Verified": f"{num_verified}/{pbar.n}|{100*num_verified/pbar.n:.2f}%",
                             "Avg":f"{mean_time:.2f}s/img"})
-        if pbar.n == args.test_batches: break
     pbar.close()
