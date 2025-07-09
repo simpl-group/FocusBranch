@@ -63,7 +63,7 @@ class L0BoundedInput(BoundedInput):
         """indices of the pixels to be considered in the computation of the diff, if None, all pixels are considered"""
 
     @contextmanager
-    def partial(self, partial_indices: torch.Tensor|None):
+    def partial(self, partial_indices: torch.Tensor | None):
         if isinstance(partial_indices, torch.Tensor):
             assert partial_indices.ndim == 1 \
                 and partial_indices.shape[0] >= self.eps + self.num_selected() \
@@ -82,14 +82,8 @@ class L0BoundedInput(BoundedInput):
             self.U_X = self.__U_X
             self.L_X = self.__L_X
 
-    def num_selected(self):
+    def num_selected(self) -> int:
         return self.selected_idx[0].numel()
-
-    def expand(self, batch_size: int) -> None:
-        self.batch_indices = torch.arange(batch_size).unsqueeze(1)
-        self.batch_size = batch_size
-        assert self.num_selected() == 0, "Cannot expand L0BoundedInput with selected indices"
-        self.selected_idx = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
 
     def clear_cache(self) -> None:
         del self.x
@@ -98,23 +92,24 @@ class L0BoundedInput(BoundedInput):
         assert self.num_selected() == 0, "Cannot clear cache of L0BoundedInput with selected indices"
         self.selected_idx = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
 
-    def select_idx(self, idx: torch.Tensor):
-        self.selected_idx = torch.cat((self.selected_idx, idx), dim=1)
-        self.eps -= idx[0].numel()
-
-    def undo_select(self, last: int=1):
-        self.selected_idx = self.selected_idx[:, :-last]
-        self.eps += last
-
     @contextmanager
     def selecting(self, idx: torch.Tensor):
         if idx.ndim == 1:
             idx = idx.expand(self.batch_size, -1)
-        self.select_idx(idx)
+        idx_batch_size = idx.shape[0]
+        if self.batch_size != idx_batch_size:
+            self.batch_indices = torch.arange(idx_batch_size).unsqueeze(1)
+            self.batch_size = idx_batch_size
+            assert self.num_selected() == 0, "Cannot expand L0BoundedInput with selected indices"
+            self.selected_idx = torch.empty((idx_batch_size, 0), dtype=torch.long).to(self.device)
+        self.selected_idx = torch.cat((self.selected_idx, idx), dim=1)
+        increment = idx[0].numel()
+        self.eps -= increment
         try:
             yield
         finally:
-            self.undo_select(idx[0].numel())
+            self.selected_idx = self.selected_idx[:, :-increment]
+            self.eps += increment
 
     def wx_selected_sum(self, WX_diff: torch.Tensor) -> torch.Tensor:
         indices = self.selected_idx.unsqueeze(1).expand(-1, WX_diff.shape[1], -1)

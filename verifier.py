@@ -97,9 +97,6 @@ class Verifier:
                 level_start = perf_counter()
                 for i in range(0, sample_nodes_this_level, self.batch_size):
                     combs_to_check_batch = combs_to_check[i:i + self.batch_size].to(DEVICE)
-                    current_batch_size = combs_to_check_batch.shape[0]
-                    if self.bounded_x0.batch_size != current_batch_size:
-                        self.bounded_x0.expand(current_batch_size)
                     with self.bounded_x0.selecting(combs_to_check_batch):
                         self.seqAT.update_activation_rp(bounded_in=self.bounded_x0)
                         lrp = self.seqAT.tail.backsubstitution_lrp()
@@ -162,11 +159,6 @@ class Verifier:
             with self.seqAT.working_on(DEVICE), self.bounded_x0.partial(partial_indices):
                 for i in range(0, num_to_check, self.batch_size):
                     combs_to_check_batch = combs_to_check[i:i + self.batch_size].to(DEVICE)
-
-                    current_batch_size = len(combs_to_check_batch)
-                    if self.bounded_x0.batch_size != current_batch_size:
-                        self.bounded_x0.expand(current_batch_size)
-
                     with self.bounded_x0.selecting(combs_to_check_batch):
                         self.seqAT.update_activation_rp(bounded_in=self.bounded_x0)
                         lrp = self.seqAT.tail.backsubstitution_lrp()
@@ -187,7 +179,7 @@ class Verifier:
                             posfix["Min"] = f"{min_value:.2f}"
                             posfix["Comb"] = min_comb.tolist()
                         pbar.set_postfix(posfix)
-                        pbar.update(current_batch_size)
+                        pbar.update(combs_to_check_batch.shape[0])
                     if self.timeout != 0 and i == self.batch_size * 100:  # calculate remaining time to decide if to early stop
                         if not self.demo: # calculate remaining time without pbar
                             rate = (perf_counter() - level_start) / 100
