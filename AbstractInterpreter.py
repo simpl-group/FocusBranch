@@ -56,25 +56,39 @@ class L0BoundedInput(BoundedInput):
         self.channel_size = channel_size
         self.num_pixels = int(self.num_features / channel_size)
         assert self.num_pixels == num_pixels, f"num_pixels should be {num_pixels}, but got {self.num_pixels}"
-        X = self.x.transpose(1, 2)
+        X = self.x.transpose(1, 2)  # shape (self.batch_size, 1, num_features)
         self.__U_X = self.U_X = (self.U - X).clamp_min(0)
         self.__L_X = self.L_X = (self.L - X).clamp_max(0)
         self.partial_indices: torch.Tensor | None = None
         """indices of the pixels to be considered in the computation of the diff, if None, all pixels are considered"""
 
+    def __update_batch_size(self, new_batch_size: int) -> None:
+        self.batch_indices = torch.arange(new_batch_size).unsqueeze(1)
+        self.batch_size = new_batch_size
+        assert self.num_selected() == 0 and (self.partial_indices is None or self.partial_indices.ndim == 1), \
+            "Cannot update batch size with selected indices or batched partial indices"
+        self.selected_idx = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
+
     @contextmanager
     def partial(self, partial_indices: torch.Tensor | None):
         if isinstance(partial_indices, torch.Tensor):
-            assert partial_indices.ndim == 1 \
-                and partial_indices.shape[0] >= self.eps + self.num_selected() \
-                and partial_indices.shape[0] <= self.x.shape[1], \
-                f"partial_indices should be 1D tensor with length between {self.eps + self.num_selected()}"\
-                f" and {self.x.shape[1]}, but got {partial_indices.shape[0]}"
+            assert self.eps + self.num_selected() <= partial_indices.shape[0] <= self.x.shape[1], \
+            f"the number of partial indices should be at least {self.eps + self.num_selected()} "\
+            f"and at most {self.x.shape[1]}, but got {partial_indices.shape[0]}"
             if partial_indices.device != self.device:
                 partial_indices = partial_indices.to(self.device)
-            self.U_X = self.__U_X[:, :, partial_indices]
-            self.L_X = self.__L_X[:, :, partial_indices]
-            self.partial_indices = partial_indices
+            if partial_indices.ndim == 1:
+                self.U_X = self.__U_X[:, :, partial_indices]
+                self.L_X = self.__L_X[:, :, partial_indices]
+            elif partial_indices.ndim == 2:  # (batch_size, num_partial_pixels): batched partial
+                partial_batch_size = partial_indices.shape[0]
+                if self.batch_size != partial_batch_size:
+                    self.__update_batch_size(partial_batch_size)
+                partial_indices = partial_indices.unsqueeze(1)  # (batch_size, 1, num_partial_pixels)
+                self.U_X = self.__U_X.expand(self.batch_size, 1, -1).gather(dim=2, index=partial_indices)
+                self.L_X = self.__L_X.expand(self.batch_size, 1, -1).gather(dim=2, index=partial_indices)
+            else: assert False  # should not happen, partial_indices should be 1D or 2D tensor
+            self.partial_indices = partial_indices  # (batch_size, 1, num_partial_pixels)
         try:
             yield
         finally:
@@ -87,10 +101,7 @@ class L0BoundedInput(BoundedInput):
 
     def clear_cache(self) -> None:
         del self.x
-        self.batch_indices = torch.arange(1).unsqueeze(1)
-        self.batch_size = 1
-        assert self.num_selected() == 0, "Cannot clear cache of L0BoundedInput with selected indices"
-        self.selected_idx = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
+        self.__update_batch_size(1)
 
     @contextmanager
     def selecting(self, idx: torch.Tensor):
@@ -98,10 +109,7 @@ class L0BoundedInput(BoundedInput):
             idx = idx.expand(self.batch_size, -1)
         idx_batch_size = idx.shape[0]
         if self.batch_size != idx_batch_size:
-            self.batch_indices = torch.arange(idx_batch_size).unsqueeze(1)
-            self.batch_size = idx_batch_size
-            assert self.num_selected() == 0, "Cannot expand L0BoundedInput with selected indices"
-            self.selected_idx = torch.empty((idx_batch_size, 0), dtype=torch.long).to(self.device)
+            self.__update_batch_size(idx_batch_size)
         self.selected_idx = torch.cat((self.selected_idx, idx), dim=1)
         increment = idx[0].numel()
         self.eps -= increment
@@ -117,7 +125,10 @@ class L0BoundedInput(BoundedInput):
 
     def compute_udiff(self, rpW: torch.Tensor) -> torch.Tensor:
         if self.partial_indices is not None:
-            rpW = rpW[:, :, self.partial_indices]
+            if self.partial_indices.ndim == 1:
+                rpW = rpW[:, :, self.partial_indices]
+            else:  # batched partial indices
+                rpW = rpW.expand(self.batch_size, -1, -1).gather(dim=2, index=self.partial_indices.expand(-1, rpW.shape[1], -1))
         WX_diff = torch.where(rpW > 0, rpW * self.U_X, rpW * self.L_X)
         if self.channel_size > 1:
             WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, self.num_pixels).sum(dim=2)
@@ -139,7 +150,10 @@ class L0BoundedInput(BoundedInput):
 
     def compute_ldiff(self, rpW: torch.Tensor) -> torch.Tensor:
         if self.partial_indices is not None:
-            rpW = rpW[:, :, self.partial_indices]
+            if self.partial_indices.ndim == 1:
+                rpW = rpW[:, :, self.partial_indices]
+            else:  # batched partial indices
+                rpW = rpW.expand(self.batch_size, -1, -1).gather(dim=2, index=self.partial_indices.expand(-1, rpW.shape[1], -1))
         WX_diff = torch.where(rpW < 0, rpW * self.U_X, rpW * self.L_X)
         if self.channel_size > 1:
             WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, self.num_pixels).sum(dim=2)

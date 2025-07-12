@@ -67,8 +67,20 @@ class Verifier:
         self.timeout = timeout
         self.demo = demo
 
+    def check_safe_batched(self) -> torch.Tensor:
+        """
+        Check each of the current batch is safe.
+
+        :return: A tensor of shape (batch_size,) with True if the corresponding input is safe, False otherwise.
+        """
+        self.seqAT.update_activation_rp(bounded_in=self.bounded_x0)
+        lrp = self.seqAT.tail.backsubstitution_lrp()
+        lb_l = self.bounded_x0.compute_lbound(lrp).squeeze(2)
+        return lb_l.ge(0).all(dim=1)
+
     def probe(self, partial_indices: torch.Tensor | None=None) -> float:
-        # TODO: start from level 1
+        # TODO: new argument start level
+        # TODO: also return the actual start level
         """
         Probe from level 0 downward with the given partial indices and estimate the verification time.
 
@@ -83,11 +95,8 @@ class Verifier:
             sampled_nodes = 0
             start = perf_counter()
         with self.seqAT.working_on(DEVICE), self.bounded_x0.partial(partial_indices):
-            for level in range(self.eps + 1):
-                if level == 0:
-                    combs_to_check = torch.empty((1, 0), dtype=torch.int64)
-                    estimated_nodes_this_level = 1
-                elif level == 1:
+            for level in range(1, self.eps + 1):
+                if level == 1:
                     combs_to_check = torch.arange(k).reshape(-1, 1)
                     estimated_nodes_this_level = k
                 else:
@@ -99,10 +108,7 @@ class Verifier:
                 for i in range(0, sample_nodes_this_level, self.batch_size):
                     combs_to_check_batch = combs_to_check[i:i + self.batch_size].to(DEVICE)
                     with self.bounded_x0.selecting(combs_to_check_batch):
-                        self.seqAT.update_activation_rp(bounded_in=self.bounded_x0)
-                        lrp = self.seqAT.tail.backsubstitution_lrp()
-                        lb_l = self.bounded_x0.compute_lbound(lrp).squeeze(2)
-                    num_safe_nodes += int(lb_l.ge(0).all(dim=1).sum().item())
+                        num_safe_nodes += int(self.check_safe_batched().sum().item())
 
                 current_speed = sample_nodes_this_level / (perf_counter() - level_start)
                 if level != self.eps: nodes_per_second = max(current_speed, nodes_per_second)  # not the last level
@@ -210,16 +216,31 @@ class Verifier:
             print(f"Safe: {success}")
         return success
 
-    def sample_all_k(self) -> dict[int, float]:
+    def sample_all_k(self) -> None:
         """
         Sample all k from eps to max_k self.rep_each_k times and return the mean estimated verification time for each k.
 
         :return: A dictionary with k as keys and estimated verification time as values.
         """
-        estimated_times: defaultdict[int, float]= defaultdict(lambda: 0.0)
+        self.estimated_times: defaultdict[int, float] = defaultdict(lambda: 0.0)
+        disable = not self.demo
         self.demo = False
-        for k in tqdm(range(self.eps, self.max_k + 1)):
-            for partial_indices in batched_randsample(self.num_pixels, k, self.rep_each_k):
-                estimated_times[k] += self.probe(partial_indices)
-            estimated_times[k] /= self.rep_each_k
-        return estimated_times
+        for k in tqdm(range(self.eps, self.max_k + 1), desc="Sampling k", disable=disable, bar_format=TQDM_BAR_FORMAT):
+            all_partial_indices = batched_randsample(self.num_pixels, k, self.rep_each_k)
+            root_unk_list: list[torch.Tensor] = []
+            # TODO: skip batch on root if no root is safe in previous k
+            batch_on_root_start = perf_counter()
+            with self.seqAT.working_on(DEVICE):
+                for i in range(0, all_partial_indices.shape[0], self.batch_size):
+                    batched_partial_indices = all_partial_indices[i:i + self.batch_size].to(DEVICE)
+                    with self.bounded_x0.partial(batched_partial_indices):  # batch on root level
+                        safes = self.check_safe_batched()
+                    root_unk_list.append(batched_partial_indices[~safes])
+            self.estimated_times[k] += perf_counter() - batch_on_root_start
+            root_unk_partial_indices = torch.vstack(root_unk_list)
+            # TODO: reduce the number of probes to save time based on one probing time?
+            # TODO: use probe to predict the start level for each k
+            # repetition_this_k = self.rep_each_k
+            for partial_indices in root_unk_partial_indices:  # probe one by one on those root level unk partial indices
+                self.estimated_times[k] += self.probe(partial_indices)
+            self.estimated_times[k] /= self.rep_each_k
