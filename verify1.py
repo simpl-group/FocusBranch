@@ -29,6 +29,7 @@ verifier.max_k = args.max_k
 verifier.rep_each_k = args.rep_each_k
 verifier.rep_each_level = args.rep_each_level
 partial_indices = None
+start_level = 0
 
 total_time = 0.
 num_verified = 0
@@ -46,13 +47,13 @@ for images, true_labels in data_loader:
 
     if isinstance(args.partial, int):
         partial_indices = torch.randperm(verifier.num_pixels)[:args.partial]
-    if args.probe: verifier.probe(partial_indices)
+    if args.probe: _, start_level = verifier.probe(partial_indices)
     success = False
     elapsed_time = 0.
     try:
         signal.alarm(args.timeout)
         t0 = perf_counter()
-        if verifier.verify1(partial_indices):
+        if verifier.verify1(partial_indices, start_level):
             elapsed_time = perf_counter() - t0
             total_time += elapsed_time
             success = True

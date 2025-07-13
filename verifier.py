@@ -78,25 +78,28 @@ class Verifier:
         lb_l = self.bounded_x0.compute_lbound(lrp).squeeze(2)
         return lb_l.ge(0).all(dim=1)
 
-    def probe(self, partial_indices: torch.Tensor | None=None) -> float:
-        # TODO: new argument start level
-        # TODO: also return the actual start level
+    def probe(self, partial_indices: torch.Tensor | None=None, start_level: int=0) -> tuple[float, int]:
         """
-        Probe from level 0 downward with the given partial indices and estimate the verification time.
+        Probe from start_level downward with the given partial indices and estimate the verification time.
 
         :param partial_indices: Indices of the pixels to be considered in the computation of diff.
-        :return: Estimated verification time in seconds.
+        :param start_level: The level to start probing from.
+        :return: Estimated verification time in seconds and the first level where any node is safe.
         """
         k = partial_indices.shape[0] if partial_indices is not None else self.num_pixels
         nodes_per_second = 0.0
         estimated_total_nodes = 0
         last_success_rate = 0.
+        first_any_safe_level = start_level
         if self.demo:
             sampled_nodes = 0
             start = perf_counter()
         with self.seqAT.working_on(DEVICE), self.bounded_x0.partial(partial_indices):
-            for level in range(1, self.eps + 1):
-                if level == 1:
+            for level in range(start_level, self.eps + 1):
+                if level == 0:
+                    combs_to_check = torch.empty((1, 0), dtype=torch.int64)
+                    estimated_nodes_this_level = 1
+                elif level == 1:
                     combs_to_check = torch.arange(k).reshape(-1, 1)
                     estimated_nodes_this_level = k
                 else:
@@ -110,6 +113,7 @@ class Verifier:
                     with self.bounded_x0.selecting(combs_to_check_batch):
                         num_safe_nodes += int(self.check_safe_batched().sum().item())
 
+                if num_safe_nodes == 0: first_any_safe_level += 1
                 current_speed = sample_nodes_this_level / (perf_counter() - level_start)
                 if level != self.eps: nodes_per_second = max(current_speed, nodes_per_second)  # not the last level
                 last_success_rate = num_safe_nodes / sample_nodes_this_level
@@ -120,8 +124,8 @@ class Verifier:
                 if num_safe_nodes == sample_nodes_this_level:
                     break  # All nodes are safe, no need to go deeper
         estimated_verification_time = estimated_total_nodes / nodes_per_second
-        if self.demo: print(f"Sample Time: {perf_counter() - start:2.2}s, Sampled Nodes: {sampled_nodes}, Speed: {nodes_per_second:.2f} nodes/s, Estimated nodes: {estimated_total_nodes}\nEstimated verification time: {estimated_verification_time:.2f}s")
-        return estimated_verification_time
+        if self.demo: print(f"Sample Time: {perf_counter() - start:2.2}s, Sampled Nodes: {sampled_nodes}, Speed: {nodes_per_second:.2f} nodes/s, Estimated nodes: {estimated_total_nodes}\nEstimated verification time: {estimated_verification_time:.2f}s, First any safe level: {first_any_safe_level}")
+        return estimated_verification_time, first_any_safe_level
 
     def adapt_target_images(self, images: torch.Tensor, true_labels: torch.Tensor, target_label: int | None=None) -> None:
         """
@@ -138,19 +142,19 @@ class Verifier:
         else:
             self.seqAT.tail.make_marginals(true_labels=true_labels, device=DEVICE)
 
-    def verify1(self, partial_indices: torch.Tensor | None=None) -> bool:
-        # TODO: start from level 1
-        combs_to_check = torch.empty((1, 0), dtype=torch.int64)
+    def verify1(self, partial_indices: torch.Tensor | None=None, start_level: int=0) -> bool:
         num_indices = self.num_pixels
         if partial_indices is not None:
             num_indices = partial_indices.shape[0]
         bitmask_length = (num_indices + 63) // 64
+        combs_to_check = torch.combinations(torch.arange(num_indices), start_level)
+        if start_level == 0: combs_to_check = torch.empty((1, 0), dtype=torch.int64)
         safe_bitmasks: torch.Tensor = torch.empty((0, bitmask_length), dtype=torch.long)
         success = False
         if self.demo:
             start = perf_counter()
             branching_time, total_nodes = 0.0, 0
-        for level in range(self.eps + 1):
+        for level in range(start_level, self.eps + 1):
             num_to_check = combs_to_check.shape[0]
             if num_to_check == 0:
                 success = True
@@ -223,24 +227,33 @@ class Verifier:
         :return: A dictionary with k as keys and estimated verification time as values.
         """
         self.estimated_times: defaultdict[int, float] = defaultdict(lambda: 0.0)
+        self.start_level: defaultdict[int, int] = defaultdict(lambda: 0)  #key: k, value: start level to probe and verify
         disable = not self.demo
         self.demo = False
         for k in tqdm(range(self.eps, self.max_k + 1), desc="Sampling k", disable=disable, bar_format=TQDM_BAR_FORMAT):
             all_partial_indices = batched_randsample(self.num_pixels, k, self.rep_each_k)
-            root_unk_list: list[torch.Tensor] = []
-            # TODO: skip batch on root if no root is safe in previous k
-            batch_on_root_start = perf_counter()
-            with self.seqAT.working_on(DEVICE):
-                for i in range(0, all_partial_indices.shape[0], self.batch_size):
-                    batched_partial_indices = all_partial_indices[i:i + self.batch_size].to(DEVICE)
-                    with self.bounded_x0.partial(batched_partial_indices):  # batch on root level
-                        safes = self.check_safe_batched()
-                    root_unk_list.append(batched_partial_indices[~safes])
-            self.estimated_times[k] += perf_counter() - batch_on_root_start
-            root_unk_partial_indices = torch.vstack(root_unk_list)
-            # TODO: reduce the number of probes to save time based on one probing time?
-            # TODO: use probe to predict the start level for each k
-            # repetition_this_k = self.rep_each_k
-            for partial_indices in root_unk_partial_indices:  # probe one by one on those root level unk partial indices
-                self.estimated_times[k] += self.probe(partial_indices)
+            self.start_level[k] = start_level = self.start_level[k-1]  # init from the previous k
+            if self.start_level[k] == 0:  # only batch on root level if start level is 0, otherwise skip this part
+                root_unk_list: list[torch.Tensor] = []
+                batch_on_root_start = perf_counter()
+                with self.seqAT.working_on(DEVICE):
+                    for i in range(0, all_partial_indices.shape[0], self.batch_size):
+                        batched_partial_indices = all_partial_indices[i:i + self.batch_size].to(DEVICE)
+                        with self.bounded_x0.partial(batched_partial_indices):  # batch on root level
+                            safes = self.check_safe_batched()
+                        root_unk_list.append(batched_partial_indices[~safes])
+                self.estimated_times[k] += perf_counter() - batch_on_root_start
+                all_partial_indices = torch.vstack(root_unk_list)  # root level unk partial indices
+                if all_partial_indices.shape[0] == self.rep_each_k:
+                    self.start_level[k] = 1  # if all sampled partial are not safe at root level, start from level 1
+                start_level = 1  # for the probe, since level 0 is already checked
+            # TODO: reduce the number of probes (early skip) to save time based on T_k
+            num_actual_start_level_increased = 0
+            for partial_indices in all_partial_indices:
+                estimated_times, actual_start_level = self.probe(partial_indices, start_level)
+                self.estimated_times[k] += estimated_times
+                if actual_start_level > start_level:
+                    num_actual_start_level_increased += 1
+            if num_actual_start_level_increased == self.rep_each_k:
+                self.start_level[k] += 1
             self.estimated_times[k] /= self.rep_each_k
