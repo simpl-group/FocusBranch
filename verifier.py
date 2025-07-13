@@ -220,7 +220,7 @@ class Verifier:
             print(f"Safe: {success}")
         return success
 
-    def sample_all_k(self) -> None:
+    def sample_all_k(self, baseline: dict[int, tuple[float, int]] | None=None) -> None:
         """
         Sample all k from eps to max_k self.rep_each_k times and return the mean estimated verification time for each k.
 
@@ -228,11 +228,12 @@ class Verifier:
         """
         self.estimated_times: defaultdict[int, float] = defaultdict(lambda: 0.0)
         self.start_level: defaultdict[int, int] = defaultdict(lambda: 0)  #key: k, value: start level to probe and verify
-        disable = not self.demo
+        pbar = tqdm(total=self.max_k - self.eps + 1, desc="Sampling k", disable=not self.demo, bar_format=TQDM_BAR_FORMAT)
         self.demo = False
-        for k in tqdm(range(self.eps, self.max_k + 1), desc="Sampling k", disable=disable, bar_format=TQDM_BAR_FORMAT):
+        for k in range(self.eps, self.max_k + 1):
             all_partial_indices = batched_randsample(self.num_pixels, k, self.rep_each_k)
             self.start_level[k] = start_level = self.start_level[k-1]  # init from the previous k
+            batch_on_root_mean = 0.
             if self.start_level[k] == 0:  # only batch on root level if start level is 0, otherwise skip this part
                 root_unk_list: list[torch.Tensor] = []
                 batch_on_root_start = perf_counter()
@@ -242,18 +243,35 @@ class Verifier:
                         with self.bounded_x0.partial(batched_partial_indices):  # batch on root level
                             safes = self.check_safe_batched()
                         root_unk_list.append(batched_partial_indices[~safes])
-                self.estimated_times[k] += perf_counter() - batch_on_root_start
+                batch_on_root_mean = (perf_counter() - batch_on_root_start) / self.rep_each_k
                 all_partial_indices = torch.vstack(root_unk_list)  # root level unk partial indices
                 if all_partial_indices.shape[0] == self.rep_each_k:
                     self.start_level[k] = 1  # if all sampled partial are not safe at root level, start from level 1
                 start_level = 1  # for the probe, since level 0 is already checked
-            # TODO: reduce the number of probes (early skip) to save time based on T_k
             num_actual_start_level_increased = 0
-            for partial_indices in all_partial_indices:
+            total_estimated_time = 0.
+            early_skip_checkpoint = self.rep_each_k // 10  # tunable
+            for i, partial_indices in enumerate(all_partial_indices):
                 estimated_times, actual_start_level = self.probe(partial_indices, start_level)
-                self.estimated_times[k] += estimated_times
+                total_estimated_time += estimated_times
                 if actual_start_level > start_level:
                     num_actual_start_level_increased += 1
-            if num_actual_start_level_increased == self.rep_each_k:
+                # if the estimated time is more than 30% larger than the baseline, skip 90% of the rest probes
+                if baseline is not None and i + 1 == early_skip_checkpoint:
+                    assert k in baseline, f"Baseline for k={k} is not provided."
+                    if total_estimated_time > baseline[k][0] * 1.3 * early_skip_checkpoint:  # tunable
+                        break
+            if num_actual_start_level_increased == (i + 1):
                 self.start_level[k] += 1
-            self.estimated_times[k] /= self.rep_each_k
+            self.estimated_times[k] = batch_on_root_mean + total_estimated_time / (i + 1)
+            pbar.set_postfix({"k": k, "Estimated Time": f"{self.estimated_times[k]:.2f}s",
+                "Start Level": self.start_level[k], "Start Level Increased": num_actual_start_level_increased})
+            pbar.update(1)
+        pbar.close()
+
+        self.estimated_times[self.eps] = 0.0
+        if baseline is not None:
+            for k in range(self.eps + 1, self.max_k + 1):
+                if self.estimated_times[k] < baseline[k][0]:
+                    baseline[k] = self.estimated_times[k], self.start_level[k]
+
