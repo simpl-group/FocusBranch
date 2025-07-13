@@ -136,7 +136,7 @@ class Verifier:
         :param target_label: Target label for targeted verification, if any.
         """
         assert self.torch_net(images).argmax(dim=1).eq(true_labels).all(), "The input image does not match the true label."
-        self.bounded_x0.x = images.to(DEVICE).flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
+        self.bounded_x0.update_x(images.to(DEVICE).flatten(start_dim=1).unsqueeze(2))  # (batch, d1, 1)
         if target_label is not None:
             self.seqAT.tail.make_marginal(true_labels=true_labels, target_label=target_label, device=DEVICE)
         else:

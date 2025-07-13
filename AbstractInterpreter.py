@@ -56,13 +56,22 @@ class L0BoundedInput(BoundedInput):
         self.channel_size = channel_size
         self.num_pixels = int(self.num_features / channel_size)
         assert self.num_pixels == num_pixels, f"num_pixels should be {num_pixels}, but got {self.num_pixels}"
-        X = self.x.transpose(1, 2)  # shape (self.batch_size, 1, num_features)
-        self.__U_X = self.U_X = (self.U - X).clamp_min(0)
-        self.__L_X = self.L_X = (self.L - X).clamp_max(0)
         self.partial_indices: torch.Tensor | None = None
         """indices of the pixels to be considered in the computation of the diff, if None, all pixels are considered"""
 
+    def update_x(self, x: torch.Tensor) -> None:
+        assert x.ndim == 3 and x.shape[1] == self.num_features and x.shape[2] == 1, \
+            f"x should have shape (batch_size, {self.num_features}, 1), but got {x.shape}"
+        if x.device != self.device:
+            x = x.to(self.device)
+        self.x = x
+        X = self.x.transpose(1, 2)  # shape (self.batch_size, 1, num_features)
+        self.__U_X = self.U_X = (self.U - X).clamp_min(0)
+        self.__L_X = self.L_X = (self.L - X).clamp_max(0)
+        self.__update_batch_size(x.shape[0])
+
     def __update_batch_size(self, new_batch_size: int) -> None:
+        if new_batch_size == self.batch_size: return
         self.batch_indices = torch.arange(new_batch_size).unsqueeze(1)
         self.batch_size = new_batch_size
         assert self.num_selected() == 0 and (self.partial_indices is None or self.partial_indices.ndim == 1), \
@@ -100,7 +109,7 @@ class L0BoundedInput(BoundedInput):
         return self.selected_idx[0].numel()
 
     def clear_cache(self) -> None:
-        del self.x
+        del self.x, self.U_X, self.L_X, self.__L_X, self.__U_X
         self.__update_batch_size(1)
 
     @contextmanager
