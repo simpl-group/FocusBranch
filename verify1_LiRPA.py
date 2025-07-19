@@ -1,6 +1,5 @@
-from utils import add_shared_arguments
-from utils.timeout import timeout_handler, TimeoutException
-from utils.constant import DEVICE, TQDM_BAR_FORMAT
+from utils import timeout_handler, TimeoutException, DEVICE, TQDM_BAR_FORMAT
+from utils.shared import add_shared_arguments
 from models import get_network_and_dataset_utils
 from models.networks import make_marginal_tail, make_marginals_tail
 from data.prepare import build_loader

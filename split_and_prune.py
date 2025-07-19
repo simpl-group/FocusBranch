@@ -1,7 +1,7 @@
 import torch
 from tqdm import tqdm
 from bimm import combs2bitmasks, bitmasks2combs, superset_sum
-from utils.constant import DEVICE, TQDM_BAR_FORMAT
+from utils import DEVICE, TQDM_BAR_FORMAT
 
 chunk_size = 4000  # Adjust based on GPU memory availability
 MEM_BUDGET = 128 * 1024**3  # 128 Giga Bytes

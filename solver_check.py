@@ -1,7 +1,6 @@
 from AbstractInterpreter import SequentialAT, L0BoundedInput, ActivationAT, AffineAT, ReLUAT
-from utils import get4, add_shared_arguments
-from utils.timeout import timeout_handler, TimeoutException
-from utils.constant import TQDM_BAR_FORMAT
+from utils import timeout_handler, TimeoutException, TQDM_BAR_FORMAT
+from utils.shared import get4, add_shared_arguments
 import argparse
 import signal
 import warnings

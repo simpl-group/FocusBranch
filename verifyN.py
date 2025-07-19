@@ -1,9 +1,8 @@
 from solver_check import gurobi_check_unsat
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from bimm import combs2bitmasks
-from utils import get4, add_shared_arguments
-from utils.timeout import timeout_handler
-from utils.constant import DEVICE, TQDM_BAR_FORMAT
+from utils import timeout_handler, DEVICE, TQDM_BAR_FORMAT
+from utils.shared import get4, add_shared_arguments
 from split_and_prune import split_and_prune
 from time import perf_counter
 import argparse
