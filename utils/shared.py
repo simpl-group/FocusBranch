@@ -45,15 +45,32 @@ def get4(args: argparse.Namespace) -> tuple[torch.nn.Module, SequentialAT, L0Bou
     )
     return net, seqAT, bounded_x0, data_loader
 
+from inspect import signature
+
 def get2(args: argparse.Namespace) -> tuple[Verifier, torch.utils.data.DataLoader]:
     net, seqAT, bounded_x0, data_loader = get4(args)
-    verifier = Verifier(
-        net,
-        seqAT,
-        bounded_x0,
-        batch_size=args.batch_size,
-        targeted=args.target_label is not None,
-        timeout=args.timeout,
-        demo=args.demo
+    init_param_names = signature(Verifier.__init__).parameters.keys()
+    init_kwargs = {
+        name: getattr(args, name) for name in init_param_names if hasattr(args, name)
+    }
+    return Verifier(
+        net.cpu(), seqAT, bounded_x0, targeted=args.target_label is not None, **init_kwargs
+    ), data_loader
+
+def get_verifier(args: argparse.Namespace) -> Verifier:
+    net, dataset_utils = get_network_and_dataset_utils(args.net, device=DEVICE)
+    x_ = torch.zeros(args.grain_size, *dataset_utils.image_shape).to(DEVICE)
+    seqAT = SequentialAT.from_sequential(net, x_)
+    bounded_x0 = L0BoundedInput(
+        x=x_.reshape(args.grain_size, -1, 1),
+        eps=args.epsilon,
+        channel_size=dataset_utils.channel_size,
+        num_pixels=dataset_utils.num_pixels
     )
-    return verifier, data_loader
+    init_param_names = signature(Verifier.__init__).parameters.keys()
+    init_kwargs = {
+        name: getattr(args, name) for name in init_param_names if hasattr(args, name)
+    }
+    return Verifier(
+        net.cpu(), seqAT, bounded_x0, targeted=args.target_label is not None, **init_kwargs
+    )

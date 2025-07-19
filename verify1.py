@@ -24,9 +24,6 @@ parser.add_argument("--sample-all", action="store_true", help="Sample all k from
 args = parser.parse_args()
 
 verifier, data_loader = get2(args)
-verifier.max_k = args.max_k
-verifier.rep_each_k = args.rep_each_k
-verifier.rep_each_level = args.rep_each_level
 partial_indices = None
 start_level = 0
 
