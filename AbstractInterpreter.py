@@ -22,7 +22,7 @@ class RelationalPolyhedra:
     def negW(self) -> torch.Tensor:
         return self.W.clamp_max(0)
 
-    def to_(self, device: str) -> None:
+    def to_(self, device: str | torch.device) -> None:
         self.W = self.W.to(device)
         self.b = self.b.to(device)
 
@@ -274,8 +274,8 @@ class AffineAT(AbstractTransformer):
         ho = (hi + 2 * padding[0] - kh) // stride[0] + 1
         wo = (wi + 2 * padding[1] - kw) // stride[1] + 1
 
-        W = torch.zeros(co * ho * wo, ci * hi * wi, device=bias.device)
-        b = torch.zeros(co * ho * wo, device=bias.device)
+        W = torch.zeros(co * ho * wo, ci * hi * wi, device=kernel.device)
+        b = torch.zeros(co * ho * wo, device=kernel.device)
         for co_idx in range(co):
             for h_out in range(ho):
                 for w_out in range(wo):
@@ -291,7 +291,7 @@ class AffineAT(AbstractTransformer):
                                     W[row, input_idx] = kernel[co_idx, ci_idx, kh_idx, kw_idx]
         return cls(weight=W.unsqueeze(0), bias=b.reshape(1, -1, 1))
 
-    def make_marginal(self, true_labels: torch.Tensor, target_label: int, device: str="cpu") -> None:
+    def make_marginal(self, true_labels: torch.Tensor, target_label: int, device: str | torch.device="cpu") -> None:
         if true_labels.shape[0] != 1:
             self.W = self.W.expand(true_labels.shape[0], -1, -1)
             self.b = self.b.expand(true_labels.shape[0], -1, -1)
@@ -300,7 +300,7 @@ class AffineAT(AbstractTransformer):
         b = (self.b[batch_idx, true_labels, :] - self.b[:, target_label, :]).unsqueeze(1)
         self.rp = RelationalPolyhedra(W.to(device), b.to(device))
 
-    def make_marginals(self, true_labels: torch.Tensor, device: str="cpu") -> None:
+    def make_marginals(self, true_labels: torch.Tensor, device: str | torch.device="cpu") -> None:
         if true_labels.shape[0] != 1:
             self.W = self.W.expand(true_labels.shape[0], -1, -1)
             self.b = self.b.expand(true_labels.shape[0], -1, -1)
@@ -429,13 +429,13 @@ class SequentialAT:
                 AT.lrp = None
                 AT.urp = None
 
-    def to_(self, device: str) -> None:
+    def to_(self, device: str | torch.device) -> None:
         for AT in self.ATs[:-1]:
             if isinstance(AT, AffineAT):
                 AT.rp.to_(device)
 
     @contextmanager
-    def working_on(self, device: str):
+    def working_on(self, device: str | torch.device):
         self.to_(device)
         try:
             yield

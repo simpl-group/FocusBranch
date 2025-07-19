@@ -58,6 +58,7 @@ class Verifier:
         self.bounded_x0 = bounded_x0
         self.eps = self.bounded_x0.eps
         self.num_pixels = self.bounded_x0.num_pixels
+        self.device = self.bounded_x0.device
         self.batch_size = batch_size
         self.targeted = targeted
         self.max_k = max_k
@@ -93,7 +94,7 @@ class Verifier:
         if self.demo:
             sampled_nodes = 0
             start = perf_counter()
-        with self.seqAT.working_on(DEVICE), self.bounded_x0.partial(partial_indices):
+        with self.seqAT.working_on(self.device), self.bounded_x0.partial(partial_indices):
             for level in range(start_level, self.eps + 1):
                 if level == 0:
                     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
@@ -108,7 +109,7 @@ class Verifier:
                 num_safe_nodes = 0
                 level_start = perf_counter()
                 for i in range(0, sample_nodes_this_level, self.batch_size):
-                    combs_to_check_batch = combs_to_check[i:i + self.batch_size].to(DEVICE)
+                    combs_to_check_batch = combs_to_check[i:i + self.batch_size].to(self.device)
                     with self.bounded_x0.selecting(combs_to_check_batch):
                         num_safe_nodes += int(self.check_safe_batched().sum().item())
 
@@ -135,11 +136,11 @@ class Verifier:
         :param target_label: Target label for targeted verification, if any.
         """
         assert self.torch_net(images).argmax(dim=1).eq(true_labels).all(), "The input image does not match the true label."
-        self.bounded_x0.update_x(images.to(DEVICE).flatten(start_dim=1).unsqueeze(2))  # (batch, d1, 1)
+        self.bounded_x0.update_x(images.flatten(start_dim=1).unsqueeze(2))  # (batch, d1, 1)
         if target_label is not None:
-            self.seqAT.tail.make_marginal(true_labels=true_labels, target_label=target_label, device=DEVICE)
+            self.seqAT.tail.make_marginal(true_labels=true_labels, target_label=target_label, device=self.device)
         else:
-            self.seqAT.tail.make_marginals(true_labels=true_labels, device=DEVICE)
+            self.seqAT.tail.make_marginals(true_labels=true_labels, device=self.device)
 
     def verify1(self, partial_indices: torch.Tensor | None=None, start_level: int=0) -> bool:
         num_indices = self.num_pixels
@@ -166,9 +167,9 @@ class Verifier:
                     min_value = float("inf")
             level_start = perf_counter()
             pbar = tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not self.demo)
-            with self.seqAT.working_on(DEVICE), self.bounded_x0.partial(partial_indices):
+            with self.seqAT.working_on(self.device), self.bounded_x0.partial(partial_indices):
                 for i in range(0, num_to_check, self.batch_size):
-                    combs_to_check_batch = combs_to_check[i:i + self.batch_size].to(DEVICE)
+                    combs_to_check_batch = combs_to_check[i:i + self.batch_size].to(self.device)
                     with self.bounded_x0.selecting(combs_to_check_batch):
                         self.seqAT.update_activation_rp(bounded_in=self.bounded_x0)
                         lrp = self.seqAT.tail.backsubstitution_lrp()
@@ -236,9 +237,9 @@ class Verifier:
             if self.start_level[k] == 0:  # only batch on root level if start level is 0, otherwise skip this part
                 root_unk_list: list[torch.Tensor] = []
                 batch_on_root_start = perf_counter()
-                with self.seqAT.working_on(DEVICE):
+                with self.seqAT.working_on(self.device):
                     for i in range(0, all_partial_indices.shape[0], self.batch_size):
-                        batched_partial_indices = all_partial_indices[i:i + self.batch_size].to(DEVICE)
+                        batched_partial_indices = all_partial_indices[i:i + self.batch_size].to(self.device)
                         with self.bounded_x0.partial(batched_partial_indices):  # batch on root level
                             safes = self.check_safe_batched()
                         root_unk_list.append(batched_partial_indices[~safes])
