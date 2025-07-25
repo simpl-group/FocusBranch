@@ -128,16 +128,21 @@ class Verifier:
         if self.demo: print(f"Sample Time: {perf_counter() - start:2.2}s, Sampled Nodes: {sampled_nodes}, Speed: {nodes_per_second:.2f} nodes/s, Estimated nodes: {estimated_total_nodes}\nEstimated verification time: {estimated_verification_time:.2f}s, First any safe level: {first_any_safe_level}")
         return estimated_verification_time, first_any_safe_level
 
-    def adapt_target_images(self, images: torch.Tensor, true_labels: torch.Tensor, target_label: int | None=None) -> None:
+    def adapt_target_images(self, images: torch.Tensor, true_labels: torch.Tensor, target_label: int | None=None, check_first=True) -> None:
         """
-        Adapt the input image and true label for the verification process. Will first check if the image matches the true label.
+        Adapt the input image and true label for the verification process. Will first check if the image matches the true label if check_first is True.
 
-        :param image: Input tensor of shape (batch_size, channel, height, width).
+        :param image: Input tensor of shape (batch_size, channel, height, width) or (batch, -1, 1).
         :param true_labels: True labels for the input images.
         :param target_label: Target label for targeted verification, if any.
+        :param check_first: If True, will assert that the input image matches the true label.
         """
-        assert self.torch_net(images).argmax(dim=1).eq(true_labels).all(), "The input image does not match the true label."
-        self.bounded_x0.update_x(images.flatten(start_dim=1).unsqueeze(2))  # (batch, d1, 1)
+        if check_first:
+            assert images.ndim == 4, "Input images must be of shape (batch_size, channel, height, width)."
+            assert self.torch_net(images).argmax(dim=1).eq(true_labels).all(), "The input image does not match the true label."
+            images = images.flatten(start_dim=1).unsqueeze(2)
+        assert images.ndim == 3, "Input images must be of shape (batch_size, -1, 1)."
+        self.bounded_x0.update_x(images)  # (batch, d1, 1)
         if target_label is not None:
             self.seqAT.tail.make_marginal(true_labels=true_labels, target_label=target_label, device=self.device)
         else:
