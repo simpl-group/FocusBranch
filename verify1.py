@@ -36,8 +36,7 @@ for images, true_labels in data_loader:
 
     if args.sample_all:
         t0 = perf_counter()
-        verifier.sample_all_k()
-        pprint(verifier.estimated_times)
+        pprint(verifier.sample_all_k(baseline=None))
         print(f"Time {perf_counter() - t0:.2f}s")
         exit(0)
 

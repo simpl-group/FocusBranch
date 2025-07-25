@@ -66,6 +66,7 @@ class Verifier:
         self.rep_each_level = rep_each_level
         self.timeout = timeout
         self.demo = demo
+        self.start_level: defaultdict[int, int] = defaultdict(lambda: 0)  #key: k, value: start level to probe and verify
 
     def check_safe_batched(self) -> torch.Tensor:
         """
@@ -84,7 +85,7 @@ class Verifier:
 
         :param partial_indices: Indices of the pixels to be considered in the computation of diff.
         :param start_level: The level to start probing from.
-        :return: Estimated verification time in seconds and the first level where any node is safe.
+        :return: Estimated verification time and the actual start level.
         """
         k = partial_indices.shape[0] if partial_indices is not None else self.num_pixels
         nodes_per_second = 0.0
@@ -146,6 +147,8 @@ class Verifier:
         num_indices = self.num_pixels
         if partial_indices is not None:
             num_indices = partial_indices.shape[0]
+            if start_level == 0:
+                start_level = self.start_level[num_indices]  # use the start level for this k
         bitmask_length = (num_indices + 63) // 64
         combs_to_check = torch.combinations(torch.arange(num_indices), start_level)
         if start_level == 0: combs_to_check = torch.empty((1, 0), dtype=torch.int64)
@@ -220,14 +223,13 @@ class Verifier:
             print(f"Safe: {success}")
         return success
 
-    def sample_all_k(self, baseline: dict[int, tuple[float, int]] | None=None) -> None:
+    def sample_all_k(self, baseline: dict[int, tuple[float, int]] | None=None) -> dict[int, float]:
         """
         Sample all k from eps to max_k self.rep_each_k times and return the mean estimated verification time for each k.
 
         :return: A dictionary with k as keys and estimated verification time as values.
         """
-        self.estimated_times: defaultdict[int, float] = defaultdict(lambda: 0.0)
-        self.start_level: defaultdict[int, int] = defaultdict(lambda: 0)  #key: k, value: start level to probe and verify
+        estimated_times: dict[int, float] = {}
         pbar = tqdm(total=self.max_k - self.eps + 1, desc="Sampling k", disable=not self.demo, bar_format=TQDM_BAR_FORMAT)
         self.demo = False
         for k in range(self.eps, self.max_k + 1):
@@ -249,29 +251,22 @@ class Verifier:
                     self.start_level[k] = 1  # if all sampled partial are not safe at root level, start from level 1
                 start_level = 1  # for the probe, since level 0 is already checked
             num_actual_start_level_increased = 0
-            total_estimated_time = 0.
-            early_skip_checkpoint = self.rep_each_k // 10  # tunable
+            accumulated_time = 0.
             for i, partial_indices in enumerate(all_partial_indices):
-                estimated_times, actual_start_level = self.probe(partial_indices, start_level)
-                total_estimated_time += estimated_times
+                estimated_time, actual_start_level = self.probe(partial_indices, start_level)
+                accumulated_time += estimated_time
                 if actual_start_level > start_level:
                     num_actual_start_level_increased += 1
-                # if the estimated time is more than 30% larger than the baseline, skip 90% of the rest probes
-                if baseline is not None and i + 1 == early_skip_checkpoint:
-                    assert k in baseline, f"Baseline for k={k} is not provided."
-                    if total_estimated_time > baseline[k][0] * 1.3 * early_skip_checkpoint:  # tunable
-                        break
-            if num_actual_start_level_increased == (i + 1):
+            if num_actual_start_level_increased == self.rep_each_k:
                 self.start_level[k] += 1
-            self.estimated_times[k] = batch_on_root_mean + total_estimated_time / (i + 1)
-            pbar.set_postfix({"k": k, "Estimated Time": f"{self.estimated_times[k]:.2f}s",
+            estimated_times[k] = batch_on_root_mean + accumulated_time / self.rep_each_k
+            if k != self.eps and baseline is not None and estimated_times[k] > baseline[k][0]:
+                break
+            pbar.set_postfix({"k": k, "Estimated Time": f"{estimated_times[k]:.4f}s",
                 "Start Level": self.start_level[k], "Start Level Increased": num_actual_start_level_increased})
             pbar.update(1)
         pbar.close()
+        if k != self.max_k:
+            self.start_level.default_factory = lambda: self.start_level[k]  # set the default factory to the last start level
 
-        self.estimated_times[self.eps] = 0.0
-        if baseline is not None:
-            for k in range(self.eps + 1, self.max_k + 1):
-                if self.estimated_times[k] < baseline[k][0]:
-                    baseline[k] = self.estimated_times[k], self.start_level[k]
-
+        return estimated_times
