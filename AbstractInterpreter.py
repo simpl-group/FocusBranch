@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from typing import Self
+from typing_extensions import Self
 import warnings
 from contextlib import contextmanager
 from typing import NamedTuple
