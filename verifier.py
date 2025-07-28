@@ -84,6 +84,7 @@ class Verifier:
         Probe from start_level downward with the given partial indices and estimate the verification time.
 
         :param partial_indices: Indices of the pixels to be considered in the computation of diff.
+        :type partial_indices: torch.Tensor with shape (num_indices,) | None
         :param start_level: The level to start probing from.
         :return: Estimated verification time and the actual start level.
         """
@@ -132,8 +133,10 @@ class Verifier:
         """
         Adapt the input image and true label for the verification process. Will first check if the image matches the true label if check_first is True.
 
-        :param image: Input tensor of shape (batch_size, channel, height, width) or (batch, -1, 1).
-        :param true_labels: True labels for the input images.
+        :param images: Input images to be verified. If there is only one image, the batch size is 1.
+        :type images: torch.Tensor with shape (batch_size, channel, height, width) or (batch_size, -1, 1).
+        :param true_labels: True labels for the input images. Must be a tensor of shape (batch_size,).
+        :type true_labels: torch.Tensor with shape (batch_size,).
         :param target_label: Target label for targeted verification, if any.
         :param check_first: If True, will assert that the input image matches the true label.
         """
@@ -228,10 +231,13 @@ class Verifier:
             print(f"Safe: {success}")
         return success
 
-    def sample_all_k(self, baseline: dict[int, tuple[float, int]] | None=None) -> dict[int, float]:
+    def sample_all_k(self, baseline: dict[int, float] | None=None) -> dict[int, float]:
         """
         Sample all k from eps to max_k self.rep_each_k times and return the mean estimated verification time for each k.
+        If baseline is provided, it will stop sampling when the estimated time exceeds the baseline for that k.
 
+        :param baseline: A dictionary with k as keys and baseline verification time as values. If None, no baseline is used.
+        :type baseline: dict[int, float] | None
         :return: A dictionary with k as keys and estimated verification time as values.
         """
         estimated_times: dict[int, float] = {}
@@ -265,7 +271,7 @@ class Verifier:
             if num_actual_start_level_increased == self.rep_each_k:
                 self.start_level[k] += 1
             estimated_times[k] = batch_on_root_mean + accumulated_time / self.rep_each_k
-            if k != self.eps and baseline is not None and estimated_times[k] > baseline[k][0]:
+            if k != self.eps and baseline is not None and estimated_times[k] > baseline[k]:
                 break
             pbar.set_postfix({"k": k, "Estimated Time": f"{estimated_times[k]:.4f}s",
                 "Start Level": self.start_level[k], "Start Level Increased": num_actual_start_level_increased})
