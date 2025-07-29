@@ -142,7 +142,7 @@ class Verifier:
         """
         if check_first:
             assert images.ndim == 4, "Input images must be of shape (batch_size, channel, height, width)."
-            assert self.torch_net(images).argmax(dim=1).eq(true_labels).all(), "The input image does not match the true label."
+            assert self.torch_net(images.cpu()).argmax(dim=1).eq(true_labels).all(), "The input image does not match the true label."
             images = images.flatten(start_dim=1).unsqueeze(2)
         assert images.ndim == 3, "Input images must be of shape (batch_size, -1, 1)."
         self.bounded_x0.update_x(images)  # (batch, d1, 1)
