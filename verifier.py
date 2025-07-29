@@ -271,7 +271,7 @@ class Verifier:
             if num_actual_start_level_increased == self.rep_each_k:
                 self.start_level[k] += 1
             estimated_times[k] = batch_on_root_mean + accumulated_time / self.rep_each_k
-            if k != self.eps and baseline is not None and estimated_times[k] > baseline[k]:
+            if k != self.eps and baseline is not None and estimated_times[k] > baseline[k] * 0.4:  # tunable coefficient
                 break
             pbar.set_postfix({"k": k, "Estimated Time": f"{estimated_times[k]:.4f}s",
                 "Start Level": self.start_level[k], "Start Level Increased": num_actual_start_level_increased})
