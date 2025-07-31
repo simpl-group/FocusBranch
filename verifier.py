@@ -68,7 +68,7 @@ class Verifier:
         self.demo = demo
         self.start_level: defaultdict[int, int] = defaultdict(lambda: 0)  #key: k, value: start level to probe and verify
 
-    def check_safe_batched(self) -> torch.Tensor:
+    def __check_safe_batched(self) -> torch.Tensor:
         """
         Check each of the current batch is safe.
 
@@ -113,7 +113,7 @@ class Verifier:
                 for i in range(0, sample_nodes_this_level, self.batch_size):
                     combs_to_check_batch = combs_to_check[i:i + self.batch_size].to(self.device)
                     with self.bounded_x0.selecting(combs_to_check_batch):
-                        num_safe_nodes += int(self.check_safe_batched().sum().item())
+                        num_safe_nodes += int(self.__check_safe_batched().sum().item())
 
                 if num_safe_nodes == 0: first_any_safe_level += 1
                 current_speed = sample_nodes_this_level / (perf_counter() - level_start)
@@ -254,7 +254,7 @@ class Verifier:
                     for i in range(0, all_partial_indices.shape[0], self.batch_size):
                         batched_partial_indices = all_partial_indices[i:i + self.batch_size].to(self.device)
                         with self.bounded_x0.partial(batched_partial_indices):  # batch on root level
-                            safes = self.check_safe_batched()
+                            safes = self.__check_safe_batched()
                         root_unk_list.append(batched_partial_indices[~safes])
                 batch_on_root_mean = (perf_counter() - batch_on_root_start) / self.rep_each_k
                 all_partial_indices = torch.vstack(root_unk_list)  # root level unk partial indices
