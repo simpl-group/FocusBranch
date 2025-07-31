@@ -150,6 +150,7 @@ class Verifier:
             self.seqAT.tail.make_marginal(true_labels=true_labels, target_label=target_label, device=self.device)
         else:
             self.seqAT.tail.make_marginals(true_labels=true_labels, device=self.device)
+        self.start_level = defaultdict(lambda: 0)
 
     def verify1(self, partial_indices: torch.Tensor | None=None, start_level: int=0) -> bool:
         num_indices = self.num_pixels
