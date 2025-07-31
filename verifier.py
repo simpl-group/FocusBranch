@@ -264,7 +264,7 @@ class Verifier:
                 start_level = 1  # for the probe, since level 0 is already checked
             num_actual_start_level_increased = 0
             accumulated_time = 0.
-            for i, partial_indices in enumerate(all_partial_indices):
+            for partial_indices in all_partial_indices:
                 estimated_time, actual_start_level = self.probe(partial_indices, start_level)
                 accumulated_time += estimated_time
                 if actual_start_level > start_level:
@@ -282,3 +282,48 @@ class Verifier:
             self.start_level.default_factory = lambda: self.start_level[k]  # set the default factory to the last start level
 
         return estimated_times
+
+    def verify1_partial(self, partial_indices: torch.Tensor, start_level: int=0) -> bool:
+        """
+        Speed up version of verify1 for a given partial indices.
+        No demo, no seqAT.working_on context manager, no raising of TimeoutException and no cuda cache clearing.
+        """
+        num_indices = self.num_pixels
+        num_indices = partial_indices.shape[0]
+        start_level = max(start_level, self.start_level[num_indices])  # use the start level for this k
+        bitmask_length = (num_indices + 63) // 64
+        combs_to_check = torch.combinations(torch.arange(num_indices), start_level)
+        if start_level == 0: combs_to_check = torch.empty((1, 0), dtype=torch.long)
+        safe_bitmasks: torch.Tensor = torch.empty((0, bitmask_length), dtype=torch.long)
+        for level in range(start_level, self.eps + 1):
+            num_to_check = combs_to_check.shape[0]
+            if num_to_check == 0: return True
+            unk_combs_lst: list[torch.Tensor] = []
+            new_safe_bitmasks_lst: list[torch.Tensor] = [safe_bitmasks]
+            with self.bounded_x0.partial(partial_indices):
+                for i in range(0, num_to_check, self.batch_size):
+                    combs_to_check_batch = combs_to_check[i:i + self.batch_size].to(self.device)
+                    with self.bounded_x0.selecting(combs_to_check_batch):
+                        safes = self.__check_safe_batched()
+                    new_safe_bitmasks_lst.append(combs2bitmasks(combs_to_check_batch[safes], bitmask_length).cpu())
+                    unk_combs_lst.append(combs_to_check_batch[~safes].cpu())
+
+            unk_combs = torch.cat(unk_combs_lst, dim=0)
+            if unk_combs.shape[0] == 0: return True
+            if level == self.eps: return False
+            safe_bitmasks = torch.cat(new_safe_bitmasks_lst, dim=0)
+            combs_to_check = split_and_prune(unk_combs, safe_bitmasks, level, num_indices, False)
+        return False
+
+    def verify1_partials(self, partial_indices2d: torch.Tensor) -> bool:
+        assert partial_indices2d.ndim == 2, "partial_indices2d must be of shape (batch_size, num_indices)"
+        assert self.start_level[partial_indices2d.shape[1]] == 0, "start_level must be 0 for partial_indices2d to batch on root"
+        root_unk_list: list[torch.Tensor] = []
+        for i in range(0, partial_indices2d.shape[0], self.batch_size):
+            batched_partial_indices = partial_indices2d[i:i + self.batch_size].to(self.device)
+            with self.bounded_x0.partial(batched_partial_indices):
+                safes = self.__check_safe_batched()
+            root_unk_list.append(batched_partial_indices[~safes])
+        for partial_indices in torch.vstack(root_unk_list):
+            if not self.verify1_partial(partial_indices, start_level=1): return False
+        return True
