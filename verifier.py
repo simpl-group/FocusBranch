@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 def batched_randsample(upper_bound: int, sample_size: int, batch_size: int) -> torch.Tensor:
     """
-    Generate a tensor of shape (batch_size, sample_size) with random indices from 0 to upper_bound-1.
+    Generate a tensor of shape (batch_size, sample_size) with random indices from 0 to upper_bound-1 on cpu.
     The indices are no need to be unique within each row.
     The indices are sorted in ascending order.
     """
@@ -72,7 +72,7 @@ class Verifier:
         """
         Check each of the current batch is safe.
 
-        :return: A tensor of shape (batch_size,) with True if the corresponding input is safe, False otherwise.
+        :return: A 1D Tensor on self.device of shape (batch_size,) with True if the corresponding input is safe, False otherwise.
         """
         self.seqAT.update_activation_rp(bounded_in=self.bounded_x0)
         lrp = self.seqAT.tail.backsubstitution_lrp()
@@ -96,7 +96,7 @@ class Verifier:
         if self.demo:
             sampled_nodes = 0
             start = perf_counter()
-        with self.seqAT.working_on(self.device), self.bounded_x0.partial(partial_indices):
+        with self.bounded_x0.partial(partial_indices):
             for level in range(start_level, self.eps + 1):
                 if level == 0:
                     combs_to_check = torch.empty((1, 0), dtype=torch.int64)
@@ -249,16 +249,9 @@ class Verifier:
             self.start_level[k] = start_level = self.start_level[k-1]  # init from the previous k
             batch_on_root_mean = 0.
             if self.start_level[k] == 0:  # only batch on root level if start level is 0, otherwise skip this part
-                root_unk_list: list[torch.Tensor] = []
                 batch_on_root_start = perf_counter()
-                with self.seqAT.working_on(self.device):
-                    for i in range(0, all_partial_indices.shape[0], self.batch_size):
-                        batched_partial_indices = all_partial_indices[i:i + self.batch_size].to(self.device)
-                        with self.bounded_x0.partial(batched_partial_indices):  # batch on root level
-                            safes = self.__check_safe_batched()
-                        root_unk_list.append(batched_partial_indices[~safes])
+                all_partial_indices = all_partial_indices[~self.check_safe_partials(all_partial_indices, end_level=0)]  # root level unk partial indices
                 batch_on_root_mean = (perf_counter() - batch_on_root_start) / self.rep_each_k
-                all_partial_indices = torch.vstack(root_unk_list)  # root level unk partial indices
                 if all_partial_indices.shape[0] == self.rep_each_k:
                     self.start_level[k] = 1  # if all sampled partial are not safe at root level, start from level 1
                 start_level = 1  # for the probe, since level 0 is already checked
@@ -315,15 +308,21 @@ class Verifier:
             combs_to_check = split_and_prune(unk_combs, safe_bitmasks, level, num_indices, False)
         return False
 
-    def verify1_partials(self, partial_indices2d: torch.Tensor) -> bool:
+    def check_safe_partials(self, partial_indices2d: torch.Tensor, end_level: int=0) -> torch.Tensor:
+        """
+        Check safe for all the partials til end level with batch processing.
+        This method checks which of the partial indices are safe til end level and returns a boolean tensor.
+
+        :param partial_indices2d: Each row is a set of partial indices.
+        :type partial_indices2d: torch.Tensor of shape (num_partials, num_indices)
+        :return: A 1D tensor on cpu of shape \(num_partials,\) with True if the corresponding partial indices is safe, False otherwise.
+        """
         assert partial_indices2d.ndim == 2, "partial_indices2d must be of shape (batch_size, num_indices)"
-        assert self.start_level[partial_indices2d.shape[1]] == 0, "start_level must be 0 for partial_indices2d to batch on root"
-        root_unk_list: list[torch.Tensor] = []
+        assert end_level == 0, "TODO: implement end_level > 0"
+        safes_book = torch.zeros(partial_indices2d.shape[0], dtype=torch.bool, device=self.device)
+        if partial_indices2d.device != self.device:
+            partial_indices2d = partial_indices2d.to(self.device)
         for i in range(0, partial_indices2d.shape[0], self.batch_size):
-            batched_partial_indices = partial_indices2d[i:i + self.batch_size].to(self.device)
-            with self.bounded_x0.partial(batched_partial_indices):
-                safes = self.__check_safe_batched()
-            root_unk_list.append(batched_partial_indices[~safes])
-        for partial_indices in torch.vstack(root_unk_list):
-            if not self.verify1_partial(partial_indices, start_level=1): return False
-        return True
+            with self.bounded_x0.partial(partial_indices2d[i:i + self.batch_size]):
+                safes_book[i:i + self.batch_size] = self.__check_safe_batched()
+        return safes_book.cpu()
