@@ -241,30 +241,28 @@ class Verifier:
         :type baseline: dict[int, float] | None
         :return: A dictionary with k as keys and estimated verification time as values.
         """
-        estimated_times: dict[int, float] = {}
+        estimated_times: defaultdict[int, float] = defaultdict(float)
         pbar = tqdm(total=self.max_k - self.eps + 1, desc="Sampling k", disable=not self.demo, bar_format=TQDM_BAR_FORMAT)
         self.demo = False
         for k in range(self.eps, self.max_k + 1):
             all_partial_indices = batched_randsample(self.num_pixels, k, self.rep_each_k)
             self.start_level[k] = start_level = self.start_level[k-1]  # init from the previous k
-            batch_on_root_mean = 0.
             if self.start_level[k] == 0:  # only batch on root level if start level is 0, otherwise skip this part
                 batch_on_root_start = perf_counter()
                 all_partial_indices = all_partial_indices[~self.check_safe_partials(all_partial_indices, end_level=0)]  # root level unk partial indices
-                batch_on_root_mean = (perf_counter() - batch_on_root_start) / self.rep_each_k
+                estimated_times[k] += (perf_counter() - batch_on_root_start)
                 if all_partial_indices.shape[0] == self.rep_each_k:
                     self.start_level[k] = 1  # if all sampled partial are not safe at root level, start from level 1
                 start_level = 1  # for the probe, since level 0 is already checked
             num_actual_start_level_increased = 0
-            accumulated_time = 0.
             for partial_indices in all_partial_indices:
                 estimated_time, actual_start_level = self.probe(partial_indices, start_level)
-                accumulated_time += estimated_time
+                estimated_times[k] += estimated_time
                 if actual_start_level > start_level:
                     num_actual_start_level_increased += 1
             if num_actual_start_level_increased == self.rep_each_k:
                 self.start_level[k] += 1
-            estimated_times[k] = batch_on_root_mean + accumulated_time / self.rep_each_k
+            estimated_times[k] /= self.rep_each_k
             if k != self.eps and baseline is not None and estimated_times[k] > baseline[k] * 0.4:  # tunable coefficient
                 break
             pbar.set_postfix({"k": k, "Estimated Time": f"{estimated_times[k]:.4f}s",
