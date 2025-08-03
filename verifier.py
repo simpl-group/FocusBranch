@@ -66,7 +66,7 @@ class Verifier:
         self.rep_each_level = rep_each_level
         self.timeout = timeout
         self.demo = demo
-        self.start_level: defaultdict[int, int] = defaultdict(lambda: 0)  #key: k, value: start level to probe and verify
+        self.start_levels: defaultdict[int, int] = defaultdict(lambda: 0)  #key: k, value: start level to probe and verify
 
     def __check_safe_batched(self) -> torch.Tensor:
         """
@@ -150,14 +150,14 @@ class Verifier:
             self.seqAT.tail.make_marginal(true_labels=true_labels, target_label=target_label, device=self.device)
         else:
             self.seqAT.tail.make_marginals(true_labels=true_labels, device=self.device)
-        self.start_level = defaultdict(lambda: 0)
+        self.start_levels = defaultdict(lambda: 0)
 
     def verify1(self, partial_indices: torch.Tensor | None=None, start_level: int=0) -> bool:
         num_indices = self.num_pixels
         if partial_indices is not None:
             num_indices = partial_indices.shape[0]
             if start_level == 0:
-                start_level = self.start_level[num_indices]  # use the start level for this k
+                start_level = self.start_levels[num_indices]  # use the start level for this k
         bitmask_length = (num_indices + 63) // 64
         combs_to_check = torch.combinations(torch.arange(num_indices), start_level)
         if start_level == 0: combs_to_check = torch.empty((1, 0), dtype=torch.int64)
@@ -246,13 +246,13 @@ class Verifier:
         self.demo = False
         for k in range(self.eps, self.max_k + 1):
             all_partial_indices = batched_randsample(self.num_pixels, k, self.rep_each_k)
-            self.start_level[k] = start_level = self.start_level[k-1]  # init from the previous k
-            if self.start_level[k] == 0:  # only batch on root level if start level is 0, otherwise skip this part
+            self.start_levels[k] = start_level = self.start_levels[k-1]  # init from the previous k
+            if self.start_levels[k] == 0:  # only batch on root level if start level is 0, otherwise skip this part
                 batch_on_root_start = perf_counter()
                 all_partial_indices = all_partial_indices[~self.check_safe_partials(all_partial_indices, end_level=0)]  # root level unk partial indices
-                estimated_times[k] += (perf_counter() - batch_on_root_start)
+                estimated_times[k] += perf_counter() - batch_on_root_start
                 if all_partial_indices.shape[0] == self.rep_each_k:
-                    self.start_level[k] = 1  # if all sampled partial are not safe at root level, start from level 1
+                    self.start_levels[k] = 1  # if all sampled partial are not safe at root level, start from level 1
                 start_level = 1  # for the probe, since level 0 is already checked
             num_actual_start_level_increased = 0
             for partial_indices in all_partial_indices:
@@ -261,32 +261,37 @@ class Verifier:
                 if actual_start_level > start_level:
                     num_actual_start_level_increased += 1
             if num_actual_start_level_increased == self.rep_each_k:
-                self.start_level[k] += 1
+                self.start_levels[k] += 1
             estimated_times[k] /= self.rep_each_k
             if k != self.eps and baseline is not None and estimated_times[k] > baseline[k] * 0.4:  # tunable coefficient
                 break
             pbar.set_postfix({"k": k, "Estimated Time": f"{estimated_times[k]:.4f}s",
-                "Start Level": self.start_level[k], "Start Level Increased": num_actual_start_level_increased})
+                "Start Level": self.start_levels[k], "Start Level Increased": num_actual_start_level_increased})
             pbar.update(1)
         pbar.close()
         if k != self.max_k:
-            self.start_level.default_factory = lambda: self.start_level[k]  # set the default factory to the last start level
+            self.start_levels.default_factory = lambda: self.start_levels[k]  # set the default factory to the last start level
 
         return estimated_times
 
-    def verify1_partial(self, partial_indices: torch.Tensor, start_level: int=0) -> bool:
+    def verify1_partial(self, partial_indices: torch.Tensor, start_level: int=0, end_level: int=-1) -> bool:
         """
         Speed up version of verify1 for a given partial indices.
         No demo, no seqAT.working_on context manager, no raising of TimeoutException and no cuda cache clearing.
+        This method checks if the partial indices are safe from start_level to end_level.
+        :param partial_indices: Indices of the pixels to be considered in the computation of diff.
+        :type partial_indices: torch.Tensor with shape (num_indices,)
+        :param start_level: The level to start verification. Default to self.start_levels[num_indices].
+        :param end_level: The level to end verification. Default to self.eps.
         """
-        num_indices = self.num_pixels
         num_indices = partial_indices.shape[0]
-        start_level = max(start_level, self.start_level[num_indices])  # use the start level for this k
+        start_level = max(start_level, self.start_levels[num_indices])  # use the start level for this k
+        if end_level == -1: end_level = self.eps
         bitmask_length = (num_indices + 63) // 64
-        combs_to_check = torch.combinations(torch.arange(num_indices), start_level)
         if start_level == 0: combs_to_check = torch.empty((1, 0), dtype=torch.long)
+        else: combs_to_check = torch.combinations(torch.arange(num_indices), start_level)
         safe_bitmasks: torch.Tensor = torch.empty((0, bitmask_length), dtype=torch.long)
-        for level in range(start_level, self.eps + 1):
+        for level in range(start_level, end_level + 1):
             num_to_check = combs_to_check.shape[0]
             if num_to_check == 0: return True
             unk_combs_lst: list[torch.Tensor] = []
@@ -301,26 +306,35 @@ class Verifier:
 
             unk_combs = torch.cat(unk_combs_lst, dim=0)
             if unk_combs.shape[0] == 0: return True
-            if level == self.eps: return False
+            if level == end_level: return False
             safe_bitmasks = torch.cat(new_safe_bitmasks_lst, dim=0)
             combs_to_check = split_and_prune(unk_combs, safe_bitmasks, level, num_indices, False)
         return False
 
-    def check_safe_partials(self, partial_indices2d: torch.Tensor, end_level: int=0) -> torch.Tensor:
+    def check_safe_partials(self, partial_indices2d: torch.Tensor, start_level: int=0, end_level: int=-1) -> torch.Tensor:
         """
         Check safe for all the partials til end level with batch processing.
         This method checks which of the partial indices are safe til end level and returns a boolean tensor.
 
         :param partial_indices2d: Each row is a set of partial indices.
         :type partial_indices2d: torch.Tensor of shape (num_partials, num_indices)
+        :param start_level: The level to start verification. Default to self.start_levels[num_indices].
+        :param end_level: The level to end verification. Default to self.eps.
         :return: A 1D tensor on cpu of shape \(num_partials,\) with True if the corresponding partial indices is safe, False otherwise.
         """
         assert partial_indices2d.ndim == 2, "partial_indices2d must be of shape (batch_size, num_indices)"
-        assert end_level == 0, "TODO: implement end_level > 0"
-        safes_book = torch.zeros(partial_indices2d.shape[0], dtype=torch.bool, device=self.device)
+        num_partials, num_indices = partial_indices2d.shape
+        start_level = max(start_level, self.start_levels[num_indices])
+        if end_level == -1: end_level = self.eps
+        safes_book = torch.zeros(num_partials, dtype=torch.bool, device=self.device)
         if partial_indices2d.device != self.device:
             partial_indices2d = partial_indices2d.to(self.device)
-        for i in range(0, partial_indices2d.shape[0], self.batch_size):
-            with self.bounded_x0.partial(partial_indices2d[i:i + self.batch_size]):
-                safes_book[i:i + self.batch_size] = self.__check_safe_batched()
+        if start_level == 0:
+            for i in range(0, num_partials, self.batch_size):
+                with self.bounded_x0.partial(partial_indices2d[i:i + self.batch_size]):
+                    safes_book[i:i + self.batch_size] = self.__check_safe_batched()
+            start_level = 1
+        if end_level >= start_level:
+            for unk_i in torch.where(~safes_book)[0]:
+                safes_book[unk_i] = self.verify1_partial(partial_indices2d[unk_i], start_level, end_level)
         return safes_book.cpu()
