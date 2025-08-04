@@ -274,6 +274,22 @@ class Verifier:
 
         return estimated_times
 
+    def sample_all_k_on_root(self):
+        sampling_counts, sampling_successes , sampling_time = [], [], []
+        rep_each_k = self.rep_each_k
+        for k in range(self.eps, self.max_k + 1):
+            all_partial_indices = batched_randsample(self.num_pixels, k, rep_each_k)
+            batch_on_root_start = perf_counter()
+            sampling_successes.append(self.check_safe_partials(all_partial_indices, end_level=0).sum().item())
+            sampling_time.append(perf_counter() - batch_on_root_start)
+            sampling_counts.append(all_partial_indices.shape[0])
+            if sampling_successes[-1] == 0:
+                rep_each_k = self.batch_size  # if no safe partials, use smaller batch size to sample more
+                self.start_levels[k] = 1  # if all sampled partials are not safe at root level, start from level 1
+            else:
+                self.start_levels[k] = 0  # if there are safe partials, start from level 0
+        return sampling_counts, sampling_successes, sampling_time
+
     def verify1_partial(self, partial_indices: torch.Tensor, start_level: int=0, end_level: int=-1) -> bool:
         """
         Speed up version of verify1 for a given partial indices.
