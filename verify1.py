@@ -15,9 +15,6 @@ parser = argparse.ArgumentParser(
     description="Sample-wise (local) L0 robustness verification of neural networks"
 )
 add_shared_arguments(parser)
-parser.add_argument("--max-k", type=int, default=200, help="Maximum k to sample from.")
-parser.add_argument("-rk", "--rep-each-k", type=int, default=50, help="Number of partial indices samples for each k.")
-parser.add_argument("-rl", "--rep-each-level", type=int, default=500, help="Maximum number of combinations for each level.")
 parser.add_argument("--probe", action="store_true", help="Probe each level to estimate the time for verification.")
 parser.add_argument("--partial", type=int, default=None, help="Maximum k to sample from.")
 parser.add_argument("--sample-all", action="store_true", help="Sample all k from eps to max_k rep_each_k times and return the mean estimated verification time for each k")
