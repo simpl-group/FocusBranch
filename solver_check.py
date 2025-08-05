@@ -153,7 +153,7 @@ if __name__ == "__main__":
     pbar = tqdm(total=args.test_batches, bar_format=TQDM_BAR_FORMAT, disable=args.demo)
     for images, pred_labels in data_loader:
         assert net(images).argmax(dim=1).eq(pred_labels).all()
-        bounded_x0.x = images.flatten(start_dim=1).unsqueeze(2)  # (batch, d1, 1)
+        bounded_x0.update_x(images.flatten(start_dim=1).unsqueeze(2))  # (batch, d1, 1)
         if args.target_label is not None:
             seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device="cpu")
         else:
