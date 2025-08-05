@@ -248,3 +248,4 @@ test*.py
 *.pdf
 *.pt
 *.gz
+*.txt

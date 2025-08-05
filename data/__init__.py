@@ -116,3 +116,20 @@ DATASETS: dict[DatasetName, DatasetUtils] = {
         dataset_class=CIFAR10,
     ),
 }
+
+def load_covering(v: int, k: int, t: int) -> list[list[int]]:
+    covering = []
+    with open(BASE_DIR / f"refinement_coverings/{t}/({v},{k},{t}).txt", 'r') as f:
+        for line in f:
+            covering.append([int(item) for item in line.split(',')])
+    return covering
+
+def load_covering_sizes(t: int, clipping_size: int=500000) -> dict[tuple[int, int], int]:
+    covering_table_file = np.genfromtxt(BASE_DIR / f'refinement_coverings/{t}-table-refinement.csv', delimiter=',')
+    covering_sizes = {}
+    for v in range(t + 1, covering_table_file.shape[0] + t - 1):
+        for k in range(t, v):
+            size = int(covering_table_file[v - t + 1][k - t + 1])
+            if size < clipping_size:
+                covering_sizes[(v, k)] = size
+    return covering_sizes
