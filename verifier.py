@@ -1,7 +1,10 @@
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from split_and_prune import split_and_prune
 from bimm import combs2bitmasks
+from covering_generator import launch_covering_generator
+from data import load_covering
 from utils import DEVICE, TQDM_BAR_FORMAT, TimeoutException
+from multiprocessing.connection import Client, Listener
 from time import perf_counter
 from functools import lru_cache
 from collections import defaultdict
@@ -40,6 +43,17 @@ def selected_indices_sample(k: int, num_select: int, repetitions: int) -> torch.
         else:
             return all_combs.cpu()
 
+def get_refinement_subsets(partial_indices, covering) -> list[list[int]]:
+    return [[partial_indices[i] for i in cover] for cover in covering]
+
+def load_refinement_coverings(refinement_strategy: dict[int, int|None]) -> dict[int, list[list[int]]]:
+    eps = min(refinement_strategy.keys())
+    refinement_coverings: dict[int, list[list[int]]] = {}
+    for v, k in refinement_strategy.items():
+        if k is None: continue  # different strategy
+        refinement_coverings[v] = load_covering(v, k, eps)
+    return refinement_coverings
+
 class Verifier:
     def __init__(self,
         torch_net: torch.nn.Module,
@@ -51,7 +65,10 @@ class Verifier:
         rep_each_k: int=50,
         rep_each_level: int=1000,
         timeout: int=0,
-        demo: bool=False
+        demo: bool=False,
+        port: int=0,
+        num_workers: int=1,
+        worker_id: int=0
     ) -> None:
         self.torch_net = torch_net.cpu()
         self.seqAT = seqAT
@@ -66,6 +83,10 @@ class Verifier:
         self.rep_each_level = rep_each_level
         self.timeout = timeout
         self.demo = demo
+        self.__port = port
+        self.__num_workers = num_workers
+        self.__worker_id = worker_id
+        self.__greater_batch = self.batch_size * 10
         self.start_levels: defaultdict[int, int] = defaultdict(lambda: 0)  #key: k, value: start level to probe and verify
 
     def __check_safe_batched(self) -> torch.Tensor:
@@ -354,3 +375,120 @@ class Verifier:
             for unk_i in torch.where(~safes_book)[0]:
                 safes_book[unk_i] = self.verify1_partial(partial_indices2d[unk_i], start_level, end_level)
         return safes_book.cpu()
+
+    def __handle_partial(self, partial_indices):
+        num_indices = len(partial_indices)
+        # message: (num_indices, runs, successes, duration)
+        if num_indices < self.eps:
+            self.conn.send((num_indices, 1, 1, 0.))
+        elif self.refinement_strategy[num_indices] is not None:
+            if num_indices <= self.max_size_to_batch:
+                self.batch_pool[num_indices].append(partial_indices)
+                if len(self.batch_pool[num_indices]) == self.__greater_batch:
+                    partial_indices2d = torch.tensor(self.batch_pool[num_indices])
+                    self.batch_pool[num_indices] = []
+                    start = perf_counter()
+                    safes = self.check_safe_partials(partial_indices2d=partial_indices2d, end_level=0)
+                    self.conn.send((num_indices, partial_indices2d.shape[0], safes.sum().item(), perf_counter() - start))
+                    refined_indices = []
+                    for partial in partial_indices2d[~safes].tolist():
+                        refined_indices.extend(get_refinement_subsets(partial, self.refinement_coverings[num_indices]))
+                    for partial in refined_indices:
+                        self.__handle_partial(partial)
+            else:
+                self.conn.send((num_indices, 1, 0, 0.))
+                for partial in get_refinement_subsets(partial_indices, self.refinement_coverings[num_indices]):
+                    self.__handle_partial(partial)
+        elif num_indices > self.max_size_to_batch:
+            start = perf_counter()
+            assert self.verify1_partial(partial_indices=torch.tensor(partial_indices))
+            self.conn.send((num_indices, 1, 1, perf_counter() - start))
+        else:
+            self.batch_pool[num_indices].append(partial_indices)
+            if len(self.batch_pool[num_indices]) == self.__greater_batch:
+                start = perf_counter()
+                partial_indices2d = torch.tensor(self.batch_pool[num_indices])
+                assert self.check_safe_partials(partial_indices2d=partial_indices2d).all()
+                self.conn.send((num_indices, self.__greater_batch, self.__greater_batch, perf_counter() - start))
+                self.batch_pool[num_indices] = []
+
+    def __prove(self, geometry, chosen_points):
+        num_of_blocks = math.floor(geometry.number_of_blocks() / self.__num_workers)
+        if self.__worker_id < geometry.number_of_blocks() % self.__num_workers:
+            num_of_blocks += 1
+        with Listener(('localhost', 0)) as blocks_listener:
+            blocks_generator_process = launch_covering_generator(
+                q=geometry.q, m=geometry.m, t=geometry.t,
+                port=blocks_listener.address[1],
+                chosen_points=chosen_points,
+                num_workers=self.__num_workers,
+                worker_id=self.__worker_id
+            )
+            with blocks_listener.accept() as blocks_conn:
+                for _ in range(num_of_blocks):
+                    if self.conn.poll() and self.conn.recv() == 'stop':
+                        blocks_generator_process.kill()
+                        self.conn.send('stopped')
+                        return
+                    partial_indices = blocks_conn.recv()  # assert partial_indices is sorted and of type list[int]
+                    self.__handle_partial(partial_indices)
+                assert blocks_conn.recv() == 'done'
+                blocks_conn.send('done')
+
+        # handle remaining partials in the pool
+        # get those self.refinement_strategy[num_indices] is not None and len(partial_indices_list) > 0
+        for num_indices, partial_indices_list in self.batch_pool.items():
+            if len(partial_indices_list) > 0 and self.refinement_strategy[num_indices] is not None:
+                partial_indices2d = torch.tensor(partial_indices_list)
+                start = perf_counter()
+                safes = self.check_safe_partials(partial_indices2d=partial_indices2d, end_level=0)
+                self.conn.send((num_indices, partial_indices2d.shape[0], safes.sum().item(), perf_counter() - start))
+                partial_indices_list.clear()
+                refined_indices = []
+                for partial in partial_indices2d[~safes].tolist():
+                    refined_indices.extend(get_refinement_subsets(partial, self.refinement_coverings[num_indices]))
+                for partial in refined_indices:
+                    self.__handle_partial(partial)
+
+        for num_indices, partial_indices_list in self.batch_pool.items():
+            if len(partial_indices_list) > 0:
+                start = perf_counter()
+                assert self.check_safe_partials(partial_indices2d=torch.tensor(partial_indices_list)).all()
+                self.conn.send((num_indices, len(partial_indices_list), len(partial_indices_list), perf_counter() - start))
+        self.conn.send('done')
+        assert self.conn.recv() == 'stop'
+        self.conn.send('stopped')
+
+    def work_as_worker(self):
+        with Client(('localhost', self.__port)) as self.conn:
+            # Every iteration of this loop is one image
+            message = self.conn.recv()
+            while message != 'terminate':
+                seed, self.image, self.label = message
+                torch.manual_seed(seed)
+                torch_img = torch.tensor(self.image, dtype=torch.float32).reshape(1, -1, 1)
+                self.adapt_target_images(images=torch_img, true_labels=torch.tensor([self.label], dtype=torch.int64), check_first=False)
+
+                self.conn.send(self.sample_all_k_on_root())
+                self.max_size_to_batch = max(k for k, v in self.start_levels.items() if v == 0)
+                print(f"Worker {self.__worker_id} max size to batch: {self.max_size_to_batch}")
+                self.batch_pool: dict[int, list[list[int]]] = {k: [] for k in list(range(self.eps, self.max_size_to_batch + 1))[::-1]}
+
+                geometry, chosen_points, self.refinement_strategy = self.conn.recv()
+                self.refinement_coverings = load_refinement_coverings(self.refinement_strategy)
+                self.__prove(geometry, chosen_points)
+                message = self.conn.recv()
+
+if __name__ == '__main__':
+    import argparse
+    from utils.shared import add_shared_arguments, get_verifier
+    parser = argparse.ArgumentParser(description='L0 Robustness Verifier: (GPU) Worker',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    add_shared_arguments(parser)
+    parser.add_argument('--worker_id', type=int, default=0, help='The index of the worker')
+    parser.add_argument('--num-workers', type=int, default=1, help='Total number of workers')
+    parser.add_argument('--port', type=int, default=0, help='The port main verification process is listening on')
+    args = parser.parse_args()
+
+    verifier = get_verifier(args)
+    verifier.work_as_worker()
