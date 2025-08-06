@@ -423,6 +423,16 @@ class SequentialAT:
                 pre_activation_bounds = bounded_in.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs)
                 AT.lrp, AT.urp = AT.compute_rp(pre_activation_bounds)
 
+    def get_preactivation_bounds(self, bounded_in: BoundedInput) -> list[Bounds]:
+        pre_activation_bounds_list = []
+        for AT in self.ATs:
+            if isinstance(AT, ActivationAT):
+                lrp_wrt_inputs, urp_wrt_inputs = AT.parent.backsubstitution()
+                pre_activation_bounds = bounded_in.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs)
+                AT.lrp, AT.urp = AT.compute_rp(pre_activation_bounds)
+                pre_activation_bounds_list.append(pre_activation_bounds)
+        return pre_activation_bounds_list
+
     def remove_activation_rp(self) -> None:
         for AT in self.ATs:
             if isinstance(AT, ActivationAT):
