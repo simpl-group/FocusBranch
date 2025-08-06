@@ -65,10 +65,7 @@ class Verifier:
         rep_each_k: int=50,
         rep_each_level: int=1000,
         timeout: int=0,
-        demo: bool=False,
-        port: int=0,
-        num_workers: int=1,
-        worker_id: int=0
+        demo: bool=False
     ) -> None:
         self.torch_net = torch_net.cpu()
         self.seqAT = seqAT
@@ -83,9 +80,6 @@ class Verifier:
         self.rep_each_level = rep_each_level
         self.timeout = timeout
         self.demo = demo
-        self.__port = port
-        self.__num_workers = num_workers
-        self.__worker_id = worker_id
         self.__greater_batch = self.batch_size * 10
         self.start_levels: defaultdict[int, int] = defaultdict(lambda: 0)  #key: k, value: start level to probe and verify
 
@@ -412,17 +406,17 @@ class Verifier:
                 self.conn.send((num_indices, self.__greater_batch, self.__greater_batch, perf_counter() - start))
                 self.batch_pool[num_indices] = []
 
-    def __prove(self, geometry, chosen_points):
-        num_of_blocks = math.floor(geometry.number_of_blocks() / self.__num_workers)
-        if self.__worker_id < geometry.number_of_blocks() % self.__num_workers:
+    def __prove(self, geometry, chosen_points, num_workers: int, worker_id: int):
+        num_of_blocks = math.floor(geometry.number_of_blocks() / num_workers)
+        if worker_id < geometry.number_of_blocks() % num_workers:
             num_of_blocks += 1
         with Listener(('localhost', 0)) as blocks_listener:
             blocks_generator_process = launch_covering_generator(
                 q=geometry.q, m=geometry.m, t=geometry.t,
                 port=blocks_listener.address[1],
                 chosen_points=chosen_points,
-                num_workers=self.__num_workers,
-                worker_id=self.__worker_id
+                num_workers=num_workers,
+                worker_id=worker_id
             )
             with blocks_listener.accept() as blocks_conn:
                 for _ in range(num_of_blocks):
@@ -459,8 +453,8 @@ class Verifier:
         assert self.conn.recv() == 'stop'
         self.conn.send('stopped')
 
-    def work_as_worker(self):
-        with Client(('localhost', self.__port)) as self.conn:
+    def work_as_worker(self, port: int, num_workers: int=1, worker_id: int=0):
+        with Client(('localhost', port)) as self.conn:
             # Every iteration of this loop is one image
             message = self.conn.recv()
             while message != 'terminate':
@@ -471,12 +465,12 @@ class Verifier:
 
                 self.conn.send(self.sample_all_k_on_root())
                 self.max_size_to_batch = max(k for k, v in self.start_levels.items() if v == 0)
-                print(f"Worker {self.__worker_id} max size to batch: {self.max_size_to_batch}")
+                print(f"Worker {worker_id} max size to batch: {self.max_size_to_batch}")
                 self.batch_pool: dict[int, list[list[int]]] = {k: [] for k in list(range(self.eps, self.max_size_to_batch + 1))[::-1]}
 
                 geometry, chosen_points, self.refinement_strategy = self.conn.recv()
                 self.refinement_coverings = load_refinement_coverings(self.refinement_strategy)
-                self.__prove(geometry, chosen_points)
+                self.__prove(geometry, chosen_points, num_workers, worker_id)
                 message = self.conn.recv()
 
 if __name__ == '__main__':
@@ -491,4 +485,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     verifier = get_verifier(args)
-    verifier.work_as_worker()
+    verifier.work_as_worker(port=args.port, num_workers=args.num_workers, worker_id=args.worker_id)
