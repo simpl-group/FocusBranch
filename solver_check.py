@@ -1,4 +1,4 @@
-from AbstractInterpreter import SequentialAT, L0BoundedInput, ActivationAT, AffineAT, ReLUAT
+from AbstractInterpreter import SequentialAT, L0BoundedInput, AffineAT, ReLUAT
 from utils import timeout_handler, TimeoutException, TQDM_BAR_FORMAT
 from utils.shared import get4, add_shared_arguments
 import argparse
@@ -55,30 +55,16 @@ def gurobi_check_unsat(
         print(f"Solver status: {model.Status}")
     return False
 
-
-def gurobi_complete_check(seqAT: SequentialAT, bounded_x0: L0BoundedInput,
-                          pre_activation_bounds_list: list[tuple[np.ndarray, np.ndarray]],
-                          demo: bool = True, ground_truth_label: int | None = None, ) -> bool:
-    model = gp.Model("check_unsat", env=env)
-    img = bounded_x0.x[0, ..., 0].numpy()  # input: [784]
-    delta = model.addMVar(img.shape, vtype=GRB.CONTINUOUS, name="delta")  # delta: [784]
-    for i in range(img.shape[0]):
-        model.addConstr(delta[i] <= bounded_x0.U - img[i])
-        model.addConstr(bounded_x0.L - img[i] <= delta[i])
-    x = img + delta  # input
-
-    epsilon = bounded_x0.eps
-    l0_loss = model.addVar(lb=epsilon, ub=epsilon)
-    model.addGenConstrNorm(l0_loss, delta, 0.0)
-
-    # forward
+def add_forward_constraints(model: gp.Model, seqAT: SequentialAT, bounded_x0, x: gp.MVar) -> gp.MVar:
+    pre_activation_bounds_list = seqAT.get_preactivation_bounds(bounded_in=bounded_x0)
     relu_layer_idx = 0
     for layer_idx, AT in enumerate(seqAT.ATs):
         if isinstance(AT, AffineAT):  # FC, ConV2D
-            weight, bias = AT.rp.W[0, ...].numpy(), AT.rp.b[0, ..., 0].numpy()
+            weight, bias = AT.rp.W[0, ...].cpu().numpy(), AT.rp.b[0, ..., 0].cpu().numpy()
             x = weight @ x + bias
         elif isinstance(AT, ReLUAT):  # ReLU
-            lbound, ubound = pre_activation_bounds_list[relu_layer_idx]
+            _bound = pre_activation_bounds_list[relu_layer_idx]
+            lbound, ubound = _bound.l[0,..., 0].cpu().numpy(), _bound.u[0, ..., 0].cpu().numpy()
 
             y = model.addMVar(x.shape, vtype=GRB.CONTINUOUS, name=f"ReLU{layer_idx}_y")
             for idx, (lb, ub) in enumerate(zip(lbound, ubound)):
@@ -100,6 +86,24 @@ def gurobi_complete_check(seqAT: SequentialAT, bounded_x0: L0BoundedInput,
             relu_layer_idx += 1
         else:
             raise NotImplementedError(type(AT))
+    return x
+
+def gurobi_complete_check(seqAT: SequentialAT, bounded_x0: L0BoundedInput,
+    demo: bool = True, ground_truth_label: int | None = None
+) -> bool:
+    model = gp.Model("check_unsat", env=env)
+    img = bounded_x0.x[0, ..., 0].cpu().numpy()  # input: [784]
+    delta = model.addMVar(img.shape, vtype=GRB.CONTINUOUS, name="delta")  # delta: [784]
+    for i in range(img.shape[0]):
+        model.addConstr(delta[i] <= bounded_x0.U - img[i])
+        model.addConstr(bounded_x0.L - img[i] <= delta[i])
+    x = img + delta  # input
+
+    epsilon = bounded_x0.eps
+    l0_loss = model.addVar(lb=epsilon, ub=epsilon)
+    model.addGenConstrNorm(l0_loss, delta, 0.0)
+
+    x = add_forward_constraints(model, seqAT, bounded_x0, x)
 
     if ground_truth_label is None:
         model.addConstr(x[0] <= 0)
@@ -159,27 +163,14 @@ if __name__ == "__main__":
         else:
             seqAT.tail.make_marginals(true_labels=pred_labels, device="cpu")
 
-        pre_activation_bounds_list = []
-        for AT in seqAT.ATs:
-            if isinstance(AT, ActivationAT):
-                lrp_wrt_inputs, urp_wrt_inputs = AT.parent.backsubstitution()
-                pre_activation_bounds = bounded_x0.compute_bounds(lrp_wrt_inputs, urp_wrt_inputs)
-                AT.lrp, AT.urp = AT.compute_rp(pre_activation_bounds)
-                # convert to np.ndarray
-                # delete batch dimension
-                pre_activation_bounds_list.append((
-                    pre_activation_bounds.l[0, ..., 0].numpy(),  # lower bound
-                    pre_activation_bounds.u[0, ..., 0].numpy(),  # upper bound
-                ))
-
         timeout = True
         safe = False
         elapsed_time = 0.
         try:
             signal.alarm(args.timeout)
             t0 = perf_counter()
-            safe = gurobi_complete_check(seqAT, bounded_x0, pre_activation_bounds_list, demo=args.demo,
-                                         ground_truth_label=pred_labels.item() if args.target_label is None else None)
+            safe = gurobi_complete_check(seqAT, bounded_x0, demo=args.demo,
+                ground_truth_label=pred_labels.item() if args.target_label is None else None)
             timeout = False
             elapsed_time = perf_counter() - t0
             total_time += elapsed_time

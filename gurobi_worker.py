@@ -1,5 +1,6 @@
-from AbstractInterpreter import SequentialAT, AffineAT, ReLUAT, Bounds, LinfBoundedInput
+from AbstractInterpreter import SequentialAT, Bounds, LinfBoundedInput
 from multiprocessing.connection import Client
+from solver_check import add_forward_constraints
 import threading
 import queue
 import numpy as np
@@ -68,7 +69,6 @@ class GurobiWorker:
             bounds.u[0, pixel, 0] = self.__ub
         bounded_x0 = LinfBoundedInput(x=torch_image, eps=None, bounds=bounds)
         self.__seqAT.tail.make_marginals(true_labels=torch.Tensor([label]).long(), device="cpu")
-        pre_activation_bounds_list = self.__seqAT.get_preactivation_bounds(bounded_x0)
 
         # constraint
         model = gp.Model("check_unsat", env=env)
@@ -81,36 +81,7 @@ class GurobiWorker:
                 model.addConstr(self.__lb <= img[i])
 
         # forward
-        x = img
-        relu_layer_idx = 0
-        for layer_idx, AT in enumerate(self.__seqAT.ATs):
-            if isinstance(AT, AffineAT):  # FC, ConV2D
-                weight, bias = AT.rp.W[0, ...].numpy(), AT.rp.b[0, ..., 0].numpy()
-                x = weight @ x + bias
-            elif isinstance(AT, ReLUAT):  # ReLU
-                _bounds = pre_activation_bounds_list[relu_layer_idx]
-                lbound, ubound = _bounds.l[0, ..., 0].numpy(), _bounds.u[0, ..., 0].numpy()
-
-                y = model.addMVar(x.shape, vtype=GRB.CONTINUOUS, name=f"ReLU{layer_idx}_y")
-                for idx, (lb, ub) in enumerate(zip(lbound, ubound)):
-                    if ub <= 0:
-                        # Case 1: ubound <= 0
-                        model.addConstr(y[idx] == 0)
-                    elif lb >= 0:
-                        # Case 2: lbound >= 0
-                        model.addConstr(y[idx] == x[idx])
-                    else:
-                        # Case 3: lbound <= 0 <= ubound
-                        a = model.addVar(vtype=GRB.BINARY)  # ReLU auxiliary var
-                        model.addConstr(y[idx] <= x[idx] - lb * (1 - a))
-                        model.addConstr(y[idx] >= x[idx])
-                        model.addConstr(y[idx] <= ub * a)
-                        model.addConstr(y[idx] >= 0)
-
-                x = y
-                relu_layer_idx += 1
-            else:
-                raise NotImplementedError(type(AT))
+        x = add_forward_constraints(model, self.__seqAT, bounded_x0, img)
 
         label_size = self.__seqAT.tail.W.shape[1]
         any_not_safe = [model.addVar(vtype=GRB.BINARY) for _ in range(label_size)]
