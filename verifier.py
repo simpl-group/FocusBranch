@@ -310,6 +310,7 @@ class Verifier:
         Speed up version of verify1 for a given partial indices.
         No demo, no seqAT.working_on context manager, no raising of TimeoutException and no cuda cache clearing.
         This method checks if the partial indices are safe from start_level to end_level.
+
         :param partial_indices: Indices of the pixels to be considered in the computation of diff.
         :type partial_indices: torch.Tensor with shape (num_indices,)
         :param start_level: The level to start verification. Default to self.start_levels[num_indices].
@@ -351,7 +352,7 @@ class Verifier:
         :type partial_indices2d: torch.Tensor of shape (num_partials, num_indices)
         :param start_level: The level to start verification. Default to self.start_levels[num_indices].
         :param end_level: The level to end verification. Default to self.eps.
-        :return: A 1D tensor on cpu of shape \(num_partials,\) with True if the corresponding partial indices is safe, False otherwise.
+        :return: A 1D tensor on cpu of shape (num_partials,) with True if the corresponding partial indices is safe, False otherwise.
         """
         assert partial_indices2d.ndim == 2, "partial_indices2d must be of shape (batch_size, num_indices)"
         num_partials, num_indices = partial_indices2d.shape
@@ -370,41 +371,51 @@ class Verifier:
                 safes_book[unk_i] = self.verify1_partial(partial_indices2d[unk_i], start_level, end_level)
         return safes_book.cpu()
 
-    def __handle_partial(self, partial_indices):
+    def __handle_batched_partials(self, num_indices: int, end_level: int=-1):
+        start = perf_counter()
+        partial_indices2d = torch.tensor(self.batch_pool[num_indices])
+        safes = self.check_safe_partials(partial_indices2d=partial_indices2d, end_level=end_level)
+        self.conn.send((num_indices, partial_indices2d.shape[0], safes.sum().item(), perf_counter() - start))
+        self.batch_pool[num_indices].clear()
+        if safes.all(): return
+        if num_indices == self.eps:  # adversarial suspect. cannot refine
+            for partial in partial_indices2d[~safes].tolist():
+                self.conn.send('adversarial-example-suspect')
+                self.conn.send(partial)
+        if end_level != -1:  # need to refine
+            refined_indices = []
+            for partial in partial_indices2d[~safes].tolist():
+                refined_indices.extend(get_refinement_subsets(partial, self.refinement_coverings[num_indices]))
+            for partial in refined_indices:
+                self.__handle_partial(partial)
+        else:  # go sbap and cannot verify
+            assert False, "TODO"
+
+    def __handle_partial(self, partial_indices: list[int]):
         num_indices = len(partial_indices)
         # message: (num_indices, runs, successes, duration)
         if num_indices < self.eps:
             self.conn.send((num_indices, 1, 1, 0.))
-        elif self.refinement_strategy[num_indices] is not None:
-            if num_indices <= self.max_size_to_batch:
+        elif self.refinement_strategy[num_indices] is not None:  # check first, refine if not safe
+            if num_indices <= self.max_size_to_batch:  # batch on root
                 self.batch_pool[num_indices].append(partial_indices)
                 if len(self.batch_pool[num_indices]) == self.__greater_batch:
-                    partial_indices2d = torch.tensor(self.batch_pool[num_indices])
-                    self.batch_pool[num_indices] = []
-                    start = perf_counter()
-                    safes = self.check_safe_partials(partial_indices2d=partial_indices2d, end_level=0)
-                    self.conn.send((num_indices, partial_indices2d.shape[0], safes.sum().item(), perf_counter() - start))
-                    refined_indices = []
-                    for partial in partial_indices2d[~safes].tolist():
-                        refined_indices.extend(get_refinement_subsets(partial, self.refinement_coverings[num_indices]))
-                    for partial in refined_indices:
-                        self.__handle_partial(partial)
-            else:
+                    self.__handle_batched_partials(num_indices, end_level=0)
+            else:  # no need to check on the root level (default to not safe), just refine
                 self.conn.send((num_indices, 1, 0, 0.))
                 for partial in get_refinement_subsets(partial_indices, self.refinement_coverings[num_indices]):
                     self.__handle_partial(partial)
-        elif num_indices > self.max_size_to_batch:
+        elif num_indices > self.max_size_to_batch:  # go sbap without batch on root, no refinement needed
             start = perf_counter()
-            assert self.verify1_partial(partial_indices=torch.tensor(partial_indices))
-            self.conn.send((num_indices, 1, 1, perf_counter() - start))
-        else:
+            if self.verify1_partial(partial_indices=torch.tensor(partial_indices)):
+                self.conn.send((num_indices, 1, 1, perf_counter() - start))
+            else:  # go sbap and cannot verify
+                self.conn.send((num_indices, 1, 0, perf_counter() - start))
+                assert False, "TODO"
+        else:  # go sbap with batch on root, no refinement needed
             self.batch_pool[num_indices].append(partial_indices)
             if len(self.batch_pool[num_indices]) == self.__greater_batch:
-                start = perf_counter()
-                partial_indices2d = torch.tensor(self.batch_pool[num_indices])
-                assert self.check_safe_partials(partial_indices2d=partial_indices2d).all()
-                self.conn.send((num_indices, self.__greater_batch, self.__greater_batch, perf_counter() - start))
-                self.batch_pool[num_indices] = []
+                self.__handle_batched_partials(num_indices, end_level=-1)
 
     def __prove(self, geometry, chosen_points, num_workers: int, worker_id: int):
         num_of_blocks = math.floor(geometry.number_of_blocks() / num_workers)
@@ -429,26 +440,13 @@ class Verifier:
                 assert blocks_conn.recv() == 'done'
                 blocks_conn.send('done')
 
-        # handle remaining partials in the pool
-        # get those self.refinement_strategy[num_indices] is not None and len(partial_indices_list) > 0
-        for num_indices, partial_indices_list in self.batch_pool.items():
-            if len(partial_indices_list) > 0 and self.refinement_strategy[num_indices] is not None:
-                partial_indices2d = torch.tensor(partial_indices_list)
-                start = perf_counter()
-                safes = self.check_safe_partials(partial_indices2d=partial_indices2d, end_level=0)
-                self.conn.send((num_indices, partial_indices2d.shape[0], safes.sum().item(), perf_counter() - start))
-                partial_indices_list.clear()
-                refined_indices = []
-                for partial in partial_indices2d[~safes].tolist():
-                    refined_indices.extend(get_refinement_subsets(partial, self.refinement_coverings[num_indices]))
-                for partial in refined_indices:
-                    self.__handle_partial(partial)
-
+        # handle remaining partials in the pool in descending order according to the key (num_indices). The batch_pool is created in this order
         for num_indices, partial_indices_list in self.batch_pool.items():
             if len(partial_indices_list) > 0:
-                start = perf_counter()
-                assert self.check_safe_partials(partial_indices2d=torch.tensor(partial_indices_list)).all()
-                self.conn.send((num_indices, len(partial_indices_list), len(partial_indices_list), perf_counter() - start))
+                if self.refinement_strategy[num_indices] is not None: end_level = 0
+                else: end_level = -1
+                self.__handle_batched_partials(num_indices, end_level=end_level)
+
         self.conn.send('done')
         assert self.conn.recv() == 'stop'
         self.conn.send('stopped')
