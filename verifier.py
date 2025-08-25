@@ -43,7 +43,7 @@ def selected_indices_sample(k: int, num_select: int, repetitions: int) -> torch.
         else:
             return all_combs.cpu()
 
-def get_refinement_subsets(partial_indices, covering) -> list[list[int]]:
+def get_refinement_subsets(partial_indices: list[int], covering: list[list[int]]) -> list[list[int]]:
     return [[partial_indices[i] for i in cover] for cover in covering]
 
 def load_refinement_coverings(refinement_strategy: dict[int, int|None]) -> dict[int, list[list[int]]]:
