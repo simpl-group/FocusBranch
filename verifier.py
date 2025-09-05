@@ -262,6 +262,7 @@ class Verifier:
         for k in range(self.eps, self.max_k + 1):
             all_partial_indices = batched_randsample(self.num_pixels, k, self.rep_each_k)
             self.start_levels[k] = start_level = self.start_levels[k-1]  # init from the previous k
+            ###
             if self.start_levels[k] == 0:  # only batch on root level if start level is 0, otherwise skip this part
                 batch_on_root_start = perf_counter()
                 all_partial_indices = all_partial_indices[~self.check_safe_partials(all_partial_indices, end_level=0)]  # root level unk partial indices
@@ -269,6 +270,7 @@ class Verifier:
                 if all_partial_indices.shape[0] == self.rep_each_k:
                     self.start_levels[k] = 1  # if all sampled partial are not safe at root level, start from level 1
                 start_level = 1  # for the probe, since level 0 is already checked
+            ###
             num_actual_start_level_increased = 0
             for partial_indices in all_partial_indices:
                 estimated_time, actual_start_level = self.probe(partial_indices, start_level)
@@ -297,6 +299,26 @@ class Verifier:
             batch_on_root_start = perf_counter()
             sampling_successes.append(self.check_safe_partials(all_partial_indices, end_level=0).sum().item())
             sampling_time.append(perf_counter() - batch_on_root_start)
+            sampling_counts.append(all_partial_indices.shape[0])
+            if sampling_successes[-1] == 0:
+                rep_each_k = self.batch_size  # if no safe partials, use smaller batch size to sample more
+                self.start_levels[k] = 1  # if all sampled partials are not safe at root level, start from level 1
+            else:
+                self.start_levels[k] = 0  # if there are safe partials, start from level 0
+        return sampling_counts, sampling_successes, sampling_time
+
+    def sample_all_k_on_root_non_batched(self):
+        sampling_counts, sampling_successes , sampling_time = [], [], []
+        rep_each_k = self.rep_each_k
+        for k in range(self.eps, self.max_k + 1):
+            all_partial_indices = batched_randsample(self.num_pixels, k, rep_each_k)
+            t0 = perf_counter()
+            success_cnt = 0
+            for partial_indices in all_partial_indices:
+                if self.verify1_partial(partial_indices, end_level=0):
+                    success_cnt += 1
+            sampling_successes.append(success_cnt)
+            sampling_time.append(perf_counter() - t0)
             sampling_counts.append(all_partial_indices.shape[0])
             if sampling_successes[-1] == 0:
                 rep_each_k = self.batch_size  # if no safe partials, use smaller batch size to sample more
@@ -391,6 +413,31 @@ class Verifier:
         else:  # go sbap and cannot verify
             assert False, "TODO"
 
+    def __handle_partial_non_batched(self, partial_indices: list[int]):
+        num_indices = len(partial_indices)
+        # message: (num_indices, runs, successes, duration)
+        if num_indices < self.eps:
+            self.conn.send((num_indices, 1, 1, 0.))
+        elif self.refinement_strategy[num_indices] is not None:  # check on root first, refine if not safe
+            start = perf_counter()
+            if self.verify1_partial(partial_indices=torch.tensor(partial_indices), end_level=0):
+                self.conn.send((num_indices, 1, 1, perf_counter() - start))
+            else:
+                self.conn.send((num_indices, 1, 0, perf_counter() - start))
+                if num_indices == self.eps:
+                    self.conn.send('adversarial-example-suspect')
+                    self.conn.send(partial)
+                else:
+                    for partial in get_refinement_subsets(partial_indices, self.refinement_coverings[num_indices]):
+                        self.__handle_partial_non_batched(partial)
+        else:  # go sbap without batch on root, no refinement needed
+            start = perf_counter()
+            if self.verify1_partial(partial_indices=torch.tensor(partial_indices)):
+                self.conn.send((num_indices, 1, 1, perf_counter() - start))
+            else:  # go sbap and cannot verify
+                self.conn.send((num_indices, 1, 0, perf_counter() - start))
+                assert False, "TODO"
+
     def __handle_partial(self, partial_indices: list[int]):
         num_indices = len(partial_indices)
         # message: (num_indices, runs, successes, duration)
@@ -437,6 +484,7 @@ class Verifier:
                         return
                     partial_indices = blocks_conn.recv()  # assert partial_indices is sorted and of type list[int]
                     self.__handle_partial(partial_indices)
+                    # self.__handle_partial_non_batched(partial_indices)
                 assert blocks_conn.recv() == 'done'
                 blocks_conn.send('done')
 
@@ -462,6 +510,8 @@ class Verifier:
                 self.adapt_target_images(images=torch_img, true_labels=torch.tensor([self.label], dtype=torch.int64), check_first=False)
 
                 self.conn.send(self.sample_all_k_on_root())
+                # self.conn.send(self.sample_all_k_on_root_non_batched())
+                # self.conn.send(self.sample_all_k(baseline=self.conn.recv()))
                 self.max_size_to_batch = max(k for k, v in self.start_levels.items() if v == 0)
                 print(f"Worker {worker_id} max size to batch: {self.max_size_to_batch}")
                 self.batch_pool: dict[int, list[list[int]]] = {k: [] for k in list(range(self.eps, self.max_size_to_batch + 1))[::-1]}
