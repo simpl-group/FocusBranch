@@ -18,15 +18,14 @@ def decreasing_exp(x, a, b):
     return 1 - np.exp(a*(x-b))
 
 class LZeroRobustnessAnalyzer:
-    def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int, logname: str):
+    def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int):
         self.__gpu_workers = gpu_workers
         self.__cpu_workers = cpu_workers
         self.__t = t
         self.__timeout = timeout
         self.__number_of_pixels = num_pixels
         self.__refinement_db_max_v = max_k
-        self.__refinement_db_max_covering_size = 500000
-        self.covering_sizes = load_covering_sizes(self.__t, clipping_size=self.__refinement_db_max_covering_size)
+        self.covering_sizes = load_covering_sizes(self.__t, clipping_size=500000)
 
     def update_image(self, image: np.ndarray, label: int):
         for gpu_worker in self.__gpu_workers:
@@ -84,7 +83,8 @@ class LZeroRobustnessAnalyzer:
         self.innocent_suspects: set[tuple[int]] = set()
         self.milp_job_queue = queue.Queue()
         self.gpu_workers_finished = threading.Event()
-        self.milp_results = {'found_adversarial': False, 'adversarial_pixels': None, 'adversarial_example': None, 'adversarial_label': None}
+        self.milp_found_adversarial = threading.Event()
+        self.adversarial_results = {'adversarial_pixels': None, 'adversarial_example': None, 'adversarial_label': None}
 
         refinement_sizes = {v: self.covering_sizes[(v, k)] for v, k in refinement_strategy.items() if k is not None}
 
@@ -115,6 +115,8 @@ class LZeroRobustnessAnalyzer:
             'clean_duration': clean_duration,
             'candidate geometries': geometries_data,
             # 'candidate ro_geometries': geometries_data,
+            'proved_with_milp': len(self.innocent_suspects),
+            'groups_waiting_for_milp': len(self.waiting_suspects)
         }
         if waiting_milp_duration > 0.1:
             print(f'Waiting for MILP duration: {waiting_milp_duration} s.')
@@ -122,15 +124,11 @@ class LZeroRobustnessAnalyzer:
         if time.time() - analyzer_start_time >= self.__timeout:
             results['verified'] = False
             results['timed_out'] = True
-        if self.milp_results['found_adversarial']:
+        if self.milp_found_adversarial.is_set():
             results['verified'] = False
-            results['adversarial_pixels'] = self.milp_results['adversarial_pixels']
-            results['adversarial_example'] = self.milp_results['adversarial_example']
-            results['adversarial_label'] = self.milp_results['adversarial_label']
-        self.__stop_workers()
-        results['proved_with_milp'] = len(self.innocent_suspects)
-        results['groups_waiting_for_milp'] = len(self.waiting_suspects)
+            results['adversarial_results'] = self.adversarial_results
 
+        self.__stop_workers()
         return results, {
             "Success Rate": {k:round(v,5) for k, v in success_rate.items()},
             "Mean Time": {k:round(v,5) for k, v in mean_time.items()},
@@ -266,9 +264,9 @@ class LZeroRobustnessAnalyzer:
         done_count = 0
         total_covering_size = initial_covering_size
         last_print_time = time.time()
-        while done_count < len(self.__gpu_workers):
-            if time.time() - analyzer_start_time >= self.__timeout:
-                return
+        while done_count < len(self.__gpu_workers) \
+            and not self.milp_found_adversarial.is_set() \
+            and time.time() - analyzer_start_time < self.__timeout:
             last_print_time = self.__print_progress(total_covering_size, last_print_time, num_finished)
 
             for gpu_worker in self.__gpu_workers:
@@ -332,13 +330,12 @@ class LZeroRobustnessAnalyzer:
                         self.waiting_suspects.remove(tuple(pixel_indices))
                         self.innocent_suspects.add(tuple(pixel_indices))
                     else:
-                        self.__stop_workers()
+                        self.milp_found_adversarial.set()
                         print(f'\nAdversarial example found, changing label to "{adversarial_label}" while perturbing pixels: {pixel_indices}')
                         print(adversarial_example)
-                        self.milp_results['found_adversarial'] = True
-                        self.milp_results['adversarial_pixels'] = pixel_indices
-                        self.milp_results['adversarial_example'] = adversarial_example
-                        self.milp_results['adversarial_label'] = adversarial_label
+                        self.adversarial_results['adversarial_pixels'] = pixel_indices
+                        self.adversarial_results['adversarial_example'] = adversarial_example
+                        self.adversarial_results['adversarial_label'] = adversarial_label
                         return
 
     def __stop_workers(self):

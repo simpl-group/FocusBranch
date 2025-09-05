@@ -23,19 +23,7 @@ if __name__ == '__main__':
     parser.add_argument("--milp_num", type=int, default=1, help="the number of MILP instances used in the analysis")
     parser.add_argument('--base_seed', type=int, default=42, help='the base seed')
     args = parser.parse_args()
-
     logname = args.output.split(".")[0]
-
-    net, dataset_utils = get_network_and_dataset_utils(args.net)
-    images, labels = dataset_utils.load_xy_from_csv(normalize=False)  # TODO: add option to normalize
-    data_loader = build_loader(
-        images,
-        labels,
-        batch_size=args.grain_size,
-        target_label=args.target_label,
-        start_idx=args.start_idx,
-        num_batches=args.test_batches
-    )
 
     address = ('localhost', 0)
     with Listener(address) as gpu_listener, Listener(address) as cpu_listener:
@@ -64,6 +52,16 @@ if __name__ == '__main__':
         print("Waiting for gpu workers")
         gpu_workers = [gpu_listener.accept() for _ in range(args.gpu_num)]
 
+    net, dataset_utils = get_network_and_dataset_utils(args.net)
+    images, labels = dataset_utils.load_xy_from_csv(normalize=False)  # TODO: add option to normalize
+    data_loader = build_loader(
+        images,
+        labels,
+        batch_size=args.grain_size,
+        target_label=args.target_label,
+        start_idx=args.start_idx,
+        num_batches=args.test_batches
+    )
     analyzer = LZeroRobustnessAnalyzer(
         gpu_workers=gpu_workers,
         cpu_workers=cpu_workers,
@@ -136,7 +134,6 @@ if __name__ == '__main__':
     }
 
     print('analysis precision ', verified_images, '/ ', correctly_classified_images)
-    logfile = logname + '.json'
-    with open(logfile, 'w') as fp:
+    with open(args.output, 'w') as fp:
         json.dump(results, fp)
-    print(f'Results saved to {logfile}')
+    print(f'Results saved to {args.output}')

@@ -254,7 +254,7 @@ def launch_gurobi_worker(netname: str, port: int) -> Process:
         seqAT = SequentialAT.from_sequential(net, x_)
         gurobi_worker = GurobiWorker(seqAT=seqAT, channel_size=dataset_utils.channel_size)
         gurobi_worker.work(port=port)
-    process = Process(target=init_worker)
+    process = Process(target=init_worker, daemon=True)
     process.start()
     return process
 
