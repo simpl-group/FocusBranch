@@ -74,10 +74,10 @@ class LZeroRobustnessAnalyzer:
         # print(f'Second Planning stage took {second_planning_stage_duration} s, Total Planning duration: {planning_duration:.3f} s')
         ###
 
-        chosen_points = random.sample(range(chosen_geometry.number_of_points()), self.__number_of_pixels)
-        random.shuffle(chosen_points)
+        chosen_indices = random.sample(range(chosen_geometry.number_of_points()), self.__number_of_pixels)
+        random.shuffle(chosen_indices)
         for gpu_worker in self.__gpu_workers:
-            gpu_worker.send((chosen_geometry, chosen_points, refinement_strategy))
+            gpu_worker.send((chosen_geometry, chosen_indices, refinement_strategy))
         blocks_stats_by_size = defaultdict(lambda: {'runs': 0, 'successes': 0, 'total_duration': 0.})
         self.waiting_suspects: set[tuple[int]] = set()
         self.innocent_suspects: set[tuple[int]] = set()

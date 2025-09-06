@@ -464,7 +464,7 @@ class Verifier:
             if len(self.batch_pool[num_indices]) == self.__greater_batch:
                 self.__handle_batched_partials(num_indices, end_level=-1)
 
-    def __prove(self, geometry, chosen_points, num_workers: int, worker_id: int):
+    def __prove(self, geometry, chosen_indices, num_workers: int, worker_id: int):
         num_of_blocks = math.floor(geometry.number_of_blocks() / num_workers)
         if worker_id < geometry.number_of_blocks() % num_workers:
             num_of_blocks += 1
@@ -472,7 +472,7 @@ class Verifier:
             blocks_generator_process = launch_covering_generator(
                 q=geometry.q, m=geometry.m, t=geometry.t,
                 port=blocks_listener.address[1],
-                chosen_points=chosen_points,
+                chosen_indices=chosen_indices,
                 num_workers=num_workers,
                 worker_id=worker_id
             )
@@ -516,9 +516,9 @@ class Verifier:
                 print(f"Worker {worker_id} max size to batch: {self.max_size_to_batch}")
                 self.batch_pool: dict[int, list[list[int]]] = {k: [] for k in list(range(self.eps, self.max_size_to_batch + 1))[::-1]}
 
-                geometry, chosen_points, self.refinement_strategy = self.conn.recv()
+                geometry, chosen_indices, self.refinement_strategy = self.conn.recv()
                 self.refinement_coverings = load_refinement_coverings(self.refinement_strategy)
-                self.__prove(geometry, chosen_points, num_workers, worker_id)
+                self.__prove(geometry, chosen_indices, num_workers, worker_id)
                 message = self.conn.recv()
 
 if __name__ == '__main__':
