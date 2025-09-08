@@ -6,9 +6,9 @@ from .gray_code import reduced_row_echelon_form_gray_code
 
 
 class CoveringConstructor:
-    def __init__(self, q, m, t, GF, chosen_indices):
+    def __init__(self, q, m, t, chosen_indices):
         self.__q = q
-        self.__GF = GF
+        self.__GF = galois.GF(q)
         self.__number_of_rows = m - t + 1
         self.__number_of_cols = m + 1
         self.__chosen_points = self.__translate_chosen_indices_to_points(chosen_indices)
@@ -51,22 +51,16 @@ class CoveringConstructor:
             prev_matrix = matrix
 
 
-from multiprocessing.connection import Client
-from multiprocessing import Process
+from subprocess import Popen
+import sys
+from pathlib import Path
 
-def launch_covering_generator(q: int, m: int, t: int, chosen_indices: list[int], port: int, num_workers=1, worker_id=0) -> Process:
-    def work():
-        covering_constructor = CoveringConstructor(q=q, m=m, t=t, GF=GF, chosen_indices=chosen_indices)
-        with Client(('localhost', port)) as conn:
-            for block_index, block in enumerate(covering_constructor.construct_induced_covering()):
-                if block_index % num_workers == worker_id:
-                    conn.send(block.tolist())
-
-            conn.send('done')
-            message = conn.recv()
-            assert message == 'done'
-    # somehow galois.GF will be blocked if called in the child process, so we create it here and pass it to the child process
-    GF = galois.GF(q)
-    process = Process(target=work, daemon=True)
-    process.start()
-    return process
+def launch_covering_generator(q: int, m: int, t: int, chosen_indices: list[int], port: int, num_workers=1, worker_id=0) -> Popen:
+    return Popen([
+        sys.executable, "-m", Path(__file__).parent.name,
+        '--q', str(q), '--m', str(m), '--t', str(t),
+        '--chosen_indices', *map(str, chosen_indices),
+        '--port', str(port),
+        '--num-workers', str(num_workers),
+        '--worker-id', str(worker_id)
+    ])
