@@ -3,7 +3,6 @@ from data import load_covering_sizes
 from coverd_finite_geometries import get_possible_geometries, Geometry
 import threading
 import queue
-import dataclasses
 import math
 import time
 import random
@@ -29,7 +28,6 @@ class LZeroRobustnessAnalyzer:
 
     def update_image(self, image: np.ndarray, label: int):
         for gpu_worker in self.__gpu_workers:
-            # Each worker should use different seed
             worker_seed = random.randint(0, 2 ** 32 - 1)
             gpu_worker.send((worker_seed, image, label))
         for cpu_worker in self.__cpu_workers:
@@ -41,32 +39,31 @@ class LZeroRobustnessAnalyzer:
         success_rate, mean_time = self.__estimate_sr_and_mt()
         fraction_robust = self.__compute_fraction_robust(success_rate)
         choosing_strategy_start = time.time()
-        ##
         VT, refinement_strategy = self.__choose_strategy(fraction_robust, mean_time, success_rate)
         chosen_geometry, geometries_data = self.__choose_geometry(VT)
-        estimated_verification_time = round(geometries_data[0][1] / len(self.__gpu_workers), 3)
+        estimated_verification_time = round(geometries_data[0]["estimated_summed_duration"] / len(self.__gpu_workers), 3)
         choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
         print(
-            f'Chosen {chosen_geometry}, {geometries_data[0][2]} blocks, '
-            f'mean size {geometries_data[0][3]}, '
-            f'estimated time  (each){estimated_verification_time} s (all){geometries_data[0][1]} s, '
+            f'Chosen {geometries_data[0]}\n'
+            f'Estimated verification time {estimated_verification_time} s, '
             f'choosing strategy duration: {choosing_strategy_duration} s'
         )
         planning_duration = round(time.time() - analyzer_start_time, 3)
         print(f"Planning stage took {planning_duration} s")
 
         ###
+        # ro_refinement_strategy = refinement_strategy.copy()
+        # ro_geometries_data = geometries_data.copy()
         # planning_start2 = time.time()
         # sbap_VT = self.__get_sbap_T(VT)
         # choosing_strategy_start = time.time()
         # merged_VT, refinement_strategy = self.__choose_strategy(fraction_robust, mean_time, success_rate, sbap_VT)
         # chosen_geometry, geometries_data = self.__choose_geometry(merged_VT)
-        # estimated_verification_time = round(geometries_data[0][1] / len(self.__gpu_workers), 3)
+        # estimated_verification_time = round(geometries_data[0]["estimated_summed_duration"] / len(self.__gpu_workers), 3)
         # choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
         # print(
-        #     f'Chosen {chosen_geometry}, {geometries_data[0][2]} blocks, '
-        #     f'mean size {geometries_data[0][3]}, '
-        #     f'estimated time  (each){estimated_verification_time} s (all){geometries_data[0][1]} s, '
+        #     f'Chosen {geometries_data[0]}\n'
+        #     f'Estimated verification time {estimated_verification_time} s, '
         #     f'choosing strategy duration: {choosing_strategy_duration} s'
         # )
         # second_planning_stage_duration = round(time.time() - planning_start2, 3)
@@ -98,25 +95,24 @@ class LZeroRobustnessAnalyzer:
         cpu_handler_thread.start()
         gpu_handler_thread.join()
         iterating_covering_duration = round(time.time() - iterating_covering_start_time, 3)
-        clean_duration = round(sum(stats['total_duration'] for stats in blocks_stats_by_size.values()), 3)
+        summed_duration = round(sum(stats['total_duration'] for stats in blocks_stats_by_size.values()), 3)
         waiting_milp_start = time.time()
         cpu_handler_thread.join()
         waiting_milp_duration = round(time.time() - waiting_milp_start, 3)
-        print(f'GPU iterating coverings took {iterating_covering_duration} s, Clean duration (all gpu workers): {clean_duration} s')
+        print(f'GPU iterating coverings took {iterating_covering_duration} s, Summed duration (all gpu workers): {summed_duration} s')
 
         results = {
             'verified': True, 'timed_out': False,
-            'chosen_geometry': geometries_data[0],
             'choosing_strategy_duration': choosing_strategy_duration,
             'planning_duration': planning_duration,
+            'candidate geometries': geometries_data[1:],
+            ###
+            # 'candidate ro_geometries': ro_geometries_data,
+            ###
+            'chosen_geometry': geometries_data[0],
             'estimated_verification_time': estimated_verification_time,
             'iterating_covering_duration': iterating_covering_duration,
-            'estimated_clean_duration': geometries_data[0][1],
-            'clean_duration': clean_duration,
-            'candidate geometries': geometries_data,
-            # 'candidate ro_geometries': geometries_data,
-            'proved_with_milp': len(self.innocent_suspects),
-            'groups_waiting_for_milp': len(self.waiting_suspects)
+            'summed_duration': summed_duration,
         }
         if waiting_milp_duration > 0.1:
             print(f'Waiting for MILP duration: {waiting_milp_duration} s.')
@@ -127,18 +123,21 @@ class LZeroRobustnessAnalyzer:
         if self.milp_found_adversarial.is_set():
             results['verified'] = False
             results['adversarial_results'] = self.adversarial_results
+        if len(self.innocent_suspects) + len(self.waiting_suspects) > 0:
+            results['proved_with_milp'] = len(self.innocent_suspects)
+            results['waiting_for_milp'] = len(self.waiting_suspects)
 
         self.__stop_workers()
         return results, {
             "Success Rate": {k:round(v,5) for k, v in success_rate.items()},
             "Mean Time": {k:round(v,5) for k, v in mean_time.items()},
-            "VT(k)": {k:round(v,5) for k, v in VT.items()},
+            "VT": {k:round(v,5) for k, v in VT.items()},
             ###
-            # "sbap_VT(k)": {k:round(v,5) for k, v in sbap_VT.items()},
-            # "merged_VT(k)": {k:round(v,5) for k, v in merged_VT.items()},
-            # "f_R0(k)": refinement_strategy0,
+            # "sbap_VT": {k:round(v,5) for k, v in sbap_VT.items()},
+            # "merged_VT": {k:round(v,5) for k, v in merged_VT.items()},
+            # "R_ro": ro_refinement_strategy,
             ###
-            "f_R(k)": refinement_strategy,
+            "R": refinement_strategy,
             "refinement_sizes": refinement_sizes,
             "runs": {size: stats['runs'] for size, stats in blocks_stats_by_size.items()},
             "successes": {size: stats['successes'] for size, stats in blocks_stats_by_size.items()},
@@ -222,7 +221,7 @@ class LZeroRobustnessAnalyzer:
                 refinement_strategy[v] = None
         return VT, refinement_strategy
 
-    def __choose_geometry(self, VT: dict[int,float]) -> tuple[Geometry, list[tuple[dict, float, int, float]]]:
+    def __choose_geometry(self, VT: dict[int,float]) -> tuple[Geometry, list[tuple[str, float, int, float]]]:
         best_geometry = None
         best_time = float('inf')
         geometries = []
@@ -246,11 +245,12 @@ class LZeroRobustnessAnalyzer:
                     number_of_blocks_of_current_size += 1
                 estimated_time += number_of_blocks_of_current_size * VT[block_size]
 
-            geometries.append((dataclasses.asdict(geometry), round(estimated_time,3), geometry.number_of_blocks(), round(pseudo_k,3)))
+            geometries.append({str(geometry): f"{geometry.number_of_blocks()} blocks, mean size {round(pseudo_k, 3)}",
+                               "estimated_summed_duration": round(float(estimated_time), 3)})
             if estimated_time < best_time:
                 best_time = estimated_time
                 best_geometry = geometry
-        return best_geometry, sorted(geometries, key=lambda x: x[1])[:5]  # return top 5 geometries sorted by estimated time
+        return best_geometry, sorted(geometries, key=lambda x: x["estimated_summed_duration"])[:3]  # return top 3 geometries sorted by estimated time
 
     def __handle_gpu_workers_messages(
         self,

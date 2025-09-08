@@ -23,7 +23,10 @@ if __name__ == '__main__':
     parser.add_argument("--milp_num", type=int, default=1, help="the number of MILP instances used in the analysis")
     parser.add_argument('--base_seed', type=int, default=42, help='the base seed')
     args = parser.parse_args()
-    logname = args.output.split(".")[0]
+    args.output = args.output.split(".")[0] + f"{args.net}_t{args.epsilon}b{args.batch_size}g{args.gpu_num}s{args.start_idx}n{args.test_batches}"
+    ilogname = args.output.rsplit("s", 1)[0]
+    args.output = args.output + ".json"
+    args.rep_each_k = max(args.rep_each_k, args.batch_size)
 
     address = ('localhost', 0)
     with Listener(address) as gpu_listener, Listener(address) as cpu_listener:
@@ -95,7 +98,7 @@ if __name__ == '__main__':
             analysis_summary, details = analyzer.analyze()
             print('*******************************************************')
             image_results['analysis_summary'] = analysis_summary
-            pd.DataFrame(details).to_excel(logname + f"_{i}.xlsx", engine='openpyxl', index_label="Row")
+            pd.DataFrame(details).to_excel(ilogname + f"i{i}.xlsx", engine='openpyxl', index_label="Row")
 
             if analysis_summary['verified']:
                 verified_images += 1
@@ -135,5 +138,5 @@ if __name__ == '__main__':
 
     print('analysis precision ', verified_images, '/ ', correctly_classified_images)
     with open(args.output, 'w') as fp:
-        json.dump(results, fp)
+        json.dump(results, fp, indent=4)
     print(f'Results saved to {args.output}')
