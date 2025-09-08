@@ -215,7 +215,7 @@ class LZeroRobustnessAnalyzer:
             RT[v] = min_refine_time
             refinement_strategy[v] = best_next_k
             VT[v] = mean_time[v] + min_refine_time * (1 - success_rate[v])
-            if sbap_VT is not None and v in sbap_VT and sbap_VT[v] < VT[v]:
+            if sbap_VT is not None and v in sbap_VT and sbap_VT[v] * 0.95 <= VT[v]:  # tunable coefficient
                 VT[v] = sbap_VT[v]
                 RT[v] = 0.
                 refinement_strategy[v] = None
