@@ -289,10 +289,9 @@ class LZeroRobustnessAnalyzer:
                             num_failed = runs - num_verified
                             if num_failed > 0:  # to be refined later, add to total covering size
                                 total_covering_size += refinement_sizes[num_indices] * num_failed
-                        else:  # handled by sbap verifier, could be in a batch, must be all verified
-                            num_finished += num_verified
-                            assert runs == num_verified
-                            size_statistics['runs'] += num_verified
+                        else:  # handled by sbap verifier, could be in a batch
+                            num_finished += runs
+                            size_statistics['runs'] += runs
                             size_statistics['total_duration'] += duration
                             size_statistics['successes'] += num_verified
         self.gpu_workers_finished.set()
