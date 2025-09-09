@@ -163,7 +163,7 @@ class GurobiWorker:
         stop_event = threading.Event()
 
         def worker():
-            while not stop_event.is_set() or not job_queue.empty():
+            while not stop_event.is_set():
                 try:
                     pixel_indices = job_queue.get(timeout=0.1)
                 except queue.Empty:
