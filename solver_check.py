@@ -156,20 +156,11 @@ class GurobiWorker:
             while message != 'terminate':
                 image, label = message
                 self.__handle_image(image, label)
-                self.conn.send('stopped')
                 message = self.conn.recv()
 
     def __handle_image(self, image, label):
         job_queue = queue.Queue()
         stop_event = threading.Event()
-
-        def job_receiver():
-            while True:
-                message = self.conn.recv()
-                if message == 'stop':
-                    stop_event.set()
-                    break
-                job_queue.put(message)
 
         def worker():
             while not stop_event.is_set() or not job_queue.empty():
@@ -181,14 +172,16 @@ class GurobiWorker:
                 self.conn.send((pixel_indices, verified, adv_image, adv_label))
                 job_queue.task_done()
 
-        job_receiver_thread = threading.Thread(target=job_receiver, daemon=True)
-        job_receiver_thread.start()
-
         worker_thread = threading.Thread(target=worker, daemon=True)
         worker_thread.start()
-
-        job_receiver_thread.join()
+        while True:
+            message = self.conn.recv()
+            if message == 'stop':
+                stop_event.set()
+                break
+            job_queue.put(message)
         worker_thread.join()
+        self.conn.send('stopped')
 
     def milp_gurobi(self, image: np.ndarray, label: int, pixel_indices: list[int]):
         pixel_indices = self.update_indices_if_needed(pixel_indices)

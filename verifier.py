@@ -8,6 +8,7 @@ from multiprocessing.connection import Client, Listener
 from time import perf_counter
 from functools import lru_cache
 from collections import defaultdict
+import threading
 import math
 import signal
 import torch
@@ -391,6 +392,7 @@ class Verifier:
         return safes_book.cpu()
 
     def __handle_partials(self, num_indices: int, end_level: int=0):
+        if self.stop_event.is_set(): return
         start = perf_counter()
         partial_indices2d = torch.tensor(self.batch_pool[num_indices])
         self.batch_pool[num_indices].clear()
@@ -417,6 +419,7 @@ class Verifier:
                 self.__handle_partial(partial)
 
     def __handle_partial_non_batched(self, partial_indices: list[int]):
+        if self.stop_event.is_set(): return
         num_indices = len(partial_indices)
         # message: (num_indices, runs, successes, duration)
         if num_indices < self.eps:
@@ -437,6 +440,7 @@ class Verifier:
             self.__handle_sbap_partial(partial_indices)
 
     def __handle_partial(self, partial_indices: list[int]):
+        if self.stop_event.is_set(): return
         num_indices = len(partial_indices)
         # message: (num_indices, runs, successes, duration)
         if num_indices < self.eps:
@@ -469,7 +473,7 @@ class Verifier:
         if worker_id < geometry.number_of_blocks() % num_workers:
             num_of_blocks += 1
         with Listener(('localhost', 0)) as blocks_listener:
-            blocks_generator_process = launch_covering_generator(
+            self.blocks_generator_process = launch_covering_generator(
                 q=geometry.q, m=geometry.m, t=geometry.t,
                 port=blocks_listener.address[1],
                 chosen_indices=chosen_indices,
@@ -478,10 +482,7 @@ class Verifier:
             )
             with blocks_listener.accept() as blocks_conn:
                 for _ in range(num_of_blocks):
-                    if self.conn.poll() and self.conn.recv() == 'stop':
-                        blocks_generator_process.kill()
-                        self.conn.send('stopped')
-                        return
+                    if self.stop_event.is_set(): return
                     partial_indices = blocks_conn.recv()  # assert partial_indices is sorted and of type list[int]
                     self.__handle_partial(partial_indices)
                     # self.__handle_partial_non_batched(partial_indices)
@@ -496,8 +497,6 @@ class Verifier:
                 self.__handle_partials(num_indices, end_level=end_level)
 
         self.conn.send('done')
-        assert self.conn.recv() == 'stop'
-        self.conn.send('stopped')
 
     def work_as_worker(self, port: int, num_workers: int=1, worker_id: int=0):
         with Client(('localhost', port)) as self.conn:
@@ -518,7 +517,17 @@ class Verifier:
 
                 geometry, chosen_indices, self.refinement_strategy = self.conn.recv()
                 self.refinement_coverings = load_refinement_coverings(self.refinement_strategy)
-                self.__prove(geometry, chosen_indices, num_workers, worker_id)
+                self.stop_event = threading.Event()
+                prove_thread = threading.Thread(target=self.__prove, args=(geometry, chosen_indices, num_workers, worker_id), daemon=True)
+                prove_thread.start()
+                while True:
+                    if self.conn.poll() and self.conn.recv() == 'stop':
+                        self.stop_event.set()
+                        if self.blocks_generator_process.poll() is None:  # means still running
+                            self.blocks_generator_process.terminate()
+                        break
+                prove_thread.join()
+                self.conn.send('stopped')
                 message = self.conn.recv()
 
 if __name__ == '__main__':

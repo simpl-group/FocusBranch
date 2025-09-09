@@ -85,20 +85,15 @@ class LZeroRobustnessAnalyzer:
 
         refinement_sizes = {v: self.covering_sizes[(v, k)] for v, k in refinement_strategy.items() if k is not None}
 
-        gpu_handler_thread = threading.Thread(
-            target=self.__handle_gpu_workers_messages,
-            args=(analyzer_start_time, blocks_stats_by_size, chosen_geometry.number_of_blocks(), refinement_strategy, refinement_sizes)
-        )
         cpu_handler_thread = threading.Thread(target=self.__handle_cpu_workers_messages, args=(analyzer_start_time,))
-        iterating_covering_start_time = time.time()
-        gpu_handler_thread.start()
         cpu_handler_thread.start()
-        gpu_handler_thread.join()
+        iterating_covering_start_time = time.time()
+        self.__handle_gpu_workers_messages(analyzer_start_time, blocks_stats_by_size, chosen_geometry.number_of_blocks(), refinement_strategy, refinement_sizes)
         iterating_covering_duration = round(time.time() - iterating_covering_start_time, 3)
-        summed_duration = round(sum(stats['total_duration'] for stats in blocks_stats_by_size.values()), 3)
         waiting_milp_start = time.time()
         cpu_handler_thread.join()
         waiting_milp_duration = round(time.time() - waiting_milp_start, 3)
+        summed_duration = round(sum(stats['total_duration'] for stats in blocks_stats_by_size.values()), 3)
         print(f'GPU iterating coverings took {iterating_covering_duration} s, Summed duration (all gpu workers): {summed_duration} s')
 
         results = {
@@ -331,9 +326,8 @@ class LZeroRobustnessAnalyzer:
                     else:
                         self.milp_found_adversarial.set()
                         print(f'\nAdversarial example found, changing label to "{adversarial_label}" while perturbing pixels: {pixel_indices}')
-                        print(adversarial_example)
                         self.adversarial_results['adversarial_pixels'] = pixel_indices
-                        self.adversarial_results['adversarial_example'] = adversarial_example
+                        self.adversarial_results['adversarial_example'] = str(adversarial_example)
                         self.adversarial_results['adversarial_label'] = adversarial_label
                         return
 
