@@ -18,6 +18,7 @@ def split_and_prune(
     num_children = num_indices - last_item - 1
     children_start_offset = num_children.cumsum(dim=0) - num_children
     total_children = int(children_start_offset[-1] + num_children[-1])
+    if total_children == 0: return torch.empty((0, level + 1), dtype=torch.int64)  # in case all unk_combs ends with the last index
     if total_children * (level + 3) * 8 > MEM_BUDGET:
         raise torch.OutOfMemoryError(
             f"Memory budget exceeded: {total_children * (level + 3) * 8/1024**3:.1f}GB > {MEM_BUDGET/1024**3:.1f}GB. "
