@@ -229,7 +229,7 @@ def get_network_and_dataset_utils(name: str, device: str="cpu", add_affine_norma
     if model_spec.need_normalization and add_affine_normalization:
         normalization_layer = DATASETS[model_spec.dataset_name].affine_normalization_layer()
         model.insert(0, normalization_layer)
-    model.load_state_dict(torch.load(model_spec.pt_path, weights_only=True))
+    model.load_state_dict(torch.load(model_spec.pt_path, weights_only=True, map_location=device))
     model.eval()
 
     return model.to(device=device), DATASETS[model_spec.dataset_name]
