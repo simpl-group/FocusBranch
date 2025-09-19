@@ -432,7 +432,7 @@ class Verifier:
                 self.conn.send((num_indices, 1, 0, perf_counter() - start))
                 if num_indices == self.eps:
                     self.conn.send('adversarial-example-suspect')
-                    self.conn.send(partial)
+                    self.conn.send(partial_indices)
                 else:
                     for partial in get_refinement_subsets(partial_indices, self.refinement_coverings[num_indices]):
                         self.__handle_partial_non_batched(partial)
