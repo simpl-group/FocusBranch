@@ -39,7 +39,12 @@ for images, true_labels in data_loader:
 
     if isinstance(args.partial, int):
         partial_indices = torch.randperm(verifier.num_pixels)[:args.partial]
-    if args.probe: _, start_level = verifier.probe(partial_indices)
+    if args.probe:
+        assert args.demo, "Probe mode only works with demo mode."
+        estimated_time, start_level = verifier.probe(partial_indices)
+        if estimated_time > args.timeout:
+            print(f"Estimated time {estimated_time/3600:.2f}h exceeds {args.timeout}s, skipping this image.")
+            exit(0)
     success = False
     elapsed_time = 0.
     try:

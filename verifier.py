@@ -178,6 +178,8 @@ class Verifier:
             if start_level == 0:
                 start_level = self.start_levels[num_indices]  # use the start level for this k
         bitmask_length = (num_indices + 63) // 64
+        if math.comb(num_indices, start_level) > 10 * 1024 ** 3 * 8 * num_indices:
+            return False
         combs_to_check = torch.combinations(torch.arange(num_indices), start_level)
         if start_level == 0: combs_to_check = torch.empty((1, 0), dtype=torch.int64)
         safe_bitmasks: torch.Tensor = torch.empty((0, bitmask_length), dtype=torch.long)
