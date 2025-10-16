@@ -84,6 +84,7 @@ class LZeroRobustnessAnalyzer:
         self.adversarial_results = {'adversarial_pixels': None, 'adversarial_example': None, 'adversarial_label': None}
 
         refinement_sizes = {v: self.covering_sizes[(v, k)] for v, k in refinement_strategy.items() if k is not None}
+        fr = {v: round(fraction_robust[v][k], 5) for v, k in refinement_strategy.items() if k is not None}
 
         cpu_handler_thread = threading.Thread(target=self.__handle_cpu_workers_messages, args=(analyzer_start_time,))
         cpu_handler_thread.start()
@@ -124,21 +125,22 @@ class LZeroRobustnessAnalyzer:
 
         self.__stop_workers()
         return results, {
-            "Success Rate": {k:round(v,5) for k, v in success_rate.items()},
-            "Mean Time": {k:round(v,5) for k, v in mean_time.items()},
-            "VT": {k:round(v,5) for k, v in VT.items()},
+            "Success Rate": {k:round(v, 5) for k, v in success_rate.items()},
+            "Mean Time": {k:round(v, 6) for k, v in mean_time.items()},
+            "VT": {k:round(v, 6) for k, v in VT.items()},
             ###
-            # "sbap_VT": {k:round(v,5) for k, v in sbap_VT.items()},
-            # "merged_VT": {k:round(v,5) for k, v in merged_VT.items()},
+            # "sbap_VT": {k:round(v, 6) for k, v in sbap_VT.items()},
+            # "merged_VT": {k:round(v, 6) for k, v in merged_VT.items()},
             # "R_ro": ro_refinement_strategy,
             ###
             "R": refinement_strategy,
             "refinement_sizes": refinement_sizes,
+            "fraction_robust": fr,
             "runs": {size: stats['runs'] for size, stats in blocks_stats_by_size.items()},
             "successes": {size: stats['successes'] for size, stats in blocks_stats_by_size.items()},
             "success_rate": {size: round(stats['successes'] / stats['runs'], 5) if stats['runs'] > 0 else 0 for size, stats in blocks_stats_by_size.items()},
-            "total_duration": {size: round(stats['total_duration'],5) for size, stats in blocks_stats_by_size.items()},
-            "mean_duration": {size: round(stats['total_duration'] / stats['runs'], 5) if stats['runs'] > 0 else 0 for size, stats in blocks_stats_by_size.items()},
+            "total_duration": {size: round(stats['total_duration'], 6) for size, stats in blocks_stats_by_size.items()},
+            "mean_duration": {size: round(stats['total_duration'] / stats['runs'], 6) if stats['runs'] > 0 else 0 for size, stats in blocks_stats_by_size.items()},
         }
 
     def __estimate_sr_and_mt(self) -> tuple[dict[int, float], dict[int, float]]:
@@ -180,7 +182,7 @@ class LZeroRobustnessAnalyzer:
         for v in range(self.__t, self.__refinement_db_max_v + 1):
             fraction_robust[v] = dict()
             for k in range(self.__t, v):
-                if 1 - success_rate[v] < 1e-3:
+                if 1 - success_rate[v] < 1e-7:
                     fraction_robust[v][k] = 1.0
                 else:
                     estimated_value = (success_rate[k] - success_rate[v]) / (1 - success_rate[v])
@@ -289,6 +291,7 @@ class LZeroRobustnessAnalyzer:
                             size_statistics['runs'] += runs
                             size_statistics['total_duration'] += duration
                             size_statistics['successes'] += num_verified
+        print(f"num_finished: {num_finished}, total_covering_size: {total_covering_size}, remaining: {total_covering_size - num_finished}")
         self.gpu_workers_finished.set()
 
     def __print_progress(self, total_covering_size, last_print_time, num_finished):

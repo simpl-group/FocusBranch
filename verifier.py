@@ -376,13 +376,13 @@ class Verifier:
     def check_partials_on_root(self, partial_indices2d: torch.Tensor) -> torch.Tensor:
         """
         Check safe for all the partials on root level with batch processing. (batch on root technique)
-        This method checks which of the partial indices are safe til end level and returns a boolean tensor.
+        Returns a boolean tensor.
 
         :param partial_indices2d: Each row is a set of partial indices.
         :type partial_indices2d: torch.Tensor of shape (num_partials, num_indices)
         :return: A 1D tensor on cpu of shape (num_partials,) with True if the corresponding partial indices is safe, False otherwise.
         """
-        assert partial_indices2d.ndim == 2, "partial_indices2d must be of shape (batch_size, num_indices)"
+        assert partial_indices2d.ndim == 2, "partial_indices2d must be of shape (num_partials, num_indices)"
         num_partials = partial_indices2d.shape[0]
         # start_level = max(start_level, self.start_levels[num_indices])
         safes_book = torch.zeros(num_partials, dtype=torch.bool, device=self.device)
@@ -401,24 +401,24 @@ class Verifier:
         safes = self.check_partials_on_root(partial_indices2d=partial_indices2d)
         if num_indices == self.eps:  # adversarial suspect. cannot refine
             self.conn.send((num_indices, partial_indices2d.shape[0], safes.sum().item(), perf_counter() - start))
-            for partial in partial_indices2d[~safes].tolist():
+            for suspect in partial_indices2d[~safes].tolist():
                 self.conn.send('adversarial-example-suspect')
-                self.conn.send(partial)
+                self.conn.send(suspect)
             return
         if end_level != 0:  # need to check in deeper level
             for unk_i in torch.where(~safes)[0]:
                 safes[unk_i], unk_combs = self.check_partial(partial_indices=partial_indices2d[unk_i], start_level=1, end_level=end_level)
                 if unk_combs is not None:  # not safe and end_level == self.eps (i.e., go sbap and cannot verify)
-                    for partial in unk_combs.tolist():
+                    for suspect in unk_combs.tolist():
                         self.conn.send('adversarial-example-suspect')
-                        self.conn.send(partial)
+                        self.conn.send(suspect)
         self.conn.send((num_indices, partial_indices2d.shape[0], safes.sum().item(), perf_counter() - start))
         if end_level != self.eps:  # need to refine
-            refined_indices = []
-            for partial in partial_indices2d[~safes].tolist():
-                refined_indices.extend(get_refinement_subsets(partial, self.refinement_coverings[num_indices]))
-            for partial in refined_indices:
-                self.__handle_partial(partial)
+            refined_partials = []
+            for unk_partial in partial_indices2d[~safes].tolist():
+                refined_partials.extend(get_refinement_subsets(unk_partial, self.refinement_coverings[num_indices]))
+            for refined_partial in refined_partials:
+                self.__handle_partial(refined_partial)
 
     def __handle_partial_non_batched(self, partial_indices: list[int]):
         if self.stop_event.is_set(): return
@@ -492,11 +492,10 @@ class Verifier:
                 blocks_conn.send('done')
 
         # handle remaining partials in the pool in descending order according to the key (num_indices). The batch_pool is created in this order
-        for num_indices, partial_indices_list in self.batch_pool.items():
-            if len(partial_indices_list) > 0:
-                if self.refinement_strategy[num_indices] is not None: end_level = 0
-                else: end_level = self.eps
-                self.__handle_partials(num_indices, end_level=end_level)
+        for num_indices in self.batch_pool:
+            if len(self.batch_pool[num_indices]) > 0:
+                self.__handle_partials(num_indices,
+                    end_level=0 if self.refinement_strategy[num_indices] else self.eps)
 
         self.conn.send('done')
 
