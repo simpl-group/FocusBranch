@@ -51,26 +51,6 @@ class LZeroRobustnessAnalyzer:
         planning_duration = round(time.time() - analyzer_start_time, 3)
         print(f"Planning stage took {planning_duration} s")
 
-        ###
-        # ro_refinement_strategy = refinement_strategy.copy()
-        # ro_geometries_data = geometries_data.copy()
-        # planning_start2 = time.time()
-        # sbap_VT = self.__get_sbap_T(VT)
-        # choosing_strategy_start = time.time()
-        # merged_VT, refinement_strategy = self.__choose_strategy(fraction_robust, mean_time, success_rate, sbap_VT)
-        # chosen_geometry, geometries_data = self.__choose_geometry(merged_VT)
-        # estimated_verification_time = round(geometries_data[0]["estimated_summed_duration"] / len(self.__gpu_workers), 3)
-        # choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
-        # print(
-        #     f'Chosen {geometries_data[0]}\n'
-        #     f'Estimated verification time {estimated_verification_time} s, '
-        #     f'choosing strategy duration: {choosing_strategy_duration} s'
-        # )
-        # second_planning_stage_duration = round(time.time() - planning_start2, 3)
-        # planning_duration = time.time() - analyzer_start_time
-        # print(f'Second Planning stage took {second_planning_stage_duration} s, Total Planning duration: {planning_duration:.3f} s')
-        ###
-
         chosen_indices = random.sample(range(chosen_geometry.number_of_points()), self.__number_of_pixels)
         random.shuffle(chosen_indices)
         for gpu_worker in self.__gpu_workers:
@@ -102,9 +82,6 @@ class LZeroRobustnessAnalyzer:
             'choosing_strategy_duration': choosing_strategy_duration,
             'planning_duration': planning_duration,
             'candidate geometries': geometries_data[1:],
-            ###
-            # 'candidate ro_geometries': ro_geometries_data,
-            ###
             'chosen_geometry': geometries_data[0],
             'estimated_verification_time': estimated_verification_time,
             'iterating_covering_duration': iterating_covering_duration,
@@ -128,11 +105,6 @@ class LZeroRobustnessAnalyzer:
             "Success Rate": {k:round(v, 5) for k, v in success_rate.items()},
             "Mean Time": {k:round(v, 6) for k, v in mean_time.items()},
             "VT": {k:round(v, 6) for k, v in VT.items()},
-            ###
-            # "sbap_VT": {k:round(v, 6) for k, v in sbap_VT.items()},
-            # "merged_VT": {k:round(v, 6) for k, v in merged_VT.items()},
-            # "R_ro": ro_refinement_strategy,
-            ###
             "R": refinement_strategy,
             "refinement_sizes": refinement_sizes,
             "fraction_robust": fr,
@@ -162,20 +134,6 @@ class LZeroRobustnessAnalyzer:
         sr_vector = savgol_filter(success_ratio_vector, 15, 2).clip(0, 1)
 
         return {k + self.__t:v for k, v in enumerate(sr_vector)}, {k + self.__t:v for k, v in enumerate(mean_time_vector)}
-
-    def __get_sbap_T(self, ro_VT: dict[int,float]) -> dict[int,float]:
-        for gpu_worker in self.__gpu_workers:
-            gpu_worker.send(ro_VT)
-        estimated_times_list: list[dict[int,float]] = []
-        min_length = float('inf')
-        for gpu_worker in self.__gpu_workers:
-            estimated_times = gpu_worker.recv()
-            estimated_times_list.append(estimated_times)
-            min_length = min(min_length, len(estimated_times))
-        sbap_VT: dict[int,float] = {}
-        for k in range(self.__t, min_length + self.__t):
-            sbap_VT[k] = sum(estimated_times[k] for estimated_times in estimated_times_list) / len(estimated_times_list)
-        return sbap_VT
 
     def __compute_fraction_robust(self, success_rate: dict[int, float]) -> dict[int, dict[int, float]]:
         fraction_robust: dict[int, dict[int, float]] = dict()
