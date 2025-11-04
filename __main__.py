@@ -95,10 +95,11 @@ if __name__ == '__main__':
             random.seed(args.base_seed + i)
             analyzer.update_image(numpy_img, label)
             print('*******************************************************')
-            analysis_summary, details = analyzer.analyze()
+            analysis_summary = analyzer.analyze()
             print('*******************************************************')
+            if 'exec_details' in analysis_summary:
+                pd.DataFrame(analysis_summary.pop('exec_details')).to_excel(ilogname + f"i{i}.xlsx", engine='openpyxl', index_label="Row")
             image_results['analysis_summary'] = analysis_summary
-            pd.DataFrame(details).to_excel(ilogname + f"i{i}.xlsx", engine='openpyxl', index_label="Row")
 
             if analysis_summary['verified']:
                 verified_images += 1

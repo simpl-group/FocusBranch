@@ -56,3 +56,41 @@ def split_and_prune(
     pbar.close()
 
     return torch.cat(pruned_new_combs_list, dim=0)  # on CPU
+
+def split_and_prune_by_unk(
+    unk_combs: torch.Tensor,
+    level: int,
+    num_indices: int,
+) -> torch.Tensor:
+    last_item = unk_combs[:, -1] if level > 0 else torch.tensor([-1], dtype=torch.int64)
+    num_children = num_indices - last_item - 1
+    children_start_offset = num_children.cumsum(dim=0) - num_children
+    total_children = int(children_start_offset[-1] + num_children[-1])
+    if total_children == 0: return torch.empty((0, level + 1), dtype=torch.int64)  # in case all unk_combs ends with the last index
+    if total_children * (level + 3) * 8 > MEM_BUDGET:
+        raise torch.OutOfMemoryError(
+            f"Memory budget exceeded: {total_children * (level + 3) * 8/1024**3:.1f}GB > {MEM_BUDGET/1024**3:.1f}GB. "
+            "Consider reducing the number of prefixes or increasing the memory budget."
+        )
+    prefix_idx = torch.arange(unk_combs.shape[0]).repeat_interleave(num_children)
+    arange_within = torch.arange(total_children) - children_start_offset[prefix_idx]
+    new_combs = torch.empty((total_children, level + 1), dtype=torch.int64)
+    new_combs[:, :level] = unk_combs[prefix_idx]
+    new_combs[:, level] = last_item[prefix_idx] + arange_within + 1
+
+    bitmask_length = (num_indices + 63) // 64
+    reference_bitmasks_chunks = combs2bitmasks(unk_combs.to(DEVICE), bitmask_length).split(chunk_size*4)
+    pruned_new_combs_list = []
+
+    for i in range(0, new_combs.shape[0], chunk_size):
+        new_bitmasks_chunk = combs2bitmasks(new_combs[i:i + chunk_size].to(DEVICE), bitmask_length)  # only the chunk is on GPU
+        superset_cnt = torch.zeros(new_bitmasks_chunk.shape[0], dtype=torch.uint8, device=DEVICE)
+
+        for reference_bitmasks_chunk in reference_bitmasks_chunks:
+            superset_cnt += superset_sum(new_bitmasks_chunk, reference_bitmasks_chunk)
+
+        # == level+1: Only keep those new_combs who are the superset of level + 1 sets from the previous level
+        valid_new_bm_chunk = new_bitmasks_chunk[superset_cnt == level + 1]
+        pruned_new_combs_list.append(bitmasks2combs(valid_new_bm_chunk, level + 1).cpu())
+
+    return torch.cat(pruned_new_combs_list, dim=0)  # on CPU

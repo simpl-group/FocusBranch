@@ -1,6 +1,8 @@
 # Reference: https://github.com/YuvShap/CoVerD/blob/main/tf_verify/calzone_robustness_analyzer.py
+import torch
 from data import load_covering_sizes
 from coverd_finite_geometries import get_possible_geometries, Geometry
+from split_and_prune import split_and_prune_by_unk
 import threading
 import queue
 import math
@@ -24,7 +26,7 @@ class LZeroRobustnessAnalyzer:
         self.__timeout = timeout
         self.__number_of_pixels = num_pixels
         self.__refinement_db_max_v = max_k
-        self.covering_sizes = load_covering_sizes(self.__t, clipping_size=500000)
+        self.covering_sizes = load_covering_sizes(self.__t, clipping_size=500000) if 3 <= t <= 6 else dict()
 
     def update_image(self, image: np.ndarray, label: int):
         for gpu_worker in self.__gpu_workers:
@@ -33,60 +35,113 @@ class LZeroRobustnessAnalyzer:
         for cpu_worker in self.__cpu_workers:
             cpu_worker.send((image, label))
 
+    def __finalize_first_safe_level(self) -> int:
+        fsls = []
+        for gpu_worker in self.__gpu_workers:
+            fsls.append(gpu_worker.recv())
+        self.__level = max(fsls)
+        for gpu_worker in self.__gpu_workers:
+            gpu_worker.send(self.__level)
+        return self.__level
+
     def analyze(self):
         print('Planning stage started')
         analyzer_start_time = time.time()
-        success_rate, mean_time = self.__estimate_sr_and_mt()
-        fraction_robust = self.__compute_fraction_robust(success_rate)
-        choosing_strategy_start = time.time()
-        VT, refinement_strategy = self.__choose_strategy(fraction_robust, mean_time, success_rate)
-        chosen_geometry, geometries_data = self.__choose_geometry(VT)
-        estimated_verification_time = round(geometries_data[0]["estimated_summed_duration"] / len(self.__gpu_workers), 3)
-        choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
-        print(
-            f'Chosen {geometries_data[0]}\n'
-            f'Estimated verification time {estimated_verification_time} s, '
-            f'choosing strategy duration: {choosing_strategy_duration} s'
-        )
-        planning_duration = round(time.time() - analyzer_start_time, 3)
-        print(f"Planning stage took {planning_duration} s")
+        self.__finalize_first_safe_level()
+        print(f'First safe level determined: {self.__level}', end='; ')
+        # Planning stage
+        if self.__level < 2 and self.__level < self.__t:
+            for cpu_worker in self.__cpu_workers:
+                cpu_worker.send('stop')
+            print('Early termination triggered')
+            return {'verified': True, 'timed_out': False, 'end_level': self.__level}
 
-        chosen_indices = random.sample(range(chosen_geometry.number_of_points()), self.__number_of_pixels)
-        random.shuffle(chosen_indices)
-        for gpu_worker in self.__gpu_workers:
-            gpu_worker.send((chosen_geometry, chosen_indices, refinement_strategy))
-        blocks_stats_by_size = defaultdict(lambda: {'runs': 0, 'successes': 0, 'total_duration': 0.})
+        self.unk_combs_settled = threading.Event()
         self.waiting_suspects: set[tuple[int]] = set()
         self.innocent_suspects: set[tuple[int]] = set()
         self.milp_job_queue = queue.Queue()
-        self.gpu_workers_finished = threading.Event()
         self.milp_found_adversarial = threading.Event()
         self.adversarial_results = {'adversarial_pixels': None, 'adversarial_example': None, 'adversarial_label': None}
-
-        refinement_sizes = {v: self.covering_sizes[(v, k)] for v, k in refinement_strategy.items() if k is not None}
-        fr = {v: round(fraction_robust[v][k], 5) for v, k in refinement_strategy.items() if k is not None}
-
         cpu_handler_thread = threading.Thread(target=self.__handle_cpu_workers_messages, args=(analyzer_start_time,))
         cpu_handler_thread.start()
-        iterating_covering_start_time = time.time()
-        self.__handle_gpu_workers_messages(analyzer_start_time, blocks_stats_by_size, chosen_geometry.number_of_blocks(), refinement_strategy, refinement_sizes)
-        iterating_covering_duration = round(time.time() - iterating_covering_start_time, 3)
+        # l=1, t=1 or l=2, t=2
+        if self.__level == self.__t <= 2:
+            planning_duration = round(time.time() - analyzer_start_time, 3)
+            print(f"Planning stage took {planning_duration} s")
+            self.__level = 1
+            # collect all unknown combinations
+            unk_combs_lst: list[np.ndarray] = []
+            for gpu_worker in self.__gpu_workers:
+                unk_combs_lst.append(gpu_worker.recv())  # wait for gpu workers to finish
+            unk_combs = np.vstack(unk_combs_lst)
+            print(f'Level {self.__level} finished, unk_combs/all: {unk_combs.shape[0]}/{math.comb(self.__number_of_pixels, self.__level)}'
+                f' using {round(time.time() - analyzer_start_time, 3)} s')
+            results = {'verified': True, 'timed_out': False}
+        else:
+            self.__level = max(self.__level, 3)
+            print(f'Operating on level {self.__level}')
+            success_rate, mean_time = self.__estimate_sr_and_mt()
+            fraction_robust = self.__compute_fraction_robust(success_rate)
+            choosing_strategy_start = time.time()
+            VT, refinement_strategy = self.__choose_strategy(fraction_robust, mean_time, success_rate)
+            chosen_geometry, geometries_data = self.__choose_geometry(VT)
+            estimated_verification_time = round(geometries_data[0]["estimated_summed_duration"] / len(self.__gpu_workers), 3)
+            choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
+            print(
+                f'Chosen {geometries_data[0]}\n'
+                f'Estimated verification time {estimated_verification_time} s, '
+                f'choosing strategy duration: {choosing_strategy_duration} s'
+            )
+            planning_duration = round(time.time() - analyzer_start_time, 3)
+            print(f"Planning stage took {planning_duration} s")
+            refinement_sizes = {v: self.covering_sizes[(v, k)] for v, k in refinement_strategy.items() if k is not None}
+            fr = {v: round(fraction_robust[v][k], 5) for v, k in refinement_strategy.items() if k is not None}
+
+            chosen_indices = random.sample(range(chosen_geometry.number_of_points()), self.__number_of_pixels)
+            random.shuffle(chosen_indices)
+            for gpu_worker in self.__gpu_workers:
+                gpu_worker.send((chosen_geometry, chosen_indices, refinement_strategy))
+            blocks_stats_by_size = defaultdict(lambda: {'runs': 0, 'successes': 0, 'total_duration': 0.})
+
+            iterating_covering_start_time = time.time()
+            unk_combs = self.__handle_gpu_workers_messages(analyzer_start_time, blocks_stats_by_size, chosen_geometry.number_of_blocks(), refinement_strategy, refinement_sizes)
+            iterating_covering_duration = round(time.time() - iterating_covering_start_time, 3)
+            summed_duration = round(sum(stats['total_duration'] for stats in blocks_stats_by_size.values()), 3)
+            print(f'GPU iterating coverings took {iterating_covering_duration} s, Summed duration (all gpu workers): {summed_duration} s')
+            results = {
+                'verified': True, 'timed_out': False,
+                'choosing_strategy_duration': choosing_strategy_duration,
+                'planning_duration': planning_duration,
+                'candidate geometries': geometries_data[1:],
+                'chosen_geometry': geometries_data[0],
+                'estimated_verification_time': estimated_verification_time,
+                'iterating_covering_duration': iterating_covering_duration,
+                'summed_duration': summed_duration,
+                'exec_details': {
+                    "Success Rate": {k:round(v, 5) for k, v in success_rate.items()},
+                    "Mean Time": {k:round(v, 6) for k, v in mean_time.items()},
+                    "VT": {k:round(v, 6) for k, v in VT.items()},
+                    "R": refinement_strategy,
+                    "refinement_sizes": refinement_sizes,
+                    "fraction_robust": fr,
+                    "runs": {size: stats['runs'] for size, stats in blocks_stats_by_size.items()},
+                    "successes": {size: stats['successes'] for size, stats in blocks_stats_by_size.items()},
+                    "success_rate": {size: round(stats['successes'] / stats['runs'], 5) if stats['runs'] > 0 else 0 for size, stats in blocks_stats_by_size.items()},
+                    "total_duration": {size: round(stats['total_duration'], 6) for size, stats in blocks_stats_by_size.items()},
+                    "mean_duration": {size: round(stats['total_duration'] / stats['runs'], 6) if stats['runs'] > 0 else 0 for size, stats in blocks_stats_by_size.items()},
+                }
+            }
+
+        handle_unk_combs_start = time.time()
+        self.__handle_unk_combs(analyzer_start_time, unk_combs)
+        handle_unk_combs_duration = round(time.time() - handle_unk_combs_start, 3)
         waiting_milp_start = time.time()
         cpu_handler_thread.join()
         waiting_milp_duration = round(time.time() - waiting_milp_start, 3)
-        summed_duration = round(sum(stats['total_duration'] for stats in blocks_stats_by_size.values()), 3)
-        print(f'GPU iterating coverings took {iterating_covering_duration} s, Summed duration (all gpu workers): {summed_duration} s')
 
-        results = {
-            'verified': True, 'timed_out': False,
-            'choosing_strategy_duration': choosing_strategy_duration,
-            'planning_duration': planning_duration,
-            'candidate geometries': geometries_data[1:],
-            'chosen_geometry': geometries_data[0],
-            'estimated_verification_time': estimated_verification_time,
-            'iterating_covering_duration': iterating_covering_duration,
-            'summed_duration': summed_duration,
-        }
+        if handle_unk_combs_duration > 0.1:
+            print(f'Handling unk_combs duration: {handle_unk_combs_duration} s.')
+            results['handle_unk_combs_duration'] = handle_unk_combs_duration
         if waiting_milp_duration > 0.1:
             print(f'Waiting for MILP duration: {waiting_milp_duration} s.')
             results['waiting_milp_duration'] = waiting_milp_duration
@@ -99,21 +154,9 @@ class LZeroRobustnessAnalyzer:
         if len(self.innocent_suspects) + len(self.waiting_suspects) > 0:
             results['proved_with_milp'] = len(self.innocent_suspects)
             results['waiting_for_milp'] = len(self.waiting_suspects)
-
+        results['end_level'] = self.__level
         self.__stop_workers()
-        return results, {
-            "Success Rate": {k:round(v, 5) for k, v in success_rate.items()},
-            "Mean Time": {k:round(v, 6) for k, v in mean_time.items()},
-            "VT": {k:round(v, 6) for k, v in VT.items()},
-            "R": refinement_strategy,
-            "refinement_sizes": refinement_sizes,
-            "fraction_robust": fr,
-            "runs": {size: stats['runs'] for size, stats in blocks_stats_by_size.items()},
-            "successes": {size: stats['successes'] for size, stats in blocks_stats_by_size.items()},
-            "success_rate": {size: round(stats['successes'] / stats['runs'], 5) if stats['runs'] > 0 else 0 for size, stats in blocks_stats_by_size.items()},
-            "total_duration": {size: round(stats['total_duration'], 6) for size, stats in blocks_stats_by_size.items()},
-            "mean_duration": {size: round(stats['total_duration'] / stats['runs'], 6) if stats['runs'] > 0 else 0 for size, stats in blocks_stats_by_size.items()},
-        }
+        return results
 
     def __estimate_sr_and_mt(self) -> tuple[dict[int, float], dict[int, float]]:
         sampling_lower_bound = self.__t
@@ -219,6 +262,7 @@ class LZeroRobustnessAnalyzer:
         done_count = 0
         total_covering_size = initial_covering_size
         last_print_time = time.time()
+        unk_combs_lst: list[list[int]] = []
         while done_count < len(self.__gpu_workers) \
             and not self.milp_found_adversarial.is_set() \
             and time.time() - analyzer_start_time < self.__timeout:
@@ -228,7 +272,10 @@ class LZeroRobustnessAnalyzer:
                 if gpu_worker.poll():
                     message = gpu_worker.recv()
                     if message == 'adversarial-example-suspect':
-                        self.milp_job_queue.put(gpu_worker.recv())
+                        if self.__level == self.__t:
+                            self.milp_job_queue.put(gpu_worker.recv())
+                        else:
+                            unk_combs_lst.append(gpu_worker.recv())
                     elif message == 'done':
                         done_count += 1
                     else:  # update statistics
@@ -250,7 +297,28 @@ class LZeroRobustnessAnalyzer:
                             size_statistics['total_duration'] += duration
                             size_statistics['successes'] += num_verified
         print(f"num_finished: {num_finished}, total_covering_size: {total_covering_size}, remaining: {total_covering_size - num_finished}")
-        self.gpu_workers_finished.set()
+        return np.array(unk_combs_lst) if len(unk_combs_lst) > 0 else np.empty((0, self.__number_of_pixels), dtype=int)
+
+    def __handle_unk_combs(self, analyzer_start_time: float, unk_combs: np.ndarray):
+        while unk_combs.shape[0] > 0 and self.__level < self.__t and time.time() - analyzer_start_time < self.__timeout:
+            new_combs = split_and_prune_by_unk(torch.from_numpy(unk_combs).long(), self.__level, self.__number_of_pixels).numpy()
+            self.__level += 1
+            print(f'Current level: {self.__level}, new_combs size: {new_combs.shape[0]}')
+            for i, gpu_worker in enumerate(self.__gpu_workers):
+                num_each = new_combs.shape[0] // len(self.__gpu_workers)
+                if i == len(self.__gpu_workers) - 1:
+                    gpu_worker.send(new_combs[i * num_each : ])
+                else:
+                    gpu_worker.send(new_combs[i * num_each : (i + 1) * num_each])
+            unk_combs_lst: list[np.ndarray] = []
+            for gpu_worker in self.__gpu_workers:
+                unk_combs_lst.append(gpu_worker.recv())  # wait for gpu workers to finish
+            unk_combs = np.unique(np.vstack(unk_combs_lst), axis=0)
+        if self.__level == self.__t and unk_combs.shape[0] > 0:
+            print(f'Checked deepest level {self.__t}, remaining unk_combs size: {unk_combs.shape[0]}')
+            for combs in unk_combs.tolist():
+                self.milp_job_queue.put(combs)
+        self.unk_combs_settled.set()
 
     def __print_progress(self, total_covering_size, last_print_time, num_finished):
         current = time.time()
@@ -262,7 +330,7 @@ class LZeroRobustnessAnalyzer:
 
     def __handle_cpu_workers_messages(self, analyzer_start_time: float):
         next_cpu_worker_id = 0
-        while not self.gpu_workers_finished.is_set() or self.milp_job_queue.unfinished_tasks > 0:
+        while not self.unk_combs_settled.is_set() or self.milp_job_queue.unfinished_tasks > 0:
             try:
                 pixel_indices = self.milp_job_queue.get(timeout=0.1)
                 suspect = tuple(pixel_indices)

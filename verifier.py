@@ -4,6 +4,7 @@ from bimm import combs2bitmasks
 from covering_generator import launch_covering_generator
 from data import load_covering
 from utils import DEVICE, TQDM_BAR_FORMAT, TimeoutException
+from coverd_finite_geometries import Geometry
 from multiprocessing.connection import Client, Listener
 from time import perf_counter
 from functools import lru_cache
@@ -94,6 +95,26 @@ class Verifier:
         lrp = self.seqAT.tail.backsubstitution_lrp()
         lb_l = self.bounded_x0.compute_lbound(lrp).squeeze(2)
         return lb_l.ge(0).all(dim=1)
+
+    def first_safe_level(self) -> int:
+        for level in range(self.eps + 1):
+            all_safe = True
+            if level == 0:
+                combs_to_check = torch.empty((1, 0), dtype=torch.int64)
+            elif level == 1:
+                combs_to_check = torch.arange(self.num_pixels).reshape(-1, 1)
+            else:
+                combs_to_check = selected_indices_sample(self.num_pixels, level, self.rep_each_level * 10)  # tunable parameter
+            for i in range(0, combs_to_check.shape[0], self.batch_size):
+                combs_to_check_batch = combs_to_check[i:i + self.batch_size].to(self.device)
+                with self.bounded_x0.selecting(combs_to_check_batch):
+                    safes = self.__check_current_batch()
+                if not safes.all():
+                    all_safe = False
+                    break
+            if all_safe:
+                break
+        return level
 
     def probe(self, partial_indices: torch.Tensor | None=None, start_level: int=0) -> tuple[float, int]:
         """
@@ -470,7 +491,7 @@ class Verifier:
                 self.conn.send('adversarial-example-suspect')
                 self.conn.send(partial)
 
-    def __prove(self, geometry, chosen_indices, num_workers: int, worker_id: int):
+    def __prove(self, geometry: Geometry, chosen_indices: list[int], num_workers: int, worker_id: int):
         num_of_blocks = math.floor(geometry.number_of_blocks() / num_workers)
         if worker_id < geometry.number_of_blocks() % num_workers:
             num_of_blocks += 1
@@ -499,6 +520,18 @@ class Verifier:
 
         self.conn.send('done')
 
+    def __prove_concrete_combs(self, concrete_combs: torch.Tensor):
+        unk_combs_lst: list[torch.Tensor] = []
+        for i in range(0, concrete_combs.shape[0], self.batch_size):
+            if self.stop_event.is_set(): break
+            combs_batch = concrete_combs[i:i + self.batch_size].to(self.device)
+            with self.bounded_x0.selecting(combs_batch):
+                safes = self.__check_current_batch()
+            unk_combs_lst.append(combs_batch[~safes].cpu())
+        unk_combs = torch.cat(unk_combs_lst, dim=0).numpy()
+        # send the unknown combinations to the main process
+        self.conn.send(unk_combs)
+
     def work_as_worker(self, port: int, num_workers: int=1, worker_id: int=0):
         with Client(('localhost', port)) as self.conn:
             # Every iteration of this loop is one image
@@ -509,26 +542,46 @@ class Verifier:
                 torch_img = torch.tensor(self.image, dtype=torch.float32).reshape(1, -1, 1)
                 self.adapt_target_images(images=torch_img, true_labels=torch.tensor([self.label], dtype=torch.int64), check_first=False)
 
-                self.conn.send(self.sample_all_k_on_root())
-                # self.conn.send(self.sample_all_k_on_root_non_batched())
-                # self.conn.send(self.sample_all_k(baseline=self.conn.recv()))
-                self.max_size_to_batch = max(k for k, v in self.start_levels.items() if v == 0)
-                print(f"Worker {worker_id} max size to batch: {self.max_size_to_batch}")
-                self.batch_pool: dict[int, list[list[int]]] = {k: [] for k in list(range(self.eps, self.max_size_to_batch + 1))[::-1]}
+                self.conn.send(self.first_safe_level())
+                self.__level = self.conn.recv()
+                if not (self.__level < 2 and self.__level < self.eps):  # same logic flow as in analyzer
+                    if self.__level == self.eps <= 2:
+                        self.__level = 1
+                        all_concrete_combs = torch.arange(self.num_pixels).reshape(-1, 1)
+                        num2check_each = all_concrete_combs.shape[0] // num_workers
+                        if worker_id == num_workers - 1:
+                            concrete_combs = all_concrete_combs[worker_id * num2check_each:]
+                        else:
+                            concrete_combs = all_concrete_combs[worker_id * num2check_each: (worker_id + 1) * num2check_each]
+                        prove_thread = threading.Thread(target=self.__prove_concrete_combs, args=(concrete_combs,), daemon=True)
+                    else:
+                        self.__level = max(self.__level, 3)
+                        # self.bounded_x0.set_level(self.__level)
+                        self.conn.send(self.sample_all_k_on_root())
+                        # self.conn.send(self.sample_all_k_on_root_non_batched())
+                        # self.conn.send(self.sample_all_k(baseline=self.conn.recv()))
+                        self.max_size_to_batch = max(k for k, v in self.start_levels.items() if v == 0)
+                        print(f"Worker {worker_id} max size to batch: {self.max_size_to_batch}")
+                        self.batch_pool: dict[int, list[list[int]]] = {k: [] for k in list(range(self.eps, self.max_size_to_batch + 1))[::-1]}
 
-                geometry, chosen_indices, self.refinement_strategy = self.conn.recv()
-                self.refinement_coverings = load_refinement_coverings(self.refinement_strategy)
-                self.stop_event = threading.Event()
-                prove_thread = threading.Thread(target=self.__prove, args=(geometry, chosen_indices, num_workers, worker_id), daemon=True)
-                prove_thread.start()
-                while True:
-                    if self.conn.poll() and self.conn.recv() == 'stop':
-                        self.stop_event.set()
-                        if self.blocks_generator_process.poll() is None:  # means still running
-                            self.blocks_generator_process.terminate()
-                        break
-                prove_thread.join()
-                self.conn.send('stopped')
+                        geometry, chosen_indices, self.refinement_strategy = self.conn.recv()
+                        self.refinement_coverings = load_refinement_coverings(self.refinement_strategy)
+                        prove_thread = threading.Thread(target=self.__prove, args=(geometry, chosen_indices, num_workers, worker_id), daemon=True)
+                    self.stop_event = threading.Event()
+                    prove_thread.start()
+                    while True:
+                        if self.conn.poll():
+                            message = self.conn.recv()
+                            if isinstance(message, str) and message == 'stop':
+                                self.stop_event.set()
+                                if hasattr(self, 'blocks_generator_process') and self.blocks_generator_process.poll() is None:  # means still running
+                                    self.blocks_generator_process.terminate()
+                                break
+                            self.__level += 1
+                            prove_thread = threading.Thread(target=self.__prove_concrete_combs, args=(torch.from_numpy(message),), daemon=True)
+                            prove_thread.start()
+                    prove_thread.join()
+                    self.conn.send('stopped')
                 message = self.conn.recv()
 
 if __name__ == '__main__':
