@@ -135,12 +135,12 @@ class L0BoundedInput(BoundedInput):
 
     def compute_udiff(self, rpW: torch.Tensor) -> torch.Tensor:
         if self.level is not None and self.level < self.eps:
-            assert self.partial_indices is not None and self.partial_indices.ndim == 2
+            assert self.partial_indices is not None and self.partial_indices.ndim == 3
             assert self.num_selected() == 0
             # two ways:
             # 1. partial rpW and all rpW -> partial WX_diff and all WX_diff -> top-level for partial WX_diff and top-(eps-level) for all WX_diff. But this is infeasible since we need to mute those top-level indices in all WX_diff
             # 2. only have all rpw, but pass in partial indices and level to compute_udiff
-            WX_diff = torch.where(rpW > 0, rpW * self.U_X, rpW * self.L_X)
+            WX_diff = torch.where(rpW > 0, rpW * self.__U_X, rpW * self.__L_X)
             if self.channel_size > 1:
                 WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, self.num_pixels).sum(dim=2)
             if WX_diff.shape[0] != self.batch_size:
@@ -173,9 +173,10 @@ class L0BoundedInput(BoundedInput):
 
     def compute_ldiff(self, rpW: torch.Tensor) -> torch.Tensor:
         if self.level is not None and self.level < self.eps:
-            assert self.partial_indices is not None and self.partial_indices.ndim == 2
+            assert self.partial_indices is not None and self.partial_indices.ndim == 3
             assert self.num_selected() == 0
-            WX_diff = torch.where(rpW < 0, rpW * self.U_X, rpW * self.L_X)
+            # print(f"rpW shape: {rpW.shape}, self.U_X shape: {self.U_X.shape}, self.__U_X shape: {self.__U_X.shape}")
+            WX_diff = torch.where(rpW < 0, rpW * self.__U_X, rpW * self.__L_X)
             if self.channel_size > 1:
                 WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, self.num_pixels).sum(dim=2)
             if WX_diff.shape[0] != self.batch_size:

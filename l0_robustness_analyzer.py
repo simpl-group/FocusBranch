@@ -223,7 +223,7 @@ class LZeroRobustnessAnalyzer:
         best_geometry = None
         best_time = float('inf')
         geometries = []
-        for geometry in get_possible_geometries(self.__number_of_pixels, self.__t):
+        for geometry in get_possible_geometries(self.__number_of_pixels, self.__level):
             estimated_time = 0
             pseudo_k = geometry.block_size() * self.__number_of_pixels / geometry.number_of_points()  # mean block size
             std_dev = math.sqrt(pseudo_k * (1 - pseudo_k + (geometry.block_size() - 1) * (self.__number_of_pixels - 1) / (geometry.number_of_points() - 1)))

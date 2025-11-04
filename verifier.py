@@ -563,7 +563,6 @@ class Verifier:
                     else:
                         self.__level = max(self.__level, 3)
                         self.bounded_x0.level = self.__level
-                        # self.bounded_x0.set_level(self.__level)
                         self.conn.send(self.sample_all_k_on_root())
                         # self.conn.send(self.sample_all_k_on_root_non_batched())
                         # self.conn.send(self.sample_all_k(baseline=self.conn.recv()))
