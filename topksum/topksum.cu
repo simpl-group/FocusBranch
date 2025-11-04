@@ -222,6 +222,157 @@ void selected_top_k_sum_single_cuda(
     );
 }
 
+template<typename scalar_t, int K> // num_partial > K > k > 0
+__global__ void top_top_sum_warped_kernel(
+    scalar_t* __restrict__ x,      // [num_rows, nv] assume all(x>0)
+    const long* __restrict__ partial_idx,  // [batch, num_partial]
+    scalar_t* __restrict__ out,    // [num_rows]
+    const int k,
+    const int num_rows,
+    const int nv,
+    const int rows_per_batch,
+    const int num_partial
+) {
+    const int row = (blockDim.x * blockIdx.x + threadIdx.x) >> 5;
+    if (row >= num_rows) return;
+
+    const int lane      = threadIdx.x & 31;
+    const unsigned mask = 0xffffffff; // full‑warp mask
+    scalar_t* x_row     = x + size_t(row) * nv;
+    scalar_t* o         = out + row;
+    const long* p_row   = partial_idx + int(row / rows_per_batch) * num_partial;
+
+    // each lane has its own local top-K buffer
+    scalar_t local[K] = {static_cast<scalar_t>(0)};
+    // store top-k indices, will be use to avoid duplicate selection
+    long top_l_idx[K] = {static_cast<long>(-1)};
+    // first, find top-k in partial indices among each lane
+    #pragma unroll
+    for (int p_col = lane; p_col < num_partial; p_col += 32) {
+        long x_col = p_row[p_col];
+        scalar_t v = x_row[x_col];
+        #pragma unroll
+        for (int i = 0; i < k; ++i) {
+            scalar_t temp_v = local[i];
+            long temp_idx = top_l_idx[i];
+            bool swap = v > temp_v;
+            local[i]     = swap ? v : temp_v;
+            v            = swap ? temp_v : v;
+            top_l_idx[i] = swap ? x_col : temp_idx;
+            x_col        = swap ? temp_idx : x_col;
+        }
+    }
+    // then, broadcast and compare to find global top-k
+    #pragma unroll
+    for (int offset = 16; offset; offset >>= 1) {
+        scalar_t peer_v[K];
+        long peer_idx[K];
+        #pragma unroll
+        for (int i = 0; i < k; ++i) {
+            peer_v[i]   = __shfl_down_sync(mask, local[i], offset);
+            peer_idx[i] = __shfl_down_sync(mask, top_l_idx[i], offset);
+        }
+        #pragma unroll
+        for (int i = 0; i < k; ++i) {
+            scalar_t v = peer_v[i];
+            long idx    = peer_idx[i];
+            #pragma unroll
+            for (int j = 0; j < k; ++j) {
+                scalar_t temp_v = local[j];
+                long temp_idx = top_l_idx[j];
+                bool swap = v > temp_v;
+                local[j]     = swap ? v : temp_v;
+                v            = swap ? temp_v : v;
+                top_l_idx[j] = swap ? idx : temp_idx;
+                idx          = swap ? temp_idx : idx;
+            }
+        }
+    }
+
+    // Now lane 0 holds the warp-global top-k in local[0..k-1] and indices in top_l_idx[0..k-1].
+    // Broadcast these top-k indices to all lanes so each lane can skip them in the second pass.
+    long skip_idx[K];
+    #pragma unroll
+    for (int i = 0; i < k; ++i) {
+        // get index from lane 0
+        skip_idx[i] = __shfl_sync(mask, top_l_idx[i], 0);
+    }
+    // find top-(K-k) in each lane
+    #pragma unroll
+    for (int col = lane; col < nv; col += 32) {
+        bool is_skipped = false;
+        #pragma unroll
+        for (int t = 0; t < k; ++t) {
+            int sidx = skip_idx[t];
+            if (sidx >= 0 && sidx == col) { is_skipped = true; break; }
+        }
+        if (is_skipped) continue;
+        scalar_t v = x_row[col];
+        #pragma unroll
+        for (int i = k; i < K; ++i) {
+            scalar_t temp = local[i];
+            bool swap = v > temp;
+            local[i] = swap ? v : temp;
+            v        = swap ? temp : v;
+        }
+    }
+    #pragma unroll
+    for (int offset = 16; offset; offset >>= 1) {
+        scalar_t peer[K];
+        #pragma unroll
+        for (int i = k; i < K; ++i)
+            peer[i] = __shfl_down_sync(mask, local[i], offset);
+        #pragma unroll
+        for (int i = k; i < K; ++i) {
+            scalar_t v = peer[i];
+            #pragma unroll
+            for (int j = k; j < K; ++j) {
+                scalar_t temp = local[j];
+                bool swap   = v > temp;
+                local[j]    = swap ? v : temp;
+                v           = swap ? temp : v;
+            }
+        }
+    }
+
+    scalar_t sum = static_cast<scalar_t>(0);
+    #pragma unroll
+    for (int i = 0; i < K; ++i) sum += local[i];
+
+    if (lane == 0) *o = sum;
+}
+template<int K>
+void top_top_sum_warped_cuda(
+    at::Tensor& x,
+    const at::Tensor& partial_idx,
+    at::Tensor& out,
+    const int k,
+    const int num_rows,
+    const int nv,
+    const int rows_per_batch,
+    const int num_partial
+) {
+    dim3 threads(MAX_THREADS_PER_BLOCK);
+    dim3 blocks((num_rows + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK);
+
+    AT_DISPATCH_ALL_TYPES(
+        x.scalar_type(),
+        "top_top_sum_warped_cuda",
+        ([&] {
+            top_top_sum_warped_kernel<scalar_t, K><<<blocks, threads>>>(
+                x.data_ptr<scalar_t>(),
+                partial_idx.data_ptr<long>(),
+                out.data_ptr<scalar_t>(),
+                k,
+                num_rows,
+                nv,
+                rows_per_batch,
+                num_partial
+            );
+        })
+    );
+}
+
 template<typename scalar_t, int K> // k > 0
 __global__ void selected_bottom_k_sum_warped_kernel(
     scalar_t* __restrict__ x,      // [num_rows, nv] assume all(x < 0)
@@ -390,6 +541,157 @@ void selected_bottom_k_sum_single_cuda(
     );
 }
 
+template<typename scalar_t, int K> // num_partial > K > k > 0
+__global__ void bottom_bottom_sum_warped_kernel(
+    scalar_t* __restrict__ x,      // [num_rows, nv] assume all(x>0)
+    const long* __restrict__ partial_idx,  // [batch, num_partial]
+    scalar_t* __restrict__ out,    // [num_rows]
+    const int k,
+    const int num_rows,
+    const int nv,
+    const int rows_per_batch,
+    const int num_partial
+) {
+    const int row = (blockDim.x * blockIdx.x + threadIdx.x) >> 5;
+    if (row >= num_rows) return;
+
+    const int lane      = threadIdx.x & 31;
+    const unsigned mask = 0xffffffff; // full‑warp mask
+    scalar_t* x_row     = x + size_t(row) * nv;
+    scalar_t* o         = out + row;
+    const long* p_row   = partial_idx + int(row / rows_per_batch) * num_partial;
+
+    // each lane has its own local top-K buffer
+    scalar_t local[K] = {static_cast<scalar_t>(0)};
+    // store top-k indices, will be use to avoid duplicate selection
+    long top_l_idx[K] = {static_cast<long>(-1)};
+    // first, find top-k in partial indices among each lane
+    #pragma unroll
+    for (int p_col = lane; p_col < num_partial; p_col += 32) {
+        long x_col = p_row[p_col];
+        scalar_t v = x_row[x_col];
+        #pragma unroll
+        for (int i = 0; i < k; ++i) {
+            scalar_t temp_v = local[i];
+            long temp_idx = top_l_idx[i];
+            bool swap = v < temp_v;
+            local[i]     = swap ? v : temp_v;
+            v            = swap ? temp_v : v;
+            top_l_idx[i] = swap ? x_col : temp_idx;
+            x_col        = swap ? temp_idx : x_col;
+        }
+    }
+    // then, broadcast and compare to find global top-k
+    #pragma unroll
+    for (int offset = 16; offset; offset >>= 1) {
+        scalar_t peer_v[K];
+        long peer_idx[K];
+        #pragma unroll
+        for (int i = 0; i < k; ++i) {
+            peer_v[i]   = __shfl_down_sync(mask, local[i], offset);
+            peer_idx[i] = __shfl_down_sync(mask, top_l_idx[i], offset);
+        }
+        #pragma unroll
+        for (int i = 0; i < k; ++i) {
+            scalar_t v = peer_v[i];
+            long idx    = peer_idx[i];
+            #pragma unroll
+            for (int j = 0; j < k; ++j) {
+                scalar_t temp_v = local[j];
+                long temp_idx = top_l_idx[j];
+                bool swap = v < temp_v;
+                local[j]     = swap ? v : temp_v;
+                v            = swap ? temp_v : v;
+                top_l_idx[j] = swap ? idx : temp_idx;
+                idx          = swap ? temp_idx : idx;
+            }
+        }
+    }
+
+    // Now lane 0 holds the warp-global top-k in local[0..k-1] and indices in top_l_idx[0..k-1].
+    // Broadcast these top-k indices to all lanes so each lane can skip them in the second pass.
+    long skip_idx[K];
+    #pragma unroll
+    for (int i = 0; i < k; ++i) {
+        // get index from lane 0
+        skip_idx[i] = __shfl_sync(mask, top_l_idx[i], 0);
+    }
+    // find top-(K-k) in each lane
+    #pragma unroll
+    for (int col = lane; col < nv; col += 32) {
+        bool is_skipped = false;
+        #pragma unroll
+        for (int t = 0; t < k; ++t) {
+            int sidx = skip_idx[t];
+            if (sidx >= 0 && sidx == col) { is_skipped = true; break; }
+        }
+        if (is_skipped) continue;
+        scalar_t v = x_row[col];
+        #pragma unroll
+        for (int i = k; i < K; ++i) {
+            scalar_t temp = local[i];
+            bool swap = v < temp;
+            local[i] = swap ? v : temp;
+            v        = swap ? temp : v;
+        }
+    }
+    #pragma unroll
+    for (int offset = 16; offset; offset >>= 1) {
+        scalar_t peer[K];
+        #pragma unroll
+        for (int i = k; i < K; ++i)
+            peer[i] = __shfl_down_sync(mask, local[i], offset);
+        #pragma unroll
+        for (int i = k; i < K; ++i) {
+            scalar_t v = peer[i];
+            #pragma unroll
+            for (int j = k; j < K; ++j) {
+                scalar_t temp = local[j];
+                bool swap   = v < temp;
+                local[j]    = swap ? v : temp;
+                v           = swap ? temp : v;
+            }
+        }
+    }
+
+    scalar_t sum = static_cast<scalar_t>(0);
+    #pragma unroll
+    for (int i = 0; i < K; ++i) sum += local[i];
+
+    if (lane == 0) *o = sum;
+}
+template<int K>
+void bottom_bottom_sum_warped_cuda(
+    at::Tensor& x,
+    const at::Tensor& partial_idx,
+    at::Tensor& out,
+    const int k,
+    const int num_rows,
+    const int nv,
+    const int rows_per_batch,
+    const int num_partial
+) {
+    dim3 threads(MAX_THREADS_PER_BLOCK);
+    dim3 blocks((num_rows + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK);
+
+    AT_DISPATCH_ALL_TYPES(
+        x.scalar_type(),
+        "bottom_bottom_sum_warped_cuda",
+        ([&] {
+            bottom_bottom_sum_warped_kernel<scalar_t, K><<<blocks, threads>>>(
+                x.data_ptr<scalar_t>(),
+                partial_idx.data_ptr<long>(),
+                out.data_ptr<scalar_t>(),
+                k,
+                num_rows,
+                nv,
+                rows_per_batch,
+                num_partial
+            );
+        })
+    );
+}
+
 //k=0
 template <typename scalar_t>
 __global__ void selected_sum_kernel(
@@ -467,6 +769,17 @@ template void selected_top_k_sum_single_cuda<8>(at::Tensor&, const at::Tensor&, 
 template void selected_top_k_sum_single_cuda<9>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
 template void selected_top_k_sum_single_cuda<10>(at::Tensor&,const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
 
+template void top_top_sum_warped_cuda<1>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void top_top_sum_warped_cuda<2>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void top_top_sum_warped_cuda<3>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void top_top_sum_warped_cuda<4>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void top_top_sum_warped_cuda<5>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void top_top_sum_warped_cuda<6>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void top_top_sum_warped_cuda<7>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void top_top_sum_warped_cuda<8>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void top_top_sum_warped_cuda<9>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void top_top_sum_warped_cuda<10>(at::Tensor&,const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+
 template void selected_bottom_k_sum_warped_cuda<1>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
 template void selected_bottom_k_sum_warped_cuda<2>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
 template void selected_bottom_k_sum_warped_cuda<3>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
@@ -488,3 +801,14 @@ template void selected_bottom_k_sum_single_cuda<7>(at::Tensor&, const at::Tensor
 template void selected_bottom_k_sum_single_cuda<8>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
 template void selected_bottom_k_sum_single_cuda<9>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
 template void selected_bottom_k_sum_single_cuda<10>(at::Tensor&,const at::Tensor&, at::Tensor&, const int, const int, const int, const int);
+
+template void bottom_bottom_sum_warped_cuda<1>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void bottom_bottom_sum_warped_cuda<2>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void bottom_bottom_sum_warped_cuda<3>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void bottom_bottom_sum_warped_cuda<4>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void bottom_bottom_sum_warped_cuda<5>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void bottom_bottom_sum_warped_cuda<6>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void bottom_bottom_sum_warped_cuda<7>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void bottom_bottom_sum_warped_cuda<8>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void bottom_bottom_sum_warped_cuda<9>(at::Tensor&, const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);
+template void bottom_bottom_sum_warped_cuda<10>(at::Tensor&,const at::Tensor&, at::Tensor&, const int, const int, const int, const int, const int);

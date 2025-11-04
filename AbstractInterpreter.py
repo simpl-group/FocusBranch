@@ -4,7 +4,7 @@ from typing_extensions import Self
 import warnings
 from contextlib import contextmanager
 from typing import NamedTuple
-from topksum import selected_top_k_sum, selected_bottom_k_sum
+from topksum import selected_top_k_sum, selected_bottom_k_sum, top_top_sum, bottom_bottom_sum
 
 torch.set_default_dtype(torch.float32)
 
@@ -58,6 +58,7 @@ class L0BoundedInput(BoundedInput):
         assert self.num_pixels == num_pixels, f"num_pixels should be {num_pixels}, but got {self.num_pixels}"
         self.partial_indices: torch.Tensor | None = None
         """indices of the pixels to be considered in the computation of the diff, if None, all pixels are considered"""
+        self.level: int|None = None
 
     def update_x(self, x: torch.Tensor) -> None:
         assert x.ndim == 3 and x.shape[1] == self.num_features and x.shape[2] == 1, \
@@ -81,9 +82,14 @@ class L0BoundedInput(BoundedInput):
     @contextmanager
     def partial(self, partial_indices: torch.Tensor | None):
         if isinstance(partial_indices, torch.Tensor):
-            assert self.eps + self.num_selected() <= partial_indices.shape[-1] <= self.x.shape[1], \
-            f"the number of partial indices should be at least {self.eps + self.num_selected()} "\
-            f"and at most {self.x.shape[1]}, but got {partial_indices.shape[-1]}."
+            if self.level is None:
+                assert self.eps + self.num_selected() <= partial_indices.shape[-1] <= self.x.shape[1], \
+                f"the number of partial indices should be at least {self.eps + self.num_selected()} "\
+                f"and at most {self.x.shape[1]}, but got {partial_indices.shape[-1]}."
+            else:
+                assert self.level <= partial_indices.shape[-1] <= self.x.shape[1], \
+                f"the number of partial indices should be at least {self.level} "\
+                f"and at most {self.x.shape[1]}, but got {partial_indices.shape[-1]}."
             if partial_indices.device != self.device:
                 partial_indices = partial_indices.to(self.device)
             if partial_indices.ndim == 1:
@@ -133,6 +139,19 @@ class L0BoundedInput(BoundedInput):
         return WX_diff.gather(dim=2, index=indices).sum(dim=2, keepdim=True)
 
     def compute_udiff(self, rpW: torch.Tensor) -> torch.Tensor:
+        if self.level is not None and self.level < self.eps:
+            assert self.partial_indices is not None and self.partial_indices.ndim == 3
+            assert self.num_selected() == 0
+            # two ways:
+            # 1. partial rpW and all rpW -> partial WX_diff and all WX_diff -> top-level for partial WX_diff and top-(eps-level) for all WX_diff. But this is infeasible since we need to mute those top-level indices in all WX_diff
+            # 2. only have all rpw, but pass in partial indices and level to compute_udiff
+            WX_diff = torch.where(rpW > 0, rpW * self.__U_X, rpW * self.__L_X)
+            if self.channel_size > 1:
+                WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, self.num_pixels).sum(dim=2)
+            if WX_diff.shape[0] != self.batch_size:
+                WX_diff = WX_diff.repeat(self.batch_size, 1, 1)
+            assert WX_diff.is_cuda
+            return top_top_sum(WX_diff, self.partial_indices.squeeze(1), self.eps, self.level)
         if self.partial_indices is not None:
             if self.partial_indices.ndim == 1:
                 rpW = rpW[:, :, self.partial_indices]
@@ -158,6 +177,17 @@ class L0BoundedInput(BoundedInput):
         return WX_selected_sum
 
     def compute_ldiff(self, rpW: torch.Tensor) -> torch.Tensor:
+        if self.level is not None and self.level < self.eps:
+            assert self.partial_indices is not None and self.partial_indices.ndim == 3
+            assert self.num_selected() == 0
+            # print(f"rpW shape: {rpW.shape}, self.U_X shape: {self.U_X.shape}, self.__U_X shape: {self.__U_X.shape}")
+            WX_diff = torch.where(rpW < 0, rpW * self.__U_X, rpW * self.__L_X)
+            if self.channel_size > 1:
+                WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, self.num_pixels).sum(dim=2)
+            if WX_diff.shape[0] != self.batch_size:
+                WX_diff = WX_diff.repeat(self.batch_size, 1, 1)
+            assert WX_diff.is_cuda
+            return bottom_bottom_sum(WX_diff, self.partial_indices.squeeze(1), self.eps, self.level)
         if self.partial_indices is not None:
             if self.partial_indices.ndim == 1:
                 rpW = rpW[:, :, self.partial_indices]

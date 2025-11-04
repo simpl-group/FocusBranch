@@ -4,6 +4,7 @@ from bimm import combs2bitmasks
 from covering_generator import launch_covering_generator
 from data import load_covering
 from utils import DEVICE, TQDM_BAR_FORMAT, TimeoutException
+from coverd_finite_geometries import Geometry
 from multiprocessing.connection import Client, Listener
 from time import perf_counter
 from functools import lru_cache
@@ -48,11 +49,11 @@ def get_refinement_subsets(partial_indices: list[int], covering: list[list[int]]
     return [[partial_indices[i] for i in cover] for cover in covering]
 
 def load_refinement_coverings(refinement_strategy: dict[int, int|None]) -> dict[int, list[list[int]]]:
-    eps = min(refinement_strategy.keys())
+    level = min(refinement_strategy.keys())
     refinement_coverings: dict[int, list[list[int]]] = {}
     for v, k in refinement_strategy.items():
         if k is None: continue  # different strategy
-        refinement_coverings[v] = load_covering(v, k, eps)
+        refinement_coverings[v] = load_covering(v, k, level)
     return refinement_coverings
 
 class Verifier:
@@ -94,6 +95,26 @@ class Verifier:
         lrp = self.seqAT.tail.backsubstitution_lrp()
         lb_l = self.bounded_x0.compute_lbound(lrp).squeeze(2)
         return lb_l.ge(0).all(dim=1)
+
+    def first_safe_level(self) -> int:
+        for level in range(self.eps + 1):
+            all_safe = True
+            if level == 0:
+                combs_to_check = torch.empty((1, 0), dtype=torch.int64)
+            elif level == 1:
+                combs_to_check = torch.arange(self.num_pixels).reshape(-1, 1)
+            else:
+                combs_to_check = selected_indices_sample(self.num_pixels, level, self.rep_each_level * 10)  # tunable parameter
+            for i in range(0, combs_to_check.shape[0], self.batch_size):
+                combs_to_check_batch = combs_to_check[i:i + self.batch_size].to(self.device)
+                with self.bounded_x0.selecting(combs_to_check_batch):
+                    safes = self.__check_current_batch()
+                if not safes.all():
+                    all_safe = False
+                    break
+            if all_safe:
+                break
+        return level
 
     def probe(self, partial_indices: torch.Tensor | None=None, start_level: int=0) -> tuple[float, int]:
         """
@@ -255,6 +276,7 @@ class Verifier:
 
     def sample_all_k(self, baseline: dict[int, float] | None=None) -> dict[int, float]:
         """
+        Deprecated.
         Sample all k from eps to max_k self.rep_each_k times and return the mean estimated verification time for each k.
         If baseline is provided, it will stop sampling when the estimated time exceeds the baseline for that k.
 
@@ -300,7 +322,7 @@ class Verifier:
     def sample_all_k_on_root(self):
         sampling_counts, sampling_successes , sampling_time = [], [], []
         rep_each_k = self.rep_each_k
-        for k in range(self.eps, self.max_k + 1):
+        for k in range(self.__level, self.max_k + 1):
             all_partial_indices = batched_randsample(self.num_pixels, k, rep_each_k)
             batch_on_root_start = perf_counter()
             sampling_successes.append(self.check_partials_on_root(all_partial_indices).sum().item())
@@ -314,6 +336,9 @@ class Verifier:
         return sampling_counts, sampling_successes, sampling_time
 
     def sample_all_k_on_root_non_batched(self):
+        """
+        Deprecated.
+        """
         sampling_counts, sampling_successes , sampling_time = [], [], []
         rep_each_k = self.rep_each_k
         for k in range(self.eps, self.max_k + 1):
@@ -335,6 +360,7 @@ class Verifier:
 
     def check_partial(self, partial_indices: torch.Tensor, start_level: int=0, end_level: int=0) -> tuple[bool, torch.Tensor|None]:
         """
+        Deprecated.
         Speed up version of verify1 for a given partial indices.
         No demo, no seqAT.working_on context manager, no raising of TimeoutException and no cuda cache clearing.
         This method checks if the partial indices are safe from start_level to end_level.
@@ -399,11 +425,15 @@ class Verifier:
         partial_indices2d = torch.tensor(self.batch_pool[num_indices])
         self.batch_pool[num_indices].clear()
         safes = self.check_partials_on_root(partial_indices2d=partial_indices2d)
-        if num_indices == self.eps:  # adversarial suspect. cannot refine
+        if num_indices == self.__level:  # concrete combs, cannot refine
             self.conn.send((num_indices, partial_indices2d.shape[0], safes.sum().item(), perf_counter() - start))
-            for suspect in partial_indices2d[~safes].tolist():
-                self.conn.send('adversarial-example-suspect')
-                self.conn.send(suspect)
+            if self.__level == self.eps:
+                for suspect in partial_indices2d[~safes].tolist():
+                    self.conn.send('adversarial-example-suspect')
+                    self.conn.send(suspect)
+            else:
+                self.conn.send('concrete-combs')
+                self.conn.send(partial_indices2d[~safes].numpy())
             return
         if end_level != 0:  # need to check in deeper level
             for unk_i in torch.where(~safes)[0]:
@@ -413,7 +443,7 @@ class Verifier:
                         self.conn.send('adversarial-example-suspect')
                         self.conn.send(suspect)
         self.conn.send((num_indices, partial_indices2d.shape[0], safes.sum().item(), perf_counter() - start))
-        if end_level != self.eps:  # need to refine
+        if end_level != self.__level:  # need to refine
             refined_partials = []
             for unk_partial in partial_indices2d[~safes].tolist():
                 refined_partials.extend(get_refinement_subsets(unk_partial, self.refinement_coverings[num_indices]))
@@ -421,6 +451,9 @@ class Verifier:
                 self.__handle_partial(refined_partial)
 
     def __handle_partial_non_batched(self, partial_indices: list[int]):
+        """
+        Deprecated.
+        """
         if self.stop_event.is_set(): return
         num_indices = len(partial_indices)
         # message: (num_indices, runs, successes, duration)
@@ -445,12 +478,12 @@ class Verifier:
         if self.stop_event.is_set(): return
         num_indices = len(partial_indices)
         # message: (num_indices, runs, successes, duration)
-        if num_indices < self.eps:
+        if num_indices < self.__level:
             self.conn.send((num_indices, 1, 1, 0.))
         elif num_indices <= self.max_size_to_batch:  # batch on root
             self.batch_pool[num_indices].append(partial_indices)
             if len(self.batch_pool[num_indices]) == self.__greater_batch:
-                self.__handle_partials(num_indices, end_level=0 if self.refinement_strategy[num_indices] else self.eps)
+                self.__handle_partials(num_indices, end_level=0 if self.refinement_strategy[num_indices] else self.__level)
         elif self.refinement_strategy[num_indices]:  # no need to check on the root level (default to not safe), just refine
             self.conn.send((num_indices, 1, 0, 0.))
             for partial in get_refinement_subsets(partial_indices, self.refinement_coverings[num_indices]):
@@ -470,7 +503,7 @@ class Verifier:
                 self.conn.send('adversarial-example-suspect')
                 self.conn.send(partial)
 
-    def __prove(self, geometry, chosen_indices, num_workers: int, worker_id: int):
+    def __prove(self, geometry: Geometry, chosen_indices: list[int], num_workers: int, worker_id: int):
         num_of_blocks = math.floor(geometry.number_of_blocks() / num_workers)
         if worker_id < geometry.number_of_blocks() % num_workers:
             num_of_blocks += 1
@@ -495,9 +528,22 @@ class Verifier:
         for num_indices in self.batch_pool:
             if len(self.batch_pool[num_indices]) > 0:
                 self.__handle_partials(num_indices,
-                    end_level=0 if self.refinement_strategy[num_indices] else self.eps)
+                    end_level=0 if self.refinement_strategy[num_indices] else self.__level)
 
         self.conn.send('done')
+        self.bounded_x0.level = None
+
+    def __prove_concrete_combs(self, concrete_combs: torch.Tensor):
+        unk_combs_lst: list[torch.Tensor] = []
+        for i in range(0, concrete_combs.shape[0], self.batch_size):
+            if self.stop_event.is_set(): break
+            combs_batch = concrete_combs[i:i + self.batch_size].to(self.device)
+            with self.bounded_x0.selecting(combs_batch):
+                safes = self.__check_current_batch()
+            unk_combs_lst.append(combs_batch[~safes].cpu())
+        unk_combs = torch.cat(unk_combs_lst, dim=0).numpy()
+        # send the unknown combinations to the main process
+        self.conn.send(unk_combs)
 
     def work_as_worker(self, port: int, num_workers: int=1, worker_id: int=0):
         with Client(('localhost', port)) as self.conn:
@@ -509,26 +555,51 @@ class Verifier:
                 torch_img = torch.tensor(self.image, dtype=torch.float32).reshape(1, -1, 1)
                 self.adapt_target_images(images=torch_img, true_labels=torch.tensor([self.label], dtype=torch.int64), check_first=False)
 
-                self.conn.send(self.sample_all_k_on_root())
-                # self.conn.send(self.sample_all_k_on_root_non_batched())
-                # self.conn.send(self.sample_all_k(baseline=self.conn.recv()))
-                self.max_size_to_batch = max(k for k, v in self.start_levels.items() if v == 0)
-                print(f"Worker {worker_id} max size to batch: {self.max_size_to_batch}")
-                self.batch_pool: dict[int, list[list[int]]] = {k: [] for k in list(range(self.eps, self.max_size_to_batch + 1))[::-1]}
+                self.conn.send(self.first_safe_level())
+                self.__level = self.conn.recv()
+                if not (self.__level < 2 and self.__level < self.eps):  # same logic flow as in analyzer
+                    if self.__level == self.eps <= 2:
+                        self.__level = 1
+                        all_concrete_combs = torch.arange(self.num_pixels).reshape(-1, 1)
+                        num2check_each = all_concrete_combs.shape[0] // num_workers
+                        if worker_id == num_workers - 1:
+                            concrete_combs = all_concrete_combs[worker_id * num2check_each:]
+                        else:
+                            concrete_combs = all_concrete_combs[worker_id * num2check_each: (worker_id + 1) * num2check_each]
+                        prove_thread = threading.Thread(target=self.__prove_concrete_combs, args=(concrete_combs,), daemon=True)
+                    else:
+                        max_sizes_to_batch = {}
+                        for self.__level in range(max(self.__level, 3), min(self.eps + 1, 7)):  # up to level 6 for batching on root
+                            self.bounded_x0.level = self.__level
+                            self.conn.send(self.sample_all_k_on_root())
+                            # self.conn.send(self.sample_all_k_on_root_non_batched())
+                            # self.conn.send(self.sample_all_k(baseline=self.conn.recv()))
+                            max_sizes_to_batch[self.__level] = max(k for k, v in self.start_levels.items() if v == 0)
+                            self.start_levels = defaultdict(lambda: 0)  # reset start levels
+                            print(f"Worker {worker_id} max size to batch on level {self.__level} : {max_sizes_to_batch[self.__level]}")
 
-                geometry, chosen_indices, self.refinement_strategy = self.conn.recv()
-                self.refinement_coverings = load_refinement_coverings(self.refinement_strategy)
-                self.stop_event = threading.Event()
-                prove_thread = threading.Thread(target=self.__prove, args=(geometry, chosen_indices, num_workers, worker_id), daemon=True)
-                prove_thread.start()
-                while True:
-                    if self.conn.poll() and self.conn.recv() == 'stop':
-                        self.stop_event.set()
-                        if self.blocks_generator_process.poll() is None:  # means still running
-                            self.blocks_generator_process.terminate()
-                        break
-                prove_thread.join()
-                self.conn.send('stopped')
+                        geometry, chosen_indices, self.refinement_strategy = self.conn.recv()
+                        self.__level = geometry.t
+                        self.max_size_to_batch = max_sizes_to_batch[self.__level]
+                        self.bounded_x0.level = self.__level
+                        self.batch_pool: dict[int, list[list[int]]] = {k: [] for k in list(range(self.__level, self.max_size_to_batch + 1))[::-1]}
+                        self.refinement_coverings = load_refinement_coverings(self.refinement_strategy)
+                        prove_thread = threading.Thread(target=self.__prove, args=(geometry, chosen_indices, num_workers, worker_id), daemon=True)
+                    self.stop_event = threading.Event()
+                    prove_thread.start()
+                    while True:
+                        if self.conn.poll():
+                            message = self.conn.recv()
+                            if isinstance(message, str) and message == 'stop':
+                                self.stop_event.set()
+                                if hasattr(self, 'blocks_generator_process') and self.blocks_generator_process.poll() is None:  # means still running
+                                    self.blocks_generator_process.terminate()
+                                break
+                            self.__level += 1
+                            prove_thread = threading.Thread(target=self.__prove_concrete_combs, args=(torch.from_numpy(message),), daemon=True)
+                            prove_thread.start()
+                    prove_thread.join()
+                    self.conn.send('stopped')
                 message = self.conn.recv()
 
 if __name__ == '__main__':
