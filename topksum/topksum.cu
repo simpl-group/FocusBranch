@@ -265,8 +265,8 @@ __global__ void top_top_sum_warped_kernel(
     // then, broadcast and compare to find global top-k
     #pragma unroll
     for (int offset = 16; offset; offset >>= 1) {
-        scalar_t peer_v[k];
-        long peer_idx[k];
+        scalar_t peer_v[K];
+        long peer_idx[K];
         #pragma unroll
         for (int i = 0; i < k; ++i) {
             peer_v[i]   = __shfl_down_sync(mask, local[i], offset);
@@ -291,7 +291,7 @@ __global__ void top_top_sum_warped_kernel(
 
     // Now lane 0 holds the warp-global top-k in local[0..k-1] and indices in top_l_idx[0..k-1].
     // Broadcast these top-k indices to all lanes so each lane can skip them in the second pass.
-    long skip_idx[k];
+    long skip_idx[K];
     #pragma unroll
     for (int i = 0; i < k; ++i) {
         // get index from lane 0
@@ -584,8 +584,8 @@ __global__ void bottom_bottom_sum_warped_kernel(
     // then, broadcast and compare to find global top-k
     #pragma unroll
     for (int offset = 16; offset; offset >>= 1) {
-        scalar_t peer_v[k];
-        long peer_idx[k];
+        scalar_t peer_v[K];
+        long peer_idx[K];
         #pragma unroll
         for (int i = 0; i < k; ++i) {
             peer_v[i]   = __shfl_down_sync(mask, local[i], offset);
@@ -610,7 +610,7 @@ __global__ void bottom_bottom_sum_warped_kernel(
 
     // Now lane 0 holds the warp-global top-k in local[0..k-1] and indices in top_l_idx[0..k-1].
     // Broadcast these top-k indices to all lanes so each lane can skip them in the second pass.
-    long skip_idx[k];
+    long skip_idx[K];
     #pragma unroll
     for (int i = 0; i < k; ++i) {
         // get index from lane 0
