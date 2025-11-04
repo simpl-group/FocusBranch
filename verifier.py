@@ -276,6 +276,7 @@ class Verifier:
 
     def sample_all_k(self, baseline: dict[int, float] | None=None) -> dict[int, float]:
         """
+        Deprecated.
         Sample all k from eps to max_k self.rep_each_k times and return the mean estimated verification time for each k.
         If baseline is provided, it will stop sampling when the estimated time exceeds the baseline for that k.
 
@@ -356,6 +357,7 @@ class Verifier:
 
     def check_partial(self, partial_indices: torch.Tensor, start_level: int=0, end_level: int=0) -> tuple[bool, torch.Tensor|None]:
         """
+        Deprecated.
         Speed up version of verify1 for a given partial indices.
         No demo, no seqAT.working_on context manager, no raising of TimeoutException and no cuda cache clearing.
         This method checks if the partial indices are safe from start_level to end_level.
@@ -420,11 +422,15 @@ class Verifier:
         partial_indices2d = torch.tensor(self.batch_pool[num_indices])
         self.batch_pool[num_indices].clear()
         safes = self.check_partials_on_root(partial_indices2d=partial_indices2d)
-        if num_indices == self.eps:  # adversarial suspect. cannot refine
+        if num_indices == self.__level:  # concrete combs, cannot refine
             self.conn.send((num_indices, partial_indices2d.shape[0], safes.sum().item(), perf_counter() - start))
-            for suspect in partial_indices2d[~safes].tolist():
-                self.conn.send('adversarial-example-suspect')
-                self.conn.send(suspect)
+            if self.__level == self.eps:
+                for suspect in partial_indices2d[~safes].tolist():
+                    self.conn.send('adversarial-example-suspect')
+                    self.conn.send(suspect)
+            else:
+                self.conn.send('concrete-combs')
+                self.conn.send(partial_indices2d[~safes].numpy())
             return
         if end_level != 0:  # need to check in deeper level
             for unk_i in torch.where(~safes)[0]:
@@ -434,7 +440,7 @@ class Verifier:
                         self.conn.send('adversarial-example-suspect')
                         self.conn.send(suspect)
         self.conn.send((num_indices, partial_indices2d.shape[0], safes.sum().item(), perf_counter() - start))
-        if end_level != self.eps:  # need to refine
+        if end_level != self.__level:  # need to refine
             refined_partials = []
             for unk_partial in partial_indices2d[~safes].tolist():
                 refined_partials.extend(get_refinement_subsets(unk_partial, self.refinement_coverings[num_indices]))
@@ -471,7 +477,7 @@ class Verifier:
         elif num_indices <= self.max_size_to_batch:  # batch on root
             self.batch_pool[num_indices].append(partial_indices)
             if len(self.batch_pool[num_indices]) == self.__greater_batch:
-                self.__handle_partials(num_indices, end_level=0 if self.refinement_strategy[num_indices] else self.eps)
+                self.__handle_partials(num_indices, end_level=0 if self.refinement_strategy[num_indices] else self.__level)
         elif self.refinement_strategy[num_indices]:  # no need to check on the root level (default to not safe), just refine
             self.conn.send((num_indices, 1, 0, 0.))
             for partial in get_refinement_subsets(partial_indices, self.refinement_coverings[num_indices]):
@@ -516,7 +522,7 @@ class Verifier:
         for num_indices in self.batch_pool:
             if len(self.batch_pool[num_indices]) > 0:
                 self.__handle_partials(num_indices,
-                    end_level=0 if self.refinement_strategy[num_indices] else self.eps)
+                    end_level=0 if self.refinement_strategy[num_indices] else self.__level)
 
         self.conn.send('done')
 
@@ -556,6 +562,7 @@ class Verifier:
                         prove_thread = threading.Thread(target=self.__prove_concrete_combs, args=(concrete_combs,), daemon=True)
                     else:
                         self.__level = max(self.__level, 3)
+                        self.bounded_x0.level = self.__level
                         # self.bounded_x0.set_level(self.__level)
                         self.conn.send(self.sample_all_k_on_root())
                         # self.conn.send(self.sample_all_k_on_root_non_batched())
@@ -573,6 +580,7 @@ class Verifier:
                         if self.conn.poll():
                             message = self.conn.recv()
                             if isinstance(message, str) and message == 'stop':
+                                self.bounded_x0.level = None
                                 self.stop_event.set()
                                 if hasattr(self, 'blocks_generator_process') and self.blocks_generator_process.poll() is None:  # means still running
                                     self.blocks_generator_process.terminate()

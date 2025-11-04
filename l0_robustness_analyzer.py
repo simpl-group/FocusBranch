@@ -272,10 +272,9 @@ class LZeroRobustnessAnalyzer:
                 if gpu_worker.poll():
                     message = gpu_worker.recv()
                     if message == 'adversarial-example-suspect':
-                        if self.__level == self.__t:
-                            self.milp_job_queue.put(gpu_worker.recv())
-                        else:
-                            unk_combs_lst.append(gpu_worker.recv())
+                        self.milp_job_queue.put(gpu_worker.recv())
+                    elif message == 'concrete-combs':
+                        unk_combs_lst.append(gpu_worker.recv())
                     elif message == 'done':
                         done_count += 1
                     else:  # update statistics
