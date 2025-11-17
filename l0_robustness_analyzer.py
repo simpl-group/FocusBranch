@@ -26,7 +26,7 @@ class LZeroRobustnessAnalyzer:
         self.__timeout = timeout
         self.__number_of_pixels = num_pixels
         self.__refinement_db_max_v = max_k
-        self.covering_sizes = load_covering_sizes(self.__t, clipping_size=500000) if 3 <= t <= 6 else dict()
+        self.covering_sizes = {t:load_covering_sizes(t, clipping_size=500000) for t in range(3, self.__t + 1)}
 
     def update_image(self, image: np.ndarray, label: int):
         for gpu_worker in self.__gpu_workers:
@@ -78,23 +78,34 @@ class LZeroRobustnessAnalyzer:
                 f' using {round(time.time() - analyzer_start_time, 3)} s')
             results = {'verified': True, 'timed_out': False}
         else:
-            self.__level = max(self.__level, 3)
-            print(f'Operating on level {self.__level}')
-            success_rate, mean_time = self.__estimate_sr_and_mt()
-            fraction_robust = self.__compute_fraction_robust(success_rate)
+            chosen_geometry_info = {"estimated_summed_duration": float('inf')}
+            candidate_geometries = []
             choosing_strategy_start = time.time()
-            VT, refinement_strategy = self.__choose_strategy(fraction_robust, mean_time, success_rate)
-            chosen_geometry, geometries_data = self.__choose_geometry(VT)
-            estimated_verification_time = round(geometries_data[0]["estimated_summed_duration"] / len(self.__gpu_workers), 3)
+            for self.__level in range(max(self.__level, 3), min(self.__t + 1, 7)):
+                print(f'Sampling on level {self.__level}')
+                _success_rate, _mean_time = self.__estimate_sr_and_mt()
+                _fraction_robust = self.__compute_fraction_robust(_success_rate)
+                _VT, _refinement_strategy = self.__choose_strategy(_fraction_robust, _mean_time, _success_rate)
+                best_geometry, geometries_data = self.__choose_geometry(_VT)
+                candidate_geometries.extend(geometries_data)
+                if geometries_data[0]["estimated_summed_duration"] < chosen_geometry_info["estimated_summed_duration"]:
+                    print(f'New best geometry found on level {self.__level} with estimated time {geometries_data[0]["estimated_summed_duration"]} s')
+                    chosen_geometry = best_geometry
+                    chosen_geometry_info = geometries_data[0]
+                    success_rate, mean_time, VT, refinement_strategy, fraction_robust = _success_rate, _mean_time, _VT, _refinement_strategy, _fraction_robust
+            estimated_verification_time = round(chosen_geometry_info["estimated_summed_duration"] / len(self.__gpu_workers), 3)
             choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
+            self.__level = chosen_geometry.t
+            assert self.__level == min(refinement_strategy.keys()), f"Level mismatch: {self.__level} vs {min(refinement_strategy.keys())}"
             print(
-                f'Chosen {geometries_data[0]}\n'
+                f'Chosen {chosen_geometry_info}; Operating on level: {self.__level}\n'
                 f'Estimated verification time {estimated_verification_time} s, '
-                f'choosing strategy duration: {choosing_strategy_duration} s'
+                f'choosing strategy duration: {choosing_strategy_duration} s\n'
+                f"Candidate geometries: {candidate_geometries}"
             )
             planning_duration = round(time.time() - analyzer_start_time, 3)
             print(f"Planning stage took {planning_duration} s")
-            refinement_sizes = {v: self.covering_sizes[(v, k)] for v, k in refinement_strategy.items() if k is not None}
+            refinement_sizes = {v: self.covering_sizes[self.__level][(v, k)] for v, k in refinement_strategy.items() if k is not None}
             fr = {v: round(fraction_robust[v][k], 5) for v, k in refinement_strategy.items() if k is not None}
 
             chosen_indices = random.sample(range(chosen_geometry.number_of_points()), self.__number_of_pixels)
@@ -112,8 +123,8 @@ class LZeroRobustnessAnalyzer:
                 'verified': True, 'timed_out': False,
                 'choosing_strategy_duration': choosing_strategy_duration,
                 'planning_duration': planning_duration,
-                'candidate geometries': geometries_data[1:],
-                'chosen_geometry': geometries_data[0],
+                'candidate geometries': candidate_geometries,
+                'chosen_geometry': chosen_geometry_info,
                 'estimated_verification_time': estimated_verification_time,
                 'iterating_covering_duration': iterating_covering_duration,
                 'summed_duration': summed_duration,

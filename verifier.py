@@ -336,6 +336,9 @@ class Verifier:
         return sampling_counts, sampling_successes, sampling_time
 
     def sample_all_k_on_root_non_batched(self):
+        """
+        Deprecated.
+        """
         sampling_counts, sampling_successes , sampling_time = [], [], []
         rep_each_k = self.rep_each_k
         for k in range(self.eps, self.max_k + 1):
@@ -564,16 +567,21 @@ class Verifier:
                             concrete_combs = all_concrete_combs[worker_id * num2check_each: (worker_id + 1) * num2check_each]
                         prove_thread = threading.Thread(target=self.__prove_concrete_combs, args=(concrete_combs,), daemon=True)
                     else:
-                        self.__level = max(self.__level, 3)
-                        self.bounded_x0.level = self.__level
-                        self.conn.send(self.sample_all_k_on_root())
-                        # self.conn.send(self.sample_all_k_on_root_non_batched())
-                        # self.conn.send(self.sample_all_k(baseline=self.conn.recv()))
-                        self.max_size_to_batch = max(k for k, v in self.start_levels.items() if v == 0)
-                        print(f"Worker {worker_id} max size to batch: {self.max_size_to_batch}")
-                        self.batch_pool: dict[int, list[list[int]]] = {k: [] for k in list(range(self.eps, self.max_size_to_batch + 1))[::-1]}
+                        max_sizes_to_batch = {}
+                        for self.__level in range(max(self.__level, 3), min(self.eps + 1, 7)):  # up to level 6 for batching on root
+                            self.bounded_x0.level = self.__level
+                            self.conn.send(self.sample_all_k_on_root())
+                            # self.conn.send(self.sample_all_k_on_root_non_batched())
+                            # self.conn.send(self.sample_all_k(baseline=self.conn.recv()))
+                            max_sizes_to_batch[self.__level] = max(k for k, v in self.start_levels.items() if v == 0)
+                            self.start_levels = defaultdict(lambda: 0)  # reset start levels
+                            print(f"Worker {worker_id} max size to batch on level {self.__level} : {max_sizes_to_batch[self.__level]}")
 
                         geometry, chosen_indices, self.refinement_strategy = self.conn.recv()
+                        self.__level = geometry.t
+                        self.max_size_to_batch = max_sizes_to_batch[self.__level]
+                        self.bounded_x0.level = self.__level
+                        self.batch_pool: dict[int, list[list[int]]] = {k: [] for k in list(range(self.__level, self.max_size_to_batch + 1))[::-1]}
                         self.refinement_coverings = load_refinement_coverings(self.refinement_strategy)
                         prove_thread = threading.Thread(target=self.__prove, args=(geometry, chosen_indices, num_workers, worker_id), daemon=True)
                     self.stop_event = threading.Event()
