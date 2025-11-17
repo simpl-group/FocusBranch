@@ -93,6 +93,7 @@ class LZeroRobustnessAnalyzer:
                     chosen_geometry = best_geometry
                     chosen_geometry_info = geometries_data[0]
                     success_rate, mean_time, VT, refinement_strategy, fraction_robust = _success_rate, _mean_time, _VT, _refinement_strategy, _fraction_robust
+            assert self.__level <= 6, "Currently only levels up to 6 are supported."
             estimated_verification_time = round(chosen_geometry_info["estimated_summed_duration"] / len(self.__gpu_workers), 3)
             choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
             self.__level = chosen_geometry.t
@@ -230,8 +231,8 @@ class LZeroRobustnessAnalyzer:
                 refinement_strategy[v] = None
         return VT, refinement_strategy
 
-    def __choose_geometry(self, VT: dict[int,float]) -> tuple[Geometry, list[tuple[str, float, int, float]]]:
-        best_geometry = None
+    def __choose_geometry(self, VT: dict[int,float]) -> tuple[Geometry, list[dict[str, object]]]:
+        best_geometry: Geometry = None
         best_time = float('inf')
         geometries = []
         for geometry in get_possible_geometries(self.__number_of_pixels, self.__level):
