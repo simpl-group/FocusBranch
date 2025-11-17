@@ -49,11 +49,11 @@ def get_refinement_subsets(partial_indices: list[int], covering: list[list[int]]
     return [[partial_indices[i] for i in cover] for cover in covering]
 
 def load_refinement_coverings(refinement_strategy: dict[int, int|None]) -> dict[int, list[list[int]]]:
-    eps = min(refinement_strategy.keys())
+    level = min(refinement_strategy.keys())
     refinement_coverings: dict[int, list[list[int]]] = {}
     for v, k in refinement_strategy.items():
         if k is None: continue  # different strategy
-        refinement_coverings[v] = load_covering(v, k, eps)
+        refinement_coverings[v] = load_covering(v, k, level)
     return refinement_coverings
 
 class Verifier:
@@ -322,7 +322,7 @@ class Verifier:
     def sample_all_k_on_root(self):
         sampling_counts, sampling_successes , sampling_time = [], [], []
         rep_each_k = self.rep_each_k
-        for k in range(self.eps, self.max_k + 1):
+        for k in range(self.__level, self.max_k + 1):
             all_partial_indices = batched_randsample(self.num_pixels, k, rep_each_k)
             batch_on_root_start = perf_counter()
             sampling_successes.append(self.check_partials_on_root(all_partial_indices).sum().item())
@@ -448,6 +448,9 @@ class Verifier:
                 self.__handle_partial(refined_partial)
 
     def __handle_partial_non_batched(self, partial_indices: list[int]):
+        """
+        Deprecated.
+        """
         if self.stop_event.is_set(): return
         num_indices = len(partial_indices)
         # message: (num_indices, runs, successes, duration)
@@ -472,7 +475,7 @@ class Verifier:
         if self.stop_event.is_set(): return
         num_indices = len(partial_indices)
         # message: (num_indices, runs, successes, duration)
-        if num_indices < self.eps:
+        if num_indices < self.__level:
             self.conn.send((num_indices, 1, 1, 0.))
         elif num_indices <= self.max_size_to_batch:  # batch on root
             self.batch_pool[num_indices].append(partial_indices)

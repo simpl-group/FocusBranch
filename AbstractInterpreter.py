@@ -82,9 +82,14 @@ class L0BoundedInput(BoundedInput):
     @contextmanager
     def partial(self, partial_indices: torch.Tensor | None):
         if isinstance(partial_indices, torch.Tensor):
-            assert self.eps + self.num_selected() <= partial_indices.shape[-1] <= self.x.shape[1], \
-            f"the number of partial indices should be at least {self.eps + self.num_selected()} "\
-            f"and at most {self.x.shape[1]}, but got {partial_indices.shape[-1]}."
+            if self.level is None:
+                assert self.eps + self.num_selected() <= partial_indices.shape[-1] <= self.x.shape[1], \
+                f"the number of partial indices should be at least {self.eps + self.num_selected()} "\
+                f"and at most {self.x.shape[1]}, but got {partial_indices.shape[-1]}."
+            else:
+                assert self.level <= partial_indices.shape[-1] <= self.x.shape[1], \
+                f"the number of partial indices should be at least {self.level} "\
+                f"and at most {self.x.shape[1]}, but got {partial_indices.shape[-1]}."
             if partial_indices.device != self.device:
                 partial_indices = partial_indices.to(self.device)
             if partial_indices.ndim == 1:

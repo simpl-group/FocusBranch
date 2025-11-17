@@ -159,7 +159,7 @@ class LZeroRobustnessAnalyzer:
         return results
 
     def __estimate_sr_and_mt(self) -> tuple[dict[int, float], dict[int, float]]:
-        sampling_lower_bound = self.__t
+        sampling_lower_bound = self.__level
         sampling_upper_bound = self.__refinement_db_max_v
 
         sampling_counts_vector = np.zeros(sampling_upper_bound - sampling_lower_bound + 1)
@@ -176,13 +176,13 @@ class LZeroRobustnessAnalyzer:
 
         sr_vector = savgol_filter(success_ratio_vector, 15, 2).clip(0, 1)
 
-        return {k + self.__t:v for k, v in enumerate(sr_vector)}, {k + self.__t:v for k, v in enumerate(mean_time_vector)}
+        return {k + self.__level:v for k, v in enumerate(sr_vector)}, {k + self.__level:v for k, v in enumerate(mean_time_vector)}
 
     def __compute_fraction_robust(self, success_rate: dict[int, float]) -> dict[int, dict[int, float]]:
         fraction_robust: dict[int, dict[int, float]] = dict()
-        for v in range(self.__t, self.__refinement_db_max_v + 1):
+        for v in range(self.__level, self.__refinement_db_max_v + 1):
             fraction_robust[v] = dict()
-            for k in range(self.__t, v):
+            for k in range(self.__level, v):
                 if 1 - success_rate[v] < 1e-7:
                     fraction_robust[v][k] = 1.0
                 else:
@@ -197,16 +197,16 @@ class LZeroRobustnessAnalyzer:
         success_rate: dict[int, float],
         sbap_VT: dict[int,float]|None=None
     ) -> tuple[dict[int,float], dict[int,int|None]]:
-        RT: dict[int,float] = {self.__t: 0.}  # estimated refinement time
-        VT: dict[int,float] = {self.__t: mean_time[self.__t]}  # estimated verification time
-        refinement_strategy: dict[int,int|None] = {self.__t: None}  # best next k or None
-        for v in range(self.__t + 1, self.__refinement_db_max_v + 1):
+        RT: dict[int,float] = {self.__level: 0.}  # estimated refinement time
+        VT: dict[int,float] = {self.__level: mean_time[self.__level]}  # estimated verification time
+        refinement_strategy: dict[int,int|None] = {self.__level: None}  # best next k or None
+        for v in range(self.__level + 1, self.__refinement_db_max_v + 1):
             best_next_k = None
             min_refine_time = float('inf')
-            for k in range(self.__t, min(v, self.__refinement_db_max_v + 1)):
-                if (v, k) not in self.covering_sizes:
+            for k in range(self.__level, min(v, self.__refinement_db_max_v + 1)):
+                if (v, k) not in self.covering_sizes[self.__level]:
                     continue
-                refine_time = self.covering_sizes[(v, k)] * (mean_time[k] + (1 - fraction_robust[v][k]) * RT[k])
+                refine_time = self.covering_sizes[self.__level][(v, k)] * (mean_time[k] + (1 - fraction_robust[v][k]) * RT[k])
                 if refine_time < min_refine_time:
                     best_next_k = k
                     min_refine_time = refine_time
@@ -232,8 +232,8 @@ class LZeroRobustnessAnalyzer:
             if (1 - norm.cdf(self.__refinement_db_max_v, pseudo_k, std_dev)) * total_number_of_blocks > 1e-2:
                 continue
 
-            cdf_before = norm.cdf(self.__t - 0.5, pseudo_k, std_dev)
-            for block_size in range(self.__t, self.__refinement_db_max_v + 1):
+            cdf_before = norm.cdf(self.__level - 0.5, pseudo_k, std_dev)
+            for block_size in range(self.__level, self.__refinement_db_max_v + 1):
                 cdf_after = norm.cdf(block_size + 0.5, pseudo_k, std_dev)
                 block_size_probability = cdf_after - cdf_before
                 cdf_before = cdf_after
@@ -280,7 +280,7 @@ class LZeroRobustnessAnalyzer:
                     else:  # update statistics
                         num_indices, runs, num_verified, duration = message
                         size_statistics = statistics_by_size[num_indices]
-                        if num_indices < self.__t:
+                        if num_indices < self.__level:
                             num_finished += num_verified
                         elif refinement_strategy[num_indices] is not None:  # could potentially be refined
                             num_finished += runs
