@@ -15,9 +15,6 @@ import numpy as np
 from scipy.signal import savgol_filter
 from scipy.stats import norm
 
-def decreasing_exp(x, a, b):
-    return 1 - np.exp(a*(x-b))
-
 class LZeroRobustnessAnalyzer:
     def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int):
         self.__gpu_workers = gpu_workers
