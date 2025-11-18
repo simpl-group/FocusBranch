@@ -531,6 +531,7 @@ class Verifier:
                     end_level=0 if self.refinement_strategy[num_indices] else self.__level)
 
         self.conn.send('done')
+        self.bounded_x0.level = None
 
     def __prove_concrete_combs(self, concrete_combs: torch.Tensor):
         unk_combs_lst: list[torch.Tensor] = []
@@ -590,7 +591,6 @@ class Verifier:
                         if self.conn.poll():
                             message = self.conn.recv()
                             if isinstance(message, str) and message == 'stop':
-                                self.bounded_x0.level = None
                                 self.stop_event.set()
                                 if hasattr(self, 'blocks_generator_process') and self.blocks_generator_process.poll() is None:  # means still running
                                     self.blocks_generator_process.terminate()

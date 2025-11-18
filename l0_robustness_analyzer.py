@@ -26,7 +26,7 @@ class LZeroRobustnessAnalyzer:
         self.__timeout = timeout
         self.__number_of_pixels = num_pixels
         self.__refinement_db_max_v = max_k
-        self.covering_sizes = {t:load_covering_sizes(t, clipping_size=500000) for t in range(3, self.__t + 1)}
+        self.covering_sizes = {t:load_covering_sizes(t, clipping_size=500000) for t in range(3, min(self.__t + 1, 7))}
 
     def update_image(self, image: np.ndarray, label: int):
         for gpu_worker in self.__gpu_workers:
@@ -101,8 +101,8 @@ class LZeroRobustnessAnalyzer:
             print(
                 f'Chosen {chosen_geometry_info}; Operating on level: {self.__level}\n'
                 f'Estimated verification time {estimated_verification_time} s, '
-                f'choosing strategy duration: {choosing_strategy_duration} s\n'
-                f"Candidate geometries: {candidate_geometries}"
+                f'choosing strategy duration: {choosing_strategy_duration} s'
+                # f"\nCandidate geometries: {candidate_geometries}"
             )
             planning_duration = round(time.time() - analyzer_start_time, 3)
             print(f"Planning stage took {planning_duration} s")
@@ -151,7 +151,7 @@ class LZeroRobustnessAnalyzer:
         cpu_handler_thread.join()
         waiting_milp_duration = round(time.time() - waiting_milp_start, 3)
 
-        if handle_unk_combs_duration > 0.1:
+        if handle_unk_combs_duration > 0.01:
             print(f'Handling unk_combs duration: {handle_unk_combs_duration} s.')
             results['handle_unk_combs_duration'] = handle_unk_combs_duration
         if waiting_milp_duration > 0.1:
@@ -269,7 +269,7 @@ class LZeroRobustnessAnalyzer:
         initial_covering_size: int,
         refinement_strategy: dict[int,int|None],
         refinement_sizes: dict[int,int]
-    ):
+    ) -> np.ndarray:
         num_finished = 0
         done_count = 0
         total_covering_size = initial_covering_size
@@ -308,11 +308,12 @@ class LZeroRobustnessAnalyzer:
                             size_statistics['total_duration'] += duration
                             size_statistics['successes'] += num_verified
         print(f"num_finished: {num_finished}, total_covering_size: {total_covering_size}, remaining: {total_covering_size - num_finished}")
-        return np.array(unk_combs_lst) if len(unk_combs_lst) > 0 else np.empty((0, self.__number_of_pixels), dtype=int)
+        return np.vstack(unk_combs_lst) if len(unk_combs_lst) > 0 else np.empty((0, self.__number_of_pixels), dtype=int)
 
     def __handle_unk_combs(self, analyzer_start_time: float, unk_combs: np.ndarray):
-        while unk_combs.shape[0] > 0 and self.__level < self.__t and time.time() - analyzer_start_time < self.__timeout:
-            new_combs = split_and_prune_by_unk(torch.from_numpy(unk_combs).long(), self.__level, self.__number_of_pixels).numpy()
+        unk_combs_tensor: torch.Tensor = torch.unique(torch.from_numpy(unk_combs).cuda(), dim=0).cpu()
+        while unk_combs_tensor.shape[0] > 0 and self.__level < self.__t and time.time() - analyzer_start_time < self.__timeout:
+            new_combs = split_and_prune_by_unk(unk_combs_tensor, self.__level, self.__number_of_pixels).numpy()
             self.__level += 1
             print(f'Current level: {self.__level}, new_combs size: {new_combs.shape[0]}')
             for i, gpu_worker in enumerate(self.__gpu_workers):
@@ -324,10 +325,10 @@ class LZeroRobustnessAnalyzer:
             unk_combs_lst: list[np.ndarray] = []
             for gpu_worker in self.__gpu_workers:
                 unk_combs_lst.append(gpu_worker.recv())  # wait for gpu workers to finish
-            unk_combs = np.unique(np.vstack(unk_combs_lst), axis=0)
-        if self.__level == self.__t and unk_combs.shape[0] > 0:
-            print(f'Checked deepest level {self.__t}, remaining unk_combs size: {unk_combs.shape[0]}')
-            for combs in unk_combs.tolist():
+            unk_combs_tensor = torch.from_numpy(np.vstack(unk_combs_lst))
+        if self.__level == self.__t and unk_combs_tensor.shape[0] > 0:
+            print(f'Checked deepest level {self.__t}, remaining unk_combs size: {unk_combs_tensor.shape[0]}')
+            for combs in unk_combs_tensor.tolist():
                 self.milp_job_queue.put(combs)
         self.unk_combs_settled.set()
 
