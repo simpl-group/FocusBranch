@@ -1,5 +1,5 @@
 # Reference: https://github.com/YuvShap/CoVerD/blob/main/tf_verify/calzone_robustness_analyzer.py
-import torch
+from utils import TQDM_BAR_FORMAT
 from data import load_covering_sizes
 from coverd_finite_geometries import get_possible_geometries, Geometry
 from split_and_prune import split_and_prune_by_unk
@@ -11,9 +11,11 @@ import random
 from itertools import chain
 from collections import defaultdict
 from multiprocessing.connection import Connection
+import torch
 import numpy as np
 from scipy.signal import savgol_filter
 from scipy.stats import norm
+from tqdm import tqdm
 
 class LZeroRobustnessAnalyzer:
     def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int):
@@ -270,12 +272,13 @@ class LZeroRobustnessAnalyzer:
         num_finished = 0
         done_count = 0
         total_covering_size = initial_covering_size
+        pbar = tqdm(total=initial_covering_size, desc="Processing", bar_format=TQDM_BAR_FORMAT)
         last_print_time = time.time()
         unk_combs_lst: list[list[int]] = []
         while done_count < len(self.__gpu_workers) \
             and not self.milp_found_adversarial.is_set() \
             and time.time() - analyzer_start_time < self.__timeout:
-            last_print_time = self.__print_progress(total_covering_size, last_print_time, num_finished)
+            last_print_time = self.__print_progress(pbar, total_covering_size, num_finished, last_print_time)
 
             for gpu_worker in self.__gpu_workers:
                 if gpu_worker.poll():
@@ -304,6 +307,7 @@ class LZeroRobustnessAnalyzer:
                             size_statistics['runs'] += runs
                             size_statistics['total_duration'] += duration
                             size_statistics['successes'] += num_verified
+        pbar.close()
         print(f"num_finished: {num_finished}, total_covering_size: {total_covering_size}, remaining: {total_covering_size - num_finished}")
         return np.vstack(unk_combs_lst) if len(unk_combs_lst) > 0 else np.empty((0, self.__number_of_pixels), dtype=int)
 
@@ -329,12 +333,12 @@ class LZeroRobustnessAnalyzer:
                 self.milp_job_queue.put(combs)
         self.unk_combs_settled.set()
 
-    def __print_progress(self, total_covering_size, last_print_time, num_finished):
+    def __print_progress(self, pbar: tqdm, total_covering_size: int, num_finished: int, last_print_time: float) -> float:
         current = time.time()
         if current - last_print_time < 2:
             return last_print_time
-        print(f'progress: {num_finished}/{int(total_covering_size)}=' \
-            f'{100 * num_finished / total_covering_size:.3f}%', sep='; ', end='\r')
+        pbar.n = pbar.total - total_covering_size + num_finished
+        pbar.set_postfix({'FNS/AGG': f'{num_finished}/{int(total_covering_size)}'})
         return current
 
     def __handle_cpu_workers_messages(self, analyzer_start_time: float):
