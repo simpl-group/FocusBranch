@@ -34,26 +34,89 @@ class LZeroRobustnessAnalyzer:
         for cpu_worker in self.__cpu_workers:
             cpu_worker.send((image, label))
 
-    def __finalize_first_safe_level(self) -> int:
-        fsls = []
-        for gpu_worker in self.__gpu_workers:
-            fsls.append(gpu_worker.recv())
-        self.__level = max(fsls)
-        for gpu_worker in self.__gpu_workers:
-            gpu_worker.send(self.__level)
-        return self.__level
-
     def analyze(self):
         print('Planning stage started')
         analyzer_start_time = time.time()
-        self.__finalize_first_safe_level()
-        print(f'First safe level determined: {self.__level}', end='; ')
-        # Planning stage
-        if self.__level < 2 and self.__level < self.__t:
-            for cpu_worker in self.__cpu_workers:
-                cpu_worker.send('stop')
+        sample_counts, sample_successes = [0] * (self.__t + 1), [0] * (self.__t + 1)
+        sample_durations: list[float] = [0.0] * (self.__t + 1)
+        for gpu_worker in self.__gpu_workers:
+            sc, ss, sd = gpu_worker.recv()
+            sample_counts = [a + b for a, b in zip(sample_counts, sc)]
+            sample_successes = [a + b for a, b in zip(sample_successes, ss)]
+            sample_durations = [a + b for a, b in zip(sample_durations, sd)]
+        sample_success_rate = [s / c if c > 0 else 0.0 for s, c in zip(sample_successes, sample_counts)]
+        estimated_time_per_level = [0.0] * (self.__t + 1)
+        for l in range(self.__t + 1):
+            if sample_successes[l] == 0:
+                estimated_time_per_level[l] = None  # not to start at this level
+                continue
+            if l == 0:  # early termination: safe at level 0
+                estimated_nodes_this_level = 1
+            elif l == 1:
+                estimated_nodes_this_level = self.__number_of_pixels
+            else:
+                estimated_nodes_this_level = math.ceil(math.comb(self.__number_of_pixels, l) * (1 - sample_success_rate[l - 1]) ** 2)
+            estimated_time_per_level[l] = (sample_durations[l] / sample_counts[l]) * estimated_nodes_this_level
+            if sample_successes[l] == sample_counts[l]:
+                break  # this level is estimated to be 100% robust and verified, no need to go deeper
+        best_strategy = (float('inf'), None, None)
+        candidate_strategies: list[tuple] = []
+        choosing_strategy_start = time.time()
+        candidate_geometries: list[dict[str, object]] = []
+        for l in range(self.__t + 1):
+            if estimated_time_per_level[l] is None:
+                continue
+            elif l == 0 or l == 1 and sample_counts[1] == sample_successes[1]:
+                best_strategy = (round(estimated_time_per_level[l], 3), 'skip', l)
+                break
+            tail_time = sum(et for i, et in enumerate(estimated_time_per_level) if et is not None and i > l)
+            sbap_time = ((sample_durations[l] / sample_counts[l]) * math.comb(self.__number_of_pixels, l) + tail_time) / len(self.__gpu_workers)
+            candidate_strategies.append((round(sbap_time, 3), 'sbap', l))
+            coverd_time = None
+            if 3 <= l <= 6 and sample_success_rate[l] > 0.99:  # tunable parameter
+                print(f'Sampling on level {l}')
+                for gpu_worker in self.__gpu_workers:
+                    gpu_worker.send(('sample-all-k', l))
+                self.__level = l
+                _success_rate, _mean_time = self.__estimate_sr_and_mt()
+                _fraction_robust = self.__compute_fraction_robust(_success_rate)
+                _VT, _refinement_strategy = self.__choose_strategy(_fraction_robust, _mean_time, _success_rate)
+                _best_geometry, geometries_data = self.__choose_geometry(_VT)
+                candidate_geometries.extend(geometries_data)
+                coverd_time: float = (geometries_data[0]["estimated_summed_duration"] + tail_time) / len(self.__gpu_workers)
+                candidate_strategies.append((round(coverd_time, 3), 'coverd', str(_best_geometry)))
+            if sbap_time < best_strategy[0]:
+                best_strategy = (round(sbap_time, 3), 'sbap', l)
+            if coverd_time is not None and coverd_time < best_strategy[0]:
+                best_strategy = (round(coverd_time, 3), 'coverd', str(_best_geometry))
+                chosen_geometry, chosen_geometry_info = _best_geometry, geometries_data[0]
+                success_rate, mean_time, VT, refinement_strategy, fraction_robust = _success_rate, _mean_time, _VT, _refinement_strategy, _fraction_robust
+        choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
+        planning_duration = round(time.time() - analyzer_start_time, 3)
+        print(f"Planning stage took {planning_duration} s, choosing strategy duration: {choosing_strategy_duration} s, best strategy: {best_strategy}")
+        results = {
+            'verified': True, 'timed_out': False,
+            'choosing_strategy_duration': choosing_strategy_duration,
+            'best_strategy': best_strategy,
+            'estimated_verification_time': best_strategy[0],
+            'planning_duration': planning_duration,
+            'candidate_strategies': candidate_strategies
+        }
+        if len(candidate_geometries) > 0: results['candidate_geometries'] = candidate_geometries
+
+        if best_strategy[1] == 'skip':
+            self.__skip_this_image()
             print('Early termination triggered')
-            return {'verified': True, 'timed_out': False, 'end_level': self.__level}
+            results['end_level'] = best_strategy[2]
+            return results
+        # to be deleted later if needed
+        if best_strategy[1] == 'sbap' and best_strategy[2] >= 4 or best_strategy[0] > self.__timeout:
+            print(candidate_geometries)
+            self.__skip_this_image()
+            results['verified'] = False
+            results['timed_out'] = True
+            print(f'{best_strategy[1]} at level {best_strategy[2]} estimated to take too long, skipping this image.')
+            return results
 
         self.unk_combs_settled = threading.Event()
         self.waiting_suspects: set[tuple[int]] = set()
@@ -63,11 +126,11 @@ class LZeroRobustnessAnalyzer:
         self.adversarial_results = {'adversarial_pixels': None, 'adversarial_example': None, 'adversarial_label': None}
         cpu_handler_thread = threading.Thread(target=self.__handle_cpu_workers_messages, args=(analyzer_start_time,))
         cpu_handler_thread.start()
-        # l=1, t=1 or l=2, t=2
-        if self.__level == self.__t <= 2:
-            planning_duration = round(time.time() - analyzer_start_time, 3)
-            print(f"Planning stage took {planning_duration} s")
-            self.__level = 1
+
+        if best_strategy[1] == 'sbap':
+            self.__level = best_strategy[2]
+            for gpu_worker in self.__gpu_workers:
+                gpu_worker.send(('sbap', self.__level))  # no geometry, no refinement strategy
             # collect all unknown combinations
             unk_combs_lst: list[np.ndarray] = []
             for gpu_worker in self.__gpu_workers:
@@ -75,43 +138,20 @@ class LZeroRobustnessAnalyzer:
             unk_combs = np.vstack(unk_combs_lst)
             print(f'Level {self.__level} finished, unk_combs/all: {unk_combs.shape[0]}/{math.comb(self.__number_of_pixels, self.__level)}'
                 f' using {round(time.time() - analyzer_start_time, 3)} s')
-            results = {'verified': True, 'timed_out': False}
-        else:
-            chosen_geometry_info = {"estimated_summed_duration": float('inf')}
-            candidate_geometries = []
-            choosing_strategy_start = time.time()
-            for self.__level in range(max(self.__level, 3), min(self.__t + 1, 7)):
-                print(f'Sampling on level {self.__level}')
-                _success_rate, _mean_time = self.__estimate_sr_and_mt()
-                _fraction_robust = self.__compute_fraction_robust(_success_rate)
-                _VT, _refinement_strategy = self.__choose_strategy(_fraction_robust, _mean_time, _success_rate)
-                best_geometry, geometries_data = self.__choose_geometry(_VT)
-                candidate_geometries.extend(geometries_data)
-                if geometries_data[0]["estimated_summed_duration"] < chosen_geometry_info["estimated_summed_duration"]:
-                    print(f'New best geometry found on level {self.__level} with estimated time {geometries_data[0]["estimated_summed_duration"]} s')
-                    chosen_geometry = best_geometry
-                    chosen_geometry_info = geometries_data[0]
-                    success_rate, mean_time, VT, refinement_strategy, fraction_robust = _success_rate, _mean_time, _VT, _refinement_strategy, _fraction_robust
-            assert self.__level <= 6, "Currently only levels up to 6 are supported."
-            estimated_verification_time = round(chosen_geometry_info["estimated_summed_duration"] / len(self.__gpu_workers), 3)
-            choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
+        elif best_strategy[1] == 'coverd':
             self.__level = chosen_geometry.t
             assert self.__level == min(refinement_strategy.keys()), f"Level mismatch: {self.__level} vs {min(refinement_strategy.keys())}"
-            print(
-                f'Chosen {chosen_geometry_info}; Operating on level: {self.__level}\n'
-                f'Estimated verification time {estimated_verification_time} s, '
-                f'choosing strategy duration: {choosing_strategy_duration} s'
-                # f"\nCandidate geometries: {candidate_geometries}"
-            )
-            planning_duration = round(time.time() - analyzer_start_time, 3)
-            print(f"Planning stage took {planning_duration} s")
-            refinement_sizes = {v: self.covering_sizes[self.__level][(v, k)] for v, k in refinement_strategy.items() if k is not None}
-            fr = {v: round(fraction_robust[v][k], 5) for v, k in refinement_strategy.items() if k is not None}
-
             chosen_indices = random.sample(range(chosen_geometry.number_of_points()), self.__number_of_pixels)
             random.shuffle(chosen_indices)
             for gpu_worker in self.__gpu_workers:
-                gpu_worker.send((chosen_geometry, chosen_indices, refinement_strategy))
+                gpu_worker.send(('coverd', chosen_geometry, chosen_indices, refinement_strategy))
+
+            print(
+                f'Chosen {chosen_geometry_info}; Operating on level: {self.__level}'
+                f"\nCandidate geometries: {candidate_geometries}"
+            )
+            refinement_sizes = {v: self.covering_sizes[self.__level][(v, k)] for v, k in refinement_strategy.items() if k is not None}
+            fr = {v: round(fraction_robust[v][k], 5) for v, k in refinement_strategy.items() if k is not None}
             blocks_stats_by_size = defaultdict(lambda: {'runs': 0, 'successes': 0, 'total_duration': 0.})
 
             iterating_covering_start_time = time.time()
@@ -119,32 +159,28 @@ class LZeroRobustnessAnalyzer:
             iterating_covering_duration = round(time.time() - iterating_covering_start_time, 3)
             summed_duration = round(sum(stats['total_duration'] for stats in blocks_stats_by_size.values()), 3)
             print(f'GPU iterating coverings took {iterating_covering_duration} s, Summed duration (all gpu workers): {summed_duration} s')
-            results = {
-                'verified': True, 'timed_out': False,
-                'choosing_strategy_duration': choosing_strategy_duration,
-                'planning_duration': planning_duration,
-                'candidate geometries': candidate_geometries,
+            results['coverd'] = {
                 'chosen_geometry': chosen_geometry_info,
-                'estimated_verification_time': estimated_verification_time,
                 'iterating_covering_duration': iterating_covering_duration,
-                'summed_duration': summed_duration,
-                'exec_details': {
-                    "Success Rate": {k:round(v, 5) for k, v in success_rate.items()},
-                    "Mean Time": {k:round(v, 6) for k, v in mean_time.items()},
-                    "VT": {k:round(v, 6) for k, v in VT.items()},
-                    "R": refinement_strategy,
-                    "refinement_sizes": refinement_sizes,
-                    "fraction_robust": fr,
-                    "runs": {size: stats['runs'] for size, stats in blocks_stats_by_size.items()},
-                    "successes": {size: stats['successes'] for size, stats in blocks_stats_by_size.items()},
-                    "success_rate": {size: round(stats['successes'] / stats['runs'], 5) if stats['runs'] > 0 else 0 for size, stats in blocks_stats_by_size.items()},
-                    "total_duration": {size: round(stats['total_duration'], 6) for size, stats in blocks_stats_by_size.items()},
-                    "mean_duration": {size: round(stats['total_duration'] / stats['runs'], 6) if stats['runs'] > 0 else 0 for size, stats in blocks_stats_by_size.items()},
-                }
+                'summed_duration': summed_duration
             }
+            results['exec_details'] = {
+                "Success Rate": {k:round(v, 5) for k, v in success_rate.items()},
+                "Mean Time": {k:round(v, 6) for k, v in mean_time.items()},
+                "VT": {k:round(v, 6) for k, v in VT.items()},
+                "R": refinement_strategy,
+                "refinement_sizes": refinement_sizes,
+                "fraction_robust": fr,
+                "runs": {size: stats['runs'] for size, stats in blocks_stats_by_size.items()},
+                "successes": {size: stats['successes'] for size, stats in blocks_stats_by_size.items()},
+                "success_rate": {size: round(stats['successes'] / stats['runs'], 5) if stats['runs'] > 0 else 0 for size, stats in blocks_stats_by_size.items()},
+                "total_duration": {size: round(stats['total_duration'], 6) for size, stats in blocks_stats_by_size.items()},
+                "mean_duration": {size: round(stats['total_duration'] / stats['runs'], 6) if stats['runs'] > 0 else 0 for size, stats in blocks_stats_by_size.items()},
+            }
+        else: assert False, f'Unknown best strategy: {best_strategy}'
 
         handle_unk_combs_start = time.time()
-        self.__handle_unk_combs(analyzer_start_time, unk_combs)
+        self.__handle_unk_combs(analyzer_start_time, unk_combs, deduplicate=best_strategy[1] == 'coverd')
         handle_unk_combs_duration = round(time.time() - handle_unk_combs_start, 3)
         waiting_milp_start = time.time()
         cpu_handler_thread.join()
@@ -311,9 +347,14 @@ class LZeroRobustnessAnalyzer:
         print(f"num_finished: {num_finished}, total_covering_size: {total_covering_size}, remaining: {total_covering_size - num_finished}")
         return np.vstack(unk_combs_lst) if len(unk_combs_lst) > 0 else np.empty((0, self.__number_of_pixels), dtype=int)
 
-    def __handle_unk_combs(self, analyzer_start_time: float, unk_combs: np.ndarray):
-        unk_combs_tensor: torch.Tensor = torch.unique(torch.from_numpy(unk_combs).cuda(), dim=0).cpu()
+    def __handle_unk_combs(self, analyzer_start_time: float, unk_combs: np.ndarray, deduplicate: bool = False):
+        unk_combs_tensor: torch.Tensor = torch.from_numpy(unk_combs)
+        if deduplicate:
+            print(f"Level {self.__level} Before deduplication, unk_combs size: {unk_combs.shape[0]}", end="; ")
+            unk_combs_tensor = torch.unique(unk_combs_tensor.cuda(), dim=0).cpu()
+            print(f'After deduplication, unk_combs size: {unk_combs_tensor.shape[0]}')
         while unk_combs_tensor.shape[0] > 0 and self.__level < self.__t and time.time() - analyzer_start_time < self.__timeout:
+            new_level_start_time = time.time()
             new_combs = split_and_prune_by_unk(unk_combs_tensor, self.__level, self.__number_of_pixels).numpy()
             self.__level += 1
             print(f'Current level: {self.__level}, new_combs size: {new_combs.shape[0]}')
@@ -327,6 +368,8 @@ class LZeroRobustnessAnalyzer:
             for gpu_worker in self.__gpu_workers:
                 unk_combs_lst.append(gpu_worker.recv())  # wait for gpu workers to finish
             unk_combs_tensor = torch.from_numpy(np.vstack(unk_combs_lst))
+            print(f'Level {self.__level} finished, unk_combs/all: {unk_combs_tensor.shape[0]}/{new_combs.shape[0]}'
+                f' using {round(time.time() - new_level_start_time, 3)} s')
         if self.__level == self.__t and unk_combs_tensor.shape[0] > 0:
             print(f'Checked deepest level {self.__t}, remaining unk_combs size: {unk_combs_tensor.shape[0]}')
             for combs in unk_combs_tensor.tolist():
@@ -380,3 +423,13 @@ class LZeroRobustnessAnalyzer:
             message = worker.recv()
             while message != 'stopped':
                 message = worker.recv()
+
+    def __skip_this_image(self):
+        for gpu_worker in self.__gpu_workers:
+            gpu_worker.send(('skip', 0))
+        for cpu_worker in self.__cpu_workers:
+            cpu_worker.send('stop')
+        for cpu_worker in self.__cpu_workers:
+            message = cpu_worker.recv()
+            while message != 'stopped':
+                message = cpu_worker.recv()
