@@ -195,6 +195,20 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         dataset_name=DatasetName.MNIST,
         need_normalization=True  # from line 97, coverd.py
     ),
+    'bafc1': ModelSpec(
+        model_path=str(BASE_DIR / "adversarial/MNIST_a_6x200_PGD"),
+        constructor=FCN,
+        layer_params=[
+            {"in_features": 784, "out_features": 200},
+            {"in_features": 200, "out_features": 200},
+            {"in_features": 200, "out_features": 200},
+            {"in_features": 200, "out_features": 200},
+            {"in_features": 200, "out_features": 200},
+            {"in_features": 200, "out_features": 10},
+        ],
+        dataset_name=DatasetName.MNIST,
+        need_normalization=True
+    ),
     'bcv1': ModelSpec(
         model_path=str(BASE_DIR / "calzone_models/MNIST_ConvSmall"),
         constructor=CNN,
