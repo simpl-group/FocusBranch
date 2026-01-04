@@ -53,8 +53,32 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         dataset_name=DatasetName.MNIST,
         need_normalization=False
     ),
+    'afc1': ModelSpec(
+        model_path=str(BASE_DIR / "adversarial/mnist-anet_256x2"),
+        constructor=FCN,
+        layer_params=[
+            {"in_features": 784, "out_features": 256},
+            {"in_features": 256, "out_features": 256},
+            {"in_features": 256, "out_features": 10},
+        ],
+        dataset_name=DatasetName.MNIST,
+        need_normalization=False
+    ),
     'fc2': ModelSpec(
         model_path=str(BASE_DIR / "mnist/mnist-net_256x4"),
+        constructor=FCN,
+        layer_params=[
+            {"in_features": 784, "out_features": 256},
+            {"in_features": 256, "out_features": 256},
+            {"in_features": 256, "out_features": 256},
+            {"in_features": 256, "out_features": 256},
+            {"in_features": 256, "out_features": 10},
+        ],
+        dataset_name=DatasetName.MNIST,
+        need_normalization=False
+    ),
+    'afc2': ModelSpec(
+        model_path=str(BASE_DIR / "adversarial/mnist-anet_256x4"),
         constructor=FCN,
         layer_params=[
             {"in_features": 784, "out_features": 256},
@@ -81,8 +105,23 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         dataset_name=DatasetName.MNIST,
         need_normalization=False
     ),
+    'afc3': ModelSpec(
+        model_path=str(BASE_DIR / "adversarial/mnist-anet_256x6"),
+        constructor=FCN,
+        layer_params=[
+            {"in_features": 784, "out_features": 256},
+            {"in_features": 256, "out_features": 256},
+            {"in_features": 256, "out_features": 256},
+            {"in_features": 256, "out_features": 256},
+            {"in_features": 256, "out_features": 256},
+            {"in_features": 256, "out_features": 256},
+            {"in_features": 256, "out_features": 10},
+        ],
+        dataset_name=DatasetName.MNIST,
+        need_normalization=False
+    ),
     'fc4': ModelSpec(
-        model_path=str(BASE_DIR / "mlp_3layer_l0adv"),
+        model_path=str(BASE_DIR / "adversarial/mlp_3layer_l0adv"),
         constructor=FCN,
         layer_params=[
             {"in_features": 784, "out_features": 256},
@@ -226,10 +265,10 @@ def get_network_and_dataset_utils(name: str, device: str="cpu", add_affine_norma
     assert name in MODEL_SPECS, f"Invalid network name: {name}"
     model_spec = MODEL_SPECS[name]
     model = model_spec.constructor(model_spec.layer_params)
+    model.load_state_dict(torch.load(model_spec.pt_path, weights_only=True, map_location=device))
     if model_spec.need_normalization and add_affine_normalization:
         normalization_layer = DATASETS[model_spec.dataset_name].affine_normalization_layer()
         model.insert(0, normalization_layer)
-    model.load_state_dict(torch.load(model_spec.pt_path, weights_only=True, map_location=device))
     model.eval()
 
     return model.to(device=device), DATASETS[model_spec.dataset_name]

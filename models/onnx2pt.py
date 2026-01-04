@@ -67,7 +67,6 @@ if __name__ == "__main__":
     if not args.mnist_only:
         cifar10_imgs, cifar10_labels = DATASETS[DatasetName.CIFAR10].load_xy_from_csv(args.normalize)
     for model_spec in MODEL_SPECS.values():
-        if not os.path.exists(model_spec.onnx_path): continue
         if args.cnn_only and model_spec.constructor != CNN: continue
         if args.fcn_only and model_spec.constructor != FCN: continue
         if args.cifar10_only and model_spec.dataset_name != DatasetName.CIFAR10: continue
@@ -79,7 +78,10 @@ if __name__ == "__main__":
         else: assert False, "Unknown dataset"
 
         torch_net = model_spec.constructor(model_spec.layer_params)
-        load_from_onnx(model_spec.onnx_path, torch_net)
+        if os.path.exists(model_spec.onnx_path):
+            load_from_onnx(model_spec.onnx_path, torch_net)
+        else:
+            torch_net.load_state_dict(torch.load(model_spec.pt_path, weights_only=True, map_location='cpu'))
 
         if args.add_normalization_layer and model_spec.need_normalization:
             normalization_layer = DATASETS[model_spec.dataset_name].affine_normalization_layer()
@@ -88,9 +90,11 @@ if __name__ == "__main__":
         acc = test_accuracy(torch_net.eval(), imgs, labels)
         print(f"The accuracy of {os.path.basename(model_spec.model_path)} on {model_spec.dataset_name} testset is {acc:.2%}")
 
-        if args.save:
+        if args.save and os.path.exists(model_spec.onnx_path):
             if not args.force and os.path.exists(model_spec.pt_path):
                 print(f"Model {model_spec.pt_path} already exists. Use --force to overwrite.")
                 continue
+            if args.add_normalization_layer and model_spec.need_normalization:
+                torch_net.pop(0)  # remove added normalization layer before saving
             torch.save(torch_net.state_dict(), model_spec.pt_path)
             print(f"Model {model_spec.pt_path} saved.")
