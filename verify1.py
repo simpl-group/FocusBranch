@@ -17,7 +17,6 @@ parser = argparse.ArgumentParser(
 add_shared_arguments(parser)
 parser.add_argument("--probe", action="store_true", help="Probe each level to estimate the time for verification.")
 parser.add_argument("--partial", type=int, default=None, help="Maximum k to sample from.")
-parser.add_argument("--sample-all", action="store_true", help="Sample all k from eps to max_k rep_each_k times and return the mean estimated verification time for each k")
 args = parser.parse_args()
 
 verifier, data_loader = get2(args)
@@ -30,12 +29,6 @@ record: list[tuple[bool, float]] = []
 pbar = tqdm(total=args.test_batches, bar_format=TQDM_BAR_FORMAT, disable=args.demo)
 for images, true_labels in data_loader:
     verifier.adapt_target_images(images, true_labels, target_label=args.target_label)
-
-    if args.sample_all:
-        t0 = perf_counter()
-        pprint(verifier.sample_all_k(baseline=None))
-        print(f"Time {perf_counter() - t0:.2f}s")
-        exit(0)
 
     if isinstance(args.partial, int):
         partial_indices = torch.randperm(verifier.num_pixels)[:args.partial]
