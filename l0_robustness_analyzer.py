@@ -181,6 +181,7 @@ class LZeroRobustnessAnalyzer:
 
         handle_unk_combs_start = time.time()
         self.__handle_unk_combs(analyzer_start_time, unk_combs, deduplicate=best_strategy[1] == 'coverd')
+        self.unk_combs_settled.set()
         handle_unk_combs_duration = round(time.time() - handle_unk_combs_start, 3)
         waiting_milp_start = time.time()
         cpu_handler_thread.join()
@@ -348,6 +349,7 @@ class LZeroRobustnessAnalyzer:
         return np.vstack(unk_combs_lst) if len(unk_combs_lst) > 0 else np.empty((0, self.__number_of_pixels), dtype=int)
 
     def __handle_unk_combs(self, analyzer_start_time: float, unk_combs: np.ndarray, deduplicate: bool = False):
+        if unk_combs.shape[0] == 0: return
         unk_combs_tensor: torch.Tensor = torch.from_numpy(unk_combs)
         if deduplicate:
             print(f"Level {self.__level} Before deduplication, unk_combs size: {unk_combs.shape[0]}", end="; ")
@@ -374,7 +376,6 @@ class LZeroRobustnessAnalyzer:
             print(f'Checked deepest level {self.__t}, remaining unk_combs size: {unk_combs_tensor.shape[0]}')
             for combs in unk_combs_tensor.tolist():
                 self.milp_job_queue.put(combs)
-        self.unk_combs_settled.set()
 
     def __print_progress(self, pbar: tqdm, total_covering_size: int, num_finished: int, last_print_time: float) -> float:
         current = time.time()
