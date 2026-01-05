@@ -550,7 +550,13 @@ class Verifier:
                     end_level=0 if self.refinement_strategy[num_indices] else self.__level)
 
         self.conn.send('done')
-        self.bounded_x0.level = None
+
+    def __safe_prove_geometry(self, *args, **kwargs):
+        try:
+            self.bounded_x0.level = self.__level
+            self.__prove_geometry(*args, **kwargs)
+        finally:
+            self.bounded_x0.level = None
 
     def __prove_concrete_combs(self, concrete_combs: torch.Tensor):
         unk_combs_lst: list[torch.Tensor] = [torch.empty((0, concrete_combs.shape[1]), dtype=torch.int64)]
@@ -603,10 +609,9 @@ class Verifier:
                     _, geometry, chosen_indices, self.refinement_strategy = message
                     self.__level = geometry.t
                     self.max_size_to_batch = max_sizes_to_batch[self.__level]
-                    self.bounded_x0.level = self.__level
                     self.batch_pool: dict[int, list[list[int]]] = {k: [] for k in list(range(self.__level, self.max_size_to_batch + 1))[::-1]}
                     self.refinement_coverings = load_refinement_coverings(self.refinement_strategy)
-                    prove_thread = threading.Thread(target=self.__prove_geometry, args=(geometry, chosen_indices, num_workers, worker_id), daemon=True)
+                    prove_thread = threading.Thread(target=self.__safe_prove_geometry, args=(geometry, chosen_indices, num_workers, worker_id), daemon=True)
                 else: assert False, f"Unknown message {message}"
                 self.stop_event = threading.Event()
                 prove_thread.start()
