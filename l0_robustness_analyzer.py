@@ -320,11 +320,11 @@ class LZeroRobustnessAnalyzer:
             for gpu_worker in self.__gpu_workers:
                 if gpu_worker.poll():
                     message = gpu_worker.recv()
-                    if message == 'adversarial-example-suspect':
+                    if isinstance(message, str) and message == 'adversarial-example-suspect':
                         self.milp_job_queue.put(gpu_worker.recv())
-                    elif message == 'concrete-combs':
+                    elif isinstance(message, str) and message == 'concrete-combs':
                         unk_combs_lst.append(gpu_worker.recv())
-                    elif message == 'done':
+                    elif isinstance(message, str) and message == 'done':
                         done_count += 1
                     else:  # update statistics
                         num_indices, runs, num_verified, duration = message
@@ -349,7 +349,7 @@ class LZeroRobustnessAnalyzer:
         return np.vstack(unk_combs_lst) if len(unk_combs_lst) > 0 else np.empty((0, self.__number_of_pixels), dtype=int)
 
     def __handle_unk_combs(self, analyzer_start_time: float, unk_combs: np.ndarray, deduplicate: bool = False):
-        if unk_combs.shape[0] == 0: return
+        if unk_combs.shape[0] == 0 or time.time() - analyzer_start_time > self.__timeout: return
         unk_combs_tensor: torch.Tensor = torch.from_numpy(unk_combs)
         if deduplicate:
             print(f"Level {self.__level} Before deduplication, unk_combs size: {unk_combs.shape[0]}", end="; ")
@@ -422,7 +422,7 @@ class LZeroRobustnessAnalyzer:
             worker.send('stop')
         for worker in chain(self.__gpu_workers, self.__cpu_workers):
             message = worker.recv()
-            while message != 'stopped':
+            while not isinstance(message, str) or message != 'stopped':
                 message = worker.recv()
 
     def __skip_this_image(self):
@@ -432,5 +432,5 @@ class LZeroRobustnessAnalyzer:
             cpu_worker.send('stop')
         for cpu_worker in self.__cpu_workers:
             message = cpu_worker.recv()
-            while message != 'stopped':
+            while not isinstance(message, str) or message != 'stopped':
                 message = cpu_worker.recv()

@@ -453,7 +453,7 @@ class Verifier:
         with Client(('localhost', port)) as self.conn:
             # Every iteration of this loop is one image
             message = self.conn.recv()
-            while message != 'terminate':
+            while not isinstance(message, str) or message != 'terminate':
                 seed, image, label = message
                 torch.manual_seed(seed)
                 torch_img = torch.tensor(image, dtype=torch.float32).reshape(1, -1, 1)
