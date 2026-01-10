@@ -8,7 +8,6 @@ from coverd_finite_geometries import Geometry
 from multiprocessing.connection import Client, Listener
 from time import perf_counter
 from functools import lru_cache
-from collections import defaultdict
 import threading
 import math
 import signal
@@ -65,7 +64,7 @@ class Verifier:
         targeted: bool=False,
         max_k: int=200,
         rep_each_k: int=50,
-        rep_each_level: int=1000,
+        rep_each_level: int=5000,
         timeout: int=0,
         demo: bool=False
     ) -> None:
@@ -103,7 +102,7 @@ class Verifier:
             elif level == 1:
                 combs_to_check = torch.arange(self.num_pixels).reshape(-1, 1)
             else:
-                combs_to_check = selected_indices_sample(self.num_pixels, level, self.rep_each_level * 10)  # tunable parameter
+                combs_to_check = selected_indices_sample(self.num_pixels, level, self.rep_each_level)
             for i in range(0, combs_to_check.shape[0], self.batch_size):
                 combs_to_check_batch = combs_to_check[i:i + self.batch_size].to(self.device)
                 with self.bounded_x0.selecting(combs_to_check_batch):
@@ -279,7 +278,7 @@ class Verifier:
             elif level == 1:
                 combs_to_check = torch.arange(self.num_pixels).reshape(-1, 1)
             else:
-                combs_to_check = selected_indices_sample(self.num_pixels, level, self.rep_each_level * 10)  # tunable parameter
+                combs_to_check = selected_indices_sample(self.num_pixels, level, self.rep_each_level)
             sample_counts[level] = combs_to_check.shape[0]
             for i in range(0, combs_to_check.shape[0], self.batch_size):
                 combs_to_check_batch = combs_to_check[i:i + self.batch_size].to(self.device)

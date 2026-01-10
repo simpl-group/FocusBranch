@@ -22,7 +22,7 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         help="'pt' uses a .pt file preprocessed by `data.prepare`, 'csv' uses a .csv file with images and labels.")
     parser.add_argument("--max-k", type=int, default=200, help="Maximum k to sample from.")
     parser.add_argument("-rk", "--rep-each-k", type=int, default=100, help="Number of partial indices samples for each k.")
-    parser.add_argument("-rl", "--rep-each-level", type=int, default=500, help="Maximum number of combinations for each level.")
+    parser.add_argument("-rl", "--rep-each-level", type=int, default=5000, help="Maximum number of combinations for each level.")
 
 def get4(args: argparse.Namespace) -> tuple[torch.nn.Module, SequentialAT, L0BoundedInput, torch.utils.data.DataLoader]:
     net, dataset_utils = get_network_and_dataset_utils(args.net, device=DEVICE)
