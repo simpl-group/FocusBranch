@@ -95,7 +95,7 @@ class LZeroRobustnessAnalyzer:
         planning_duration = round(time.time() - analyzer_start_time, 3)
         print(f"Planning stage took {planning_duration} s, choosing strategy duration: {choosing_strategy_duration} s, best strategy: {best_strategy}")
         results = {
-            'verified': True, 'timed_out': False,
+            'verified': True, 'timed_out': time.time() - analyzer_start_time >= self.__timeout,
             'choosing_strategy_duration': choosing_strategy_duration,
             'best_strategy': best_strategy,
             'estimated_verification_time': best_strategy[0],
@@ -104,7 +104,7 @@ class LZeroRobustnessAnalyzer:
         }
         if len(candidate_geometries) > 0: results['candidate_geometries'] = candidate_geometries
 
-        if best_strategy[1] == 'skip':
+        if best_strategy[1] == 'skip' or results['timed_out']:
             self.__skip_this_image()
             print('Early termination triggered')
             results['end_level'] = best_strategy[2]
