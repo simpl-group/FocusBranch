@@ -299,7 +299,7 @@ class Verifier:
             sampling_time.append(perf_counter() - batched_super_check_start)
             sampling_counts.append(k_sized_supersets.shape[0])
             if sampling_successes[-1] == 0:
-                rep_each_k = self.batch_size  # if no safe supersets, use smaller batch size to sample more
+                rep_each_k = self.rep_each_k // 20  # if no safe supersets, use smaller batch size to sample more
             else:
                 self.max_sizes_to_batch[level] = k
         self.bounded_x0.level = None
