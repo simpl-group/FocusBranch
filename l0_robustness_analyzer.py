@@ -95,7 +95,7 @@ class LZeroRobustnessAnalyzer:
         planning_duration = round(time.time() - analyzer_start_time, 3)
         print(f"Planning stage took {planning_duration} s, choosing strategy duration: {choosing_strategy_duration} s, best strategy: {best_strategy}")
         results = {
-            'verified': True, 'timed_out': time.time() - analyzer_start_time >= self.__timeout,
+            'verified': time.time() - analyzer_start_time < self.__timeout, 'timed_out': time.time() - analyzer_start_time >= self.__timeout,
             'choosing_strategy_duration': choosing_strategy_duration,
             'best_strategy': best_strategy,
             'estimated_verification_time': best_strategy[0],
