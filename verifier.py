@@ -378,7 +378,7 @@ class Verifier:
                     self.conn.send('adversarial-example-suspect')
                     self.conn.send(suspect)
             else:
-                self.conn.send('concrete-combs')
+                self.conn.send('unknown-combs')
                 self.conn.send(supersets[~safes].numpy())
             return
         if not safes.all():  # need to refine

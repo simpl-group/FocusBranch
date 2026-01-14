@@ -46,14 +46,13 @@ class LZeroRobustnessAnalyzer:
             sample_durations = [a + b for a, b in zip(sample_durations, sd)]
         sample_success_rate = [s / c if c > 0 else 0.0 for s, c in zip(sample_successes, sample_counts)]
         estimated_time_per_level = [0.0] * (self.__t + 1)
+        first_any_safe_level = 0
         for l in range(self.__t + 1):
             if sample_successes[l] == 0:
-                estimated_time_per_level[l] = None  # not to start at this level
+                first_any_safe_level += 1  # not to start at this level
                 continue
             if l == 0:  # early termination: safe at level 0
                 estimated_nodes_this_level = 1
-            elif l == 1:
-                estimated_nodes_this_level = self.__number_of_pixels
             else:
                 estimated_nodes_this_level = math.ceil(math.comb(self.__number_of_pixels, l) * (1 - sample_success_rate[l - 1]) ** 2)
             estimated_time_per_level[l] = (sample_durations[l] / sample_counts[l]) * estimated_nodes_this_level
@@ -63,16 +62,15 @@ class LZeroRobustnessAnalyzer:
         candidate_strategies: list[tuple] = []
         choosing_strategy_start = time.time()
         candidate_geometries: list[dict[str, object]] = []
-        for l in range(self.__t + 1):
-            if estimated_time_per_level[l] is None:
-                continue
-            elif l == 0 or l == 1 and sample_counts[1] == sample_successes[1]:
+        for l in range(first_any_safe_level, self.__t + 1):
+            if l == 0 or l == 1 and sample_counts[1] == sample_successes[1]:
                 best_strategy = (round(estimated_time_per_level[l], 3), 'skip', l)
                 break
-            tail_time = sum(et for i, et in enumerate(estimated_time_per_level) if et is not None and i > l)
+            tail_time = sum(estimated_time_per_level[l + 1:])
             sbap_time = ((sample_durations[l] / sample_counts[l]) * math.comb(self.__number_of_pixels, l) + tail_time) / len(self.__gpu_workers)
             candidate_strategies.append((round(sbap_time, 3), 'sbap', l))
-            coverd_time = None
+            if sbap_time < best_strategy[0]:
+                best_strategy = candidate_strategies[-1]
             if 3 <= l <= 6 and sample_success_rate[l] > 0.99:  # tunable parameter
                 print(f'Sampling on level {l}')
                 for gpu_worker in self.__gpu_workers:
@@ -85,17 +83,16 @@ class LZeroRobustnessAnalyzer:
                 candidate_geometries.extend(geometries_data)
                 coverd_time: float = (geometries_data[0]["estimated_summed_duration"] + tail_time) / len(self.__gpu_workers)
                 candidate_strategies.append((round(coverd_time, 3), 'coverd', str(_best_geometry)))
-            if sbap_time < best_strategy[0]:
-                best_strategy = (round(sbap_time, 3), 'sbap', l)
-            if coverd_time is not None and coverd_time < best_strategy[0]:
-                best_strategy = (round(coverd_time, 3), 'coverd', str(_best_geometry))
-                chosen_geometry, chosen_geometry_info = _best_geometry, geometries_data[0]
-                success_rate, mean_time, VT, refinement_strategy, fraction_robust = _success_rate, _mean_time, _VT, _refinement_strategy, _fraction_robust
+                if coverd_time < best_strategy[0]:
+                    best_strategy = candidate_strategies[-1]
+                    chosen_geometry, chosen_geometry_info = _best_geometry, geometries_data[0]
+                    success_rate, mean_time, VT, refinement_strategy, fraction_robust = _success_rate, _mean_time, _VT, _refinement_strategy, _fraction_robust
         choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
         planning_duration = round(time.time() - analyzer_start_time, 3)
         print(f"Planning stage took {planning_duration} s, choosing strategy duration: {choosing_strategy_duration} s, best strategy: {best_strategy}")
         results = {
-            'verified': time.time() - analyzer_start_time < self.__timeout, 'timed_out': time.time() - analyzer_start_time >= self.__timeout,
+            'verified': time.time() - analyzer_start_time < self.__timeout,
+            'timed_out': time.time() - analyzer_start_time >= self.__timeout,
             'choosing_strategy_duration': choosing_strategy_duration,
             'best_strategy': best_strategy,
             'estimated_verification_time': best_strategy[0],
@@ -322,7 +319,7 @@ class LZeroRobustnessAnalyzer:
                     message = gpu_worker.recv()
                     if isinstance(message, str) and message == 'adversarial-example-suspect':
                         self.milp_job_queue.put(gpu_worker.recv())
-                    elif isinstance(message, str) and message == 'concrete-combs':
+                    elif isinstance(message, str) and message == 'unknown-combs':
                         unk_combs_lst.append(gpu_worker.recv())
                     elif isinstance(message, str) and message == 'done':
                         done_count += 1
