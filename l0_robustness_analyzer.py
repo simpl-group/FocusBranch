@@ -128,13 +128,14 @@ class LZeroRobustnessAnalyzer:
             self.__level = best_strategy[2]
             for gpu_worker in self.__gpu_workers:
                 gpu_worker.send(('sbap', self.__level))  # no geometry, no refinement strategy
+            current_level_start_time = time.time()
             # collect all unknown combinations
             unk_combs_lst: list[np.ndarray] = []
             for gpu_worker in self.__gpu_workers:
                 unk_combs_lst.append(gpu_worker.recv())  # wait for gpu workers to finish
             unk_combs = np.vstack(unk_combs_lst)
             print(f'Level {self.__level} finished, unk_combs/all: {unk_combs.shape[0]}/{math.comb(self.__number_of_pixels, self.__level)}'
-                f' using {round(time.time() - analyzer_start_time, 3)} s')
+                f' using {round(time.time() - current_level_start_time, 3)} s')
         elif best_strategy[1] == 'coverd':
             self.__level = chosen_geometry.t
             assert self.__level == min(refinement_strategy.keys()), f"Level mismatch: {self.__level} vs {min(refinement_strategy.keys())}"
