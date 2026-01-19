@@ -67,6 +67,7 @@ if __name__ == "__main__":
     if not args.mnist_only:
         cifar10_imgs, cifar10_labels = DATASETS[DatasetName.CIFAR10].load_xy_from_csv(args.normalize)
     for model_spec in MODEL_SPECS.values():
+        if model_spec.debug is True: continue
         if args.cnn_only and model_spec.constructor != CNN: continue
         if args.fcn_only and model_spec.constructor != FCN: continue
         if args.cifar10_only and model_spec.dataset_name != DatasetName.CIFAR10: continue
