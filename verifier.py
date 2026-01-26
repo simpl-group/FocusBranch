@@ -433,6 +433,8 @@ class Verifier:
         try:
             self.bounded_x0.level = self.__level
             self.__prove_geometry(*args, **kwargs)
+        except EOFError:
+            pass  # self.blocks_generator_process terminated early
         finally:
             self.bounded_x0.level = None
 
