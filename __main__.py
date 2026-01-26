@@ -23,6 +23,7 @@ if __name__ == '__main__':
     parser.add_argument("--milp_num", type=int, default=1, help="the number of MILP instances used in the analysis")
     parser.add_argument('--base_seed', type=int, default=42, help='the base seed')
     parser.add_argument("--detail", action="store_true", help="Output detailed superset statistics for each image in a separate excel file.")
+    parser.add_argument("--plan_only", action="store_true", help="Only run the planning stage without actual verification.")
     args = parser.parse_args()
     args.output = args.output.split(".")[0] + f"{args.net}_t{args.epsilon}b{args.batch_size}g{args.gpu_num}s{args.start_idx}n{args.test_batches}"
     ilogname = args.output.rsplit("s", 1)[0]
@@ -72,7 +73,8 @@ if __name__ == '__main__':
         t=args.epsilon,
         timeout=args.timeout,
         max_k=args.max_k,
-        num_pixels=dataset_utils.num_pixels
+        num_pixels=dataset_utils.num_pixels,
+        plan_only=args.plan_only
     )
 
     image_results_by_image_index = {}
@@ -97,7 +99,6 @@ if __name__ == '__main__':
             analyzer.update_image(numpy_img, label)
             print('*******************************************************')
             analysis_summary = analyzer.analyze()
-            print('*******************************************************')
             exec_details = analysis_summary.pop('exec_details', None)
             if exec_details is not None and args.detail:
                 pd.DataFrame(exec_details).to_excel(ilogname + f"i{i}.xlsx", engine='openpyxl', index_label="Row")

@@ -18,13 +18,14 @@ from scipy.stats import norm
 from tqdm import tqdm
 
 class LZeroRobustnessAnalyzer:
-    def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int):
+    def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int, plan_only: bool):
         self.__gpu_workers = gpu_workers
         self.__cpu_workers = cpu_workers
         self.__t = t
         self.__timeout = timeout
         self.__number_of_pixels = num_pixels
         self.__refinement_db_max_v = max_k
+        self.__plan_only = plan_only
         self.covering_sizes = {t:load_covering_sizes(t, clipping_size=500000) for t in range(3, min(self.__t + 1, 7))}
 
     def update_image(self, image: np.ndarray, label: int):
@@ -91,7 +92,7 @@ class LZeroRobustnessAnalyzer:
         planning_duration = round(time.time() - analyzer_start_time, 3)
         print(f"Planning stage took {planning_duration} s, choosing strategy duration: {choosing_strategy_duration} s, best strategy: {best_strategy}")
         results = {
-            'verified': time.time() - analyzer_start_time < self.__timeout,
+            'verified': time.time() - analyzer_start_time < self.__timeout and not self.__plan_only,
             'timed_out': time.time() - analyzer_start_time >= self.__timeout,
             'choosing_strategy_duration': choosing_strategy_duration,
             'best_strategy': best_strategy,
@@ -101,7 +102,7 @@ class LZeroRobustnessAnalyzer:
         }
         if len(candidate_geometries) > 0: results['candidate_geometries'] = candidate_geometries
 
-        if best_strategy[1] == 'skip' or results['timed_out']:
+        if best_strategy[1] == 'skip' or results['timed_out'] or self.__plan_only:
             self.__skip_this_image()
             print('Early termination triggered')
             results['end_level'] = best_strategy[2]
