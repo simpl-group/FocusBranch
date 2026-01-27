@@ -17,6 +17,9 @@ from scipy.signal import savgol_filter
 from scipy.stats import norm
 from tqdm import tqdm
 
+CVD_MIN_T = 3
+CVD_MAX_T = 6
+
 class LZeroRobustnessAnalyzer:
     def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int, plan_only: bool):
         self.__gpu_workers = gpu_workers
@@ -26,7 +29,7 @@ class LZeroRobustnessAnalyzer:
         self.__number_of_pixels = num_pixels
         self.__refinement_db_max_v = max_k
         self.__plan_only = plan_only
-        self.covering_sizes = {t:load_covering_sizes(t, clipping_size=500000) for t in range(3, min(self.__t + 1, 7))}
+        self.covering_sizes = {t:load_covering_sizes(t, clipping_size=500000) for t in range(CVD_MIN_T, min(self.__t + 1, CVD_MAX_T + 1))}
 
     def update_image(self, image: np.ndarray, label: int):
         for gpu_worker in self.__gpu_workers:
@@ -38,48 +41,37 @@ class LZeroRobustnessAnalyzer:
     def analyze(self):
         print('Planning stage started')
         analyzer_start_time = time.time()
-        sample_counts, sample_successes = [0] * (self.__t + 1), [0] * (self.__t + 1)
-        sample_durations: list[float] = [0.0] * (self.__t + 1)
-        for gpu_worker in self.__gpu_workers:
-            sc, ss, sd = gpu_worker.recv()
-            sample_counts = [a + b for a, b in zip(sample_counts, sc)]
-            sample_successes = [a + b for a, b in zip(sample_successes, ss)]
-            sample_durations = [a + b for a, b in zip(sample_durations, sd)]
-        sample_success_rate = [s / c if c > 0 else 0.0 for s, c in zip(sample_successes, sample_counts)]
+        concrete_safe_rate, mean_concrete_check_time, super_success_rate, mean_super_check_time = self.__sampling()
         estimated_time_per_level = [0.0] * (self.__t + 1)
         first_any_safe_level = 0
         for l in range(self.__t + 1):
-            if sample_successes[l] == 0:
+            if concrete_safe_rate[l] == 0.0:
                 first_any_safe_level += 1  # not to start at this level
                 continue
             if l == 0:  # early termination: safe at level 0
                 estimated_nodes_this_level = 1
             else:
-                estimated_nodes_this_level = math.ceil(math.comb(self.__number_of_pixels, l) * (1 - sample_success_rate[l - 1]) ** 2)
-            estimated_time_per_level[l] = (sample_durations[l] / sample_counts[l]) * estimated_nodes_this_level
-            if sample_successes[l] == sample_counts[l]:
+                estimated_nodes_this_level = math.ceil(math.comb(self.__number_of_pixels, l) * (1 - concrete_safe_rate[l - 1]) ** 2)
+            estimated_time_per_level[l] = mean_concrete_check_time[l] * estimated_nodes_this_level
+            if concrete_safe_rate[l] == 1.0:
                 break  # this level is estimated to be 100% robust and verified, no need to go deeper
         best_strategy = (float('inf'), None, None)
         candidate_strategies: list[tuple] = []
         choosing_strategy_start = time.time()
         candidate_geometries: list[dict[str, object]] = []
         for l in range(first_any_safe_level, self.__t + 1):
-            if l == 0 or l == 1 and sample_counts[1] == sample_successes[1]:
+            if l == 0 or l == 1 and concrete_safe_rate[1] == 1.0:
                 best_strategy = (round(estimated_time_per_level[l], 3), 'skip', l)
                 break
             tail_time = sum(estimated_time_per_level[l + 1:])
-            sbap_time = ((sample_durations[l] / sample_counts[l]) * math.comb(self.__number_of_pixels, l) + tail_time) / len(self.__gpu_workers)
+            sbap_time = (mean_concrete_check_time[l] * math.comb(self.__number_of_pixels, l) + tail_time) / len(self.__gpu_workers)
             candidate_strategies.append((round(sbap_time, 3), 'sbap', l))
             if sbap_time < best_strategy[0]:
                 best_strategy = candidate_strategies[-1]
-            if 3 <= l <= 6 and sample_success_rate[l] > 0.99:  # tunable parameter
-                print(f'Sampling on level {l}')
-                for gpu_worker in self.__gpu_workers:
-                    gpu_worker.send(('sample-all-k', l))
+            if l in super_success_rate:
                 self.__level = l
-                _success_rate, _mean_time = self.__estimate_sr_and_mt()
-                _fraction_robust = self.__compute_fraction_robust(_success_rate)
-                _VT, _refinement_strategy = self.__choose_strategy(_fraction_robust, _mean_time, _success_rate)
+                _fraction_robust = self.__compute_fraction_robust(super_success_rate[l])
+                _VT, _refinement_strategy = self.__choose_strategy(_fraction_robust, mean_super_check_time[l], super_success_rate[l])
                 _best_geometry, geometries_data = self.__choose_geometry(_VT)
                 candidate_geometries.extend(geometries_data)
                 coverd_time: float = (geometries_data[0]["estimated_summed_duration"] + tail_time) / len(self.__gpu_workers)
@@ -87,7 +79,7 @@ class LZeroRobustnessAnalyzer:
                 if coverd_time < best_strategy[0]:
                     best_strategy = candidate_strategies[-1]
                     chosen_geometry, chosen_geometry_info = _best_geometry, geometries_data[0]
-                    success_rate, mean_time, VT, refinement_strategy, fraction_robust = _success_rate, _mean_time, _VT, _refinement_strategy, _fraction_robust
+                    success_rate, mean_time, VT, refinement_strategy, fraction_robust = super_success_rate[l], mean_super_check_time[l], _VT, _refinement_strategy, _fraction_robust
         choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
         planning_duration = round(time.time() - analyzer_start_time, 3)
         print(f"Planning stage took {planning_duration} s, choosing strategy duration: {choosing_strategy_duration} s, best strategy: {best_strategy}")
@@ -204,6 +196,29 @@ class LZeroRobustnessAnalyzer:
         results['end_level'] = self.__level
         self.__stop_workers()
         return results
+
+    def __sampling(self):
+        super_success_rate, mean_super_check_time = {}, {}
+        # Sample concrete nodes at all levels
+        sample_counts, sample_successes = [0] * (self.__t + 1), [0] * (self.__t + 1)
+        sample_durations: list[float] = [0.0] * (self.__t + 1)
+        for gpu_worker in self.__gpu_workers:
+            sc, ss, sd = gpu_worker.recv()
+            sample_counts = [a + b for a, b in zip(sample_counts, sc)]
+            sample_successes = [a + b for a, b in zip(sample_successes, ss)]
+            sample_durations = [a + b for a, b in zip(sample_durations, sd)]
+        concrete_safe_rate = [s / c if c > 0 else 0.0 for s, c in zip(sample_successes, sample_counts)]
+        mean_concrete_check_time = [d / c if c > 0 else 0.0 for d, c in zip(sample_durations, sample_counts)]
+        if concrete_safe_rate[0] != 1.0 and concrete_safe_rate[1] != 1.0:
+            # Sample super-nodes at levels with high concrete safe rate
+            for l in range(self.__t + 1):
+                if CVD_MIN_T <= l <= CVD_MAX_T and concrete_safe_rate[l] > 0.99:  # tunable parameter
+                    print(f'Sampling super-node on level {l}')
+                    for gpu_worker in self.__gpu_workers:
+                        gpu_worker.send(('sample-all-k', l))
+                    self.__level = l
+                    super_success_rate[l], mean_super_check_time[l] = self.__estimate_sr_and_mt()
+        return concrete_safe_rate,mean_concrete_check_time,super_success_rate,mean_super_check_time
 
     def __estimate_sr_and_mt(self) -> tuple[dict[int, float], dict[int, float]]:
         sampling_lower_bound = self.__level
