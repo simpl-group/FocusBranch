@@ -28,8 +28,8 @@ if __name__ == '__main__':
     parser.add_argument("--plan_only", action="store_true", help="Only run the planning stage without actual verification.")
     parser.add_argument("--json", action="store_true", help="Store results in a JSON file.")
     args = parser.parse_args()
-    if not ours_config_consistent(net=args.net, eps=args.epsilon, img=args.start_idx+args.test_batches, batch_size=args.batch_size, gpu_num=args.gpu_num, timeout=args.timeout, rk=args.rep_each_k, rl=args.rep_each_level):
-        warnings.warn(f"Configuration inconsistent: net={args.net}, eps={args.epsilon}, img={args.start_idx+args.test_batches}, timeout={args.timeout}, batch_size={args.batch_size}, gpu_num={args.gpu_num}, rk={args.rep_each_k}, rl={args.rep_each_level}.")
+    if not ours_config_consistent(net=args.net, eps=args.epsilon, img=args.start_idx+args.test_batches-1, batch_size=args.batch_size, gpu_num=args.gpu_num, timeout=args.timeout, rk=args.rep_each_k, rl=args.rep_each_level):
+        warnings.warn(f"Configuration inconsistent: net={args.net}, eps={args.epsilon}, img={args.start_idx+args.test_batches-1}, timeout={args.timeout}, batch_size={args.batch_size}, gpu_num={args.gpu_num}, rk={args.rep_each_k}, rl={args.rep_each_level}.")
         if not args.force_store and not args.demo:
             exit(1)
 

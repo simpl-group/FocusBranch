@@ -258,8 +258,8 @@ if __name__ == "__main__":
     )
     add_shared_arguments(parser)
     args = parser.parse_args()
-    if not milp_config_consistent(net=args.net, img=args.start_idx+args.test_batches, eps=args.epsilon, timeout=args.timeout):
-        warnings.warn(f"Configuration inconsistent: net={args.net}, img={args.start_idx+args.test_batches}, eps={args.epsilon}, timeout={args.timeout}.")
+    if not milp_config_consistent(net=args.net, img=args.start_idx+args.test_batches-1, eps=args.epsilon, timeout=args.timeout):
+        warnings.warn(f"Configuration inconsistent: net={args.net}, img={args.start_idx+args.test_batches-1}, eps={args.epsilon}, timeout={args.timeout}.")
         if not args.force_store and not args.demo:
             exit(1)
 
