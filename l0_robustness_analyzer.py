@@ -84,7 +84,7 @@ class LZeroRobustnessAnalyzer:
         planning_duration = round(time.time() - analyzer_start_time, 3)
         print(f"Planning stage took {planning_duration} s, choosing strategy duration: {choosing_strategy_duration} s, best strategy: {best_strategy}")
         results = {
-            'verified': time.time() - analyzer_start_time < self.__timeout and not self.__plan_only,
+            'verified': time.time() - analyzer_start_time < self.__timeout and not self.__plan_only or best_strategy[1] == 'skip',
             'timed_out': time.time() - analyzer_start_time >= self.__timeout,
             'choosing_strategy_duration': choosing_strategy_duration,
             'best_strategy': best_strategy,
@@ -101,7 +101,6 @@ class LZeroRobustnessAnalyzer:
             return results
         # to be deleted later if needed
         if best_strategy[1] == 'sbap' and best_strategy[2] >= 4 or best_strategy[0] > self.__timeout:
-            print(candidate_geometries)
             self.__skip_this_image()
             results['verified'] = False
             results['timed_out'] = True
@@ -139,7 +138,7 @@ class LZeroRobustnessAnalyzer:
 
             print(
                 f'Chosen {chosen_geometry_info}; Operating on level: {self.__level}'
-                f"\nCandidate geometries: {candidate_geometries}"
+                # f"\nCandidate geometries: {candidate_geometries}"
             )
             refinement_sizes = {v: self.covering_sizes[self.__level][(v, k)] for v, k in refinement_strategy.items() if k is not None}
             fr = {v: round(fraction_robust[v][k], 5) for v, k in refinement_strategy.items() if k is not None}
@@ -425,8 +424,11 @@ class LZeroRobustnessAnalyzer:
                         self.innocent_suspects.add(tuple(pixel_indices))
                     else:
                         self.milp_found_adversarial.set()
-                        print(f'\nAdversarial example found, changing label to "{adversarial_label}" while perturbing pixels: {pixel_indices}')
-                        self.adversarial_results['adversarial_pixels'] = pixel_indices
+                        print(f'Adversarial example found, changing label to "{adversarial_label}" while perturbing pixels: {dict((i, adversarial_example[i]) for i in pixel_indices)}')
+                        self.adversarial_results['adversarial_pixels'] = str(pixel_indices)
+                        # adversarial_example: list[int]
+                        # pixel_indices: list[int]
+                        self.adversarial_results['adversarial_pixel_values'] = str(dict((i, adversarial_example[i]) for i in pixel_indices))
                         self.adversarial_results['adversarial_example'] = str(adversarial_example)
                         self.adversarial_results['adversarial_label'] = adversarial_label
                         return
