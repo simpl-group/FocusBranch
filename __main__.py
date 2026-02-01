@@ -120,13 +120,11 @@ if __name__ == '__main__':
                 if 'adversarial_results' in analysis_summary:
                     unsafe_images += 1
 
-                end = time.time()
-                image_results['running_time'] = round(end - start, 3)
+                image_results['running_time'] = round(time.time() - start, 3)
                 cum_time += image_results['running_time']  # only count samples where we did try to certify
             else:
                 print("img", i, "not considered, incorrectly classified")
-                end = time.time()
-                image_results['running_time'] = round(end - start, 3)
+                image_results['running_time'] = round(time.time() - start, 3)
 
             if args.demo:
                 print(f"Image {i} results NOT stored")
@@ -141,7 +139,7 @@ if __name__ == '__main__':
             f"correct:  {correctly_classified_images}/{1 + i - args.start_idx}, "
             f"verified: {verified_images}/{correctly_classified_images}, "
             f"unsafe: {unsafe_images}/{correctly_classified_images}, ",
-            f"time: {image_results['running_time']}; {0 if cum_time == 0 else cum_time / correctly_classified_images:.3f}; {cum_time:.3f}"
+            f"time: {round(time.time() - start, 3)}; {0 if cum_time == 0 else cum_time / correctly_classified_images:.3f}; {cum_time:.3f}"
         )
         print('*******************************************************')
 
