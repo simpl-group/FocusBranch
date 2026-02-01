@@ -2,6 +2,7 @@ from AbstractInterpreter import SequentialAT, L0BoundedInput, AffineAT, ReLUAT, 
 from utils import timeout_handler, TimeoutException, TQDM_BAR_FORMAT
 from utils.shared import get4, add_shared_arguments
 from models import get_network_and_dataset_utils
+from data.db import insert_milp, milp_should_skip, milp_config_consistent
 import argparse
 import signal
 import warnings
@@ -15,7 +16,6 @@ from gurobipy import GRB
 import numpy as np
 import torch
 from tqdm import tqdm
-from json import dump
 
 env = gp.Env(params={"OutputFlag": 0, "SolutionLimit": 1})
 
@@ -258,6 +258,11 @@ if __name__ == "__main__":
     )
     add_shared_arguments(parser)
     args = parser.parse_args()
+    if not milp_config_consistent(net=args.net, img=args.start_idx+args.test_batches, eps=args.epsilon, timeout=args.timeout):
+        warnings.warn(f"Configuration inconsistent: net={args.net}, img={args.start_idx+args.test_batches}, eps={args.epsilon}, timeout={args.timeout}.")
+        if not args.force_store and not args.demo:
+            exit(1)
+
     if args.demo:
         args.test_batches = 1
 
@@ -265,47 +270,59 @@ if __name__ == "__main__":
 
     total_time = 0.
     num_verified = 0
-    record: list[tuple[bool, float]] = []
     net.cpu()
     pbar = tqdm(total=args.test_batches, bar_format=TQDM_BAR_FORMAT, disable=args.demo)
-    for images, pred_labels in data_loader:
-        assert net(images).argmax(dim=1).eq(pred_labels).all()
-        bounded_x0.update_x(images.flatten(start_dim=1).unsqueeze(2))  # (batch, d1, 1)
-        if args.target_label is not None:
-            seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device="cpu")
-        else:
-            seqAT.tail.make_marginals(true_labels=pred_labels, device="cpu")
+    for _i, (images, pred_labels) in enumerate(data_loader):
+        i = _i + args.start_idx
+        skip = milp_should_skip(net=args.net, img=i, eps=args.epsilon)
+        if skip:
+            warnings.warn(f"Image {i} for net={args.net}, eps={args.epsilon} should be skipped.")
+        if not skip or args.force_store or args.demo:
+            if net(images).argmax(dim=1).eq(pred_labels).all():
+                bounded_x0.update_x(images.flatten(start_dim=1).unsqueeze(2))  # (batch, d1, 1)
+                if args.target_label is not None:
+                    seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device="cpu")
+                else:
+                    seqAT.tail.make_marginals(true_labels=pred_labels, device="cpu")
 
-        timeout = True
-        safe = False
-        elapsed_time = 0.
-        try:
-            signal.alarm(args.timeout)
-            t0 = perf_counter()
-            safe = gurobi_complete_check(seqAT, bounded_x0, demo=args.demo,
-                ground_truth_label=pred_labels.item() if args.target_label is None else None)
-            timeout = False
-            elapsed_time = perf_counter() - t0
-            total_time += elapsed_time
-            num_verified += 1
-            signal.alarm(0)
-        except TimeoutException:
-            if args.demo: print("Timeout")
-        except torch.OutOfMemoryError as e:
-            if args.demo: print(e)
-        finally:
-            bounded_x0.clear_cache()
+                timed_out = True
+                safe = False
+                elapsed_time = 0.
+                try:
+                    signal.alarm(args.timeout)
+                    t0 = perf_counter()
+                    safe = gurobi_complete_check(seqAT, bounded_x0, demo=args.demo,
+                        ground_truth_label=pred_labels.item() if args.target_label is None else None)
+                    timed_out = False
+                    num_verified += 1
+                    signal.alarm(0)
+                except TimeoutException:
+                    if args.demo: print("Timeout")
+                except torch.OutOfMemoryError as e:
+                    if args.demo: print(e)
+                finally:
+                    bounded_x0.clear_cache()
 
-        if args.demo:
-            print(f"Safe: {safe}")
-            break
+                elapsed_time = perf_counter() - t0
+                total_time += elapsed_time
+
+                if args.demo:
+                    print(f"Verified safe: {safe}, Time: {elapsed_time:.2f}s, result NOT stored")
+                    break
+                insert_milp(
+                    net=args.net, img=i, eps=args.epsilon,
+                    verified=safe,
+                    timed_out=timed_out,
+                    found_adv=not safe and not timed_out,
+                    total_duration=round(elapsed_time, 3)
+                )
+            else:
+                if args.demo:
+                    print(f"Misclassified! Result NOT stored")
+                    break
+                insert_milp(net=args.net, img=i, eps=args.epsilon, cc=False)
 
         pbar.update(1)
         mean_time = total_time / num_verified if num_verified > 0 else 0
-        pbar.set_postfix({"Verified": f"{num_verified}/{pbar.n}|{100 * num_verified / pbar.n:.2f}%",
-                          "Avg": f"{mean_time:.2f}s/img"})
-
-        record.append((safe, elapsed_time, timeout))
-        with open(args.output, "w") as f:
-            dump(record, f, indent=2)
+        pbar.set_postfix({"Verified": f"{num_verified}/{pbar.n}|{100 * num_verified / pbar.n:.2f}%", "Avg": f"{mean_time:.2f}s/img"})
     pbar.close()

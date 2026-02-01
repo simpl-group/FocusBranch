@@ -16,6 +16,7 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-to", "--timeout", type=int, default=1800)
     parser.add_argument("-s", "--start-idx", type=int, default=0)
     parser.add_argument("--demo", action="store_true")
+    parser.add_argument("--force-store", "-fs", action="store_true", help="Force storing results into the database even if they already exist.")
     parser.add_argument("-tb", "--test-batches", type=int, default=1)
     parser.add_argument("-o", "--output", type=str, default="output.json")
     parser.add_argument("-ds", "--data-source", type=str, choices=["pt", "csv"], default="csv",

@@ -2,6 +2,7 @@
 import sys
 import os
 import argparse
+import warnings
 from l0_robustness_analyzer import LZeroRobustnessAnalyzer
 from multiprocessing.connection import Listener
 from subprocess import Popen
@@ -11,6 +12,7 @@ import time
 import random
 import pandas as pd
 from utils.shared import add_shared_arguments
+from data.db import store_ours_result, ours_should_skip, ours_config_consistent
 from data.prepare import build_loader
 from models import get_network_and_dataset_utils
 from solver_check import launch_gurobi_worker
@@ -24,7 +26,13 @@ if __name__ == '__main__':
     parser.add_argument('--base_seed', type=int, default=42, help='the base seed')
     parser.add_argument("--detail", action="store_true", help="Output detailed superset statistics for each image in a separate excel file.")
     parser.add_argument("--plan_only", action="store_true", help="Only run the planning stage without actual verification.")
+    parser.add_argument("--json", action="store_true", help="Store results in a JSON file.")
     args = parser.parse_args()
+    if not ours_config_consistent(net=args.net, eps=args.epsilon, img=args.start_idx+args.test_batches, batch_size=args.batch_size, gpu_num=args.gpu_num, timeout=args.timeout, rk=args.rep_each_k, rl=args.rep_each_level):
+        warnings.warn(f"Configuration inconsistent: net={args.net}, eps={args.epsilon}, img={args.start_idx+args.test_batches}, timeout={args.timeout}, batch_size={args.batch_size}, gpu_num={args.gpu_num}, rk={args.rep_each_k}, rl={args.rep_each_level}.")
+        if not args.force_store and not args.demo:
+            exit(1)
+
     args.output = args.output.split(".")[0] + f"{args.net}_t{args.epsilon}b{args.batch_size}g{args.gpu_num}s{args.start_idx}n{args.test_batches}"
     ilogname = args.output.rsplit("s", 1)[0]
     args.output = args.output + ".json"
@@ -91,31 +99,41 @@ if __name__ == '__main__':
         image_results = {}
         image_results['is_correctly_classified'] = is_correctly_classified
         image_results['true_label'] = label
-        if is_correctly_classified:
-            correctly_classified_images += 1
-            print(f'Starting to analyze image {i}, label {label}')
+        skip = ours_should_skip(net=args.net, img=i, eps=args.epsilon)
+        if skip:
+            warnings.warn(f"Image {i} for net={args.net}, eps={args.epsilon} should be skipped.")
+        if not skip or args.force_store or args.demo:
+            if is_correctly_classified:
+                correctly_classified_images += 1
+                print(f'Starting to analyze image {i}, label {label}')
 
-            random.seed(args.base_seed + i)
-            analyzer.update_image(numpy_img, label)
-            print('*******************************************************')
-            analysis_summary = analyzer.analyze()
-            exec_details = analysis_summary.pop('exec_details', None)
-            if exec_details is not None and args.detail:
-                pd.DataFrame(exec_details).to_excel(ilogname + f"i{i}.xlsx", engine='openpyxl', index_label="Row")
-            image_results['analysis_summary'] = analysis_summary
+                random.seed(args.base_seed + i)
+                analyzer.update_image(numpy_img, label)
+                analysis_summary = analyzer.analyze()
+                exec_details = analysis_summary.pop('exec_details', None)
+                if exec_details is not None and args.detail:
+                    pd.DataFrame(exec_details).to_excel(ilogname + f"i{i}.xlsx", engine='openpyxl', index_label="Row")
+                image_results['analysis_summary'] = analysis_summary
 
-            if analysis_summary['verified']:
-                verified_images += 1
-            elif not analysis_summary['timed_out']:
-                unsafe_images += 1
+                if analysis_summary['verified']:
+                    verified_images += 1
+                if 'adversarial_results' in analysis_summary:
+                    unsafe_images += 1
 
-            end = time.time()
-            cum_time += end - start  # only count samples where we did try to certify
-        else:
-            print("img", i, "not considered, incorrectly classified")
-            end = time.time()
+                end = time.time()
+                image_results['running_time'] = round(end - start, 3)
+                cum_time += image_results['running_time']  # only count samples where we did try to certify
+            else:
+                print("img", i, "not considered, incorrectly classified")
+                end = time.time()
+                image_results['running_time'] = round(end - start, 3)
 
-        image_results['running_time'] = end - start
+            if args.demo:
+                print(f"Image {i} results NOT stored")
+            else:
+                store_ours_result(net=args.net, eps=args.epsilon, img=i, result=image_results, skip=not args.plan_only)
+                print(f"Image {i} results stored")
+
         image_results_by_image_index[i] = image_results
 
         print(
@@ -123,24 +141,31 @@ if __name__ == '__main__':
             f"correct:  {correctly_classified_images}/{1 + i - args.start_idx}, "
             f"verified: {verified_images}/{correctly_classified_images}, "
             f"unsafe: {unsafe_images}/{correctly_classified_images}, ",
-            f"time: {end - start:.3f}; {0 if cum_time == 0 else cum_time / correctly_classified_images:.3f}; {cum_time:.3f}"
+            f"time: {image_results['running_time']}; {0 if cum_time == 0 else cum_time / correctly_classified_images:.3f}; {cum_time:.3f}"
         )
+        print('*******************************************************')
 
     for worker in itertools.chain(gpu_workers, cpu_workers):
         worker.send('terminate')
 
-    results = {
-        'netname': args.net,
-        't': args.epsilon,
-        'rep_num': args.rep_each_k,
-        'timeout': args.timeout,
-        'start_idx': args.start_idx,
-        'test_num': args.test_batches,
-        'cumulative_time': cum_time,
-        'images_results_by_index': image_results_by_image_index
-    }
-
     print('analysis precision ', verified_images, '/ ', correctly_classified_images)
-    with open(args.output, 'w') as fp:
-        json.dump(results, fp, indent=4)
-    print(f'Results saved to {args.output}')
+
+    if args.json:
+        results = {
+            'netname': args.net,
+            't': args.epsilon,
+            'rep_each_k': args.rep_each_k,
+            'rep_each_level': args.rep_each_level,
+            'batch_size': args.batch_size,
+            'gpu_num': args.gpu_num,
+            'milp_num': args.milp_num,
+            'timeout': args.timeout,
+            'start_idx': args.start_idx,
+            'test_num': args.test_batches,
+            'plan_only': args.plan_only,
+            'cumulative_time': cum_time,
+            'images_results_by_index': image_results_by_image_index
+        }
+        with open(args.output, 'w') as fp:
+            json.dump(results, fp, indent=4)
+        print(f'Results saved to {args.output}')
