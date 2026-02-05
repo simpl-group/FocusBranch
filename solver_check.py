@@ -1,5 +1,5 @@
 from AbstractInterpreter import SequentialAT, L0BoundedInput, AffineAT, ReLUAT, Bounds, LinfBoundedInput
-from utils import timeout_handler, TimeoutException, TQDM_BAR_FORMAT
+from utils import timeout_handler, TQDM_BAR_FORMAT
 from utils.shared import get4, add_shared_arguments
 from models import get_network_and_dataset_utils
 from data.db import insert_milp, milp_should_skip, milp_config_consistent
@@ -95,7 +95,7 @@ def add_forward_constraints(model: gp.Model, seqAT: SequentialAT, bounded_x0, x:
 
 def gurobi_complete_check(seqAT: SequentialAT, bounded_x0: L0BoundedInput,
     demo: bool = True, ground_truth_label: int | None = None
-) -> bool:
+) -> tuple[bool,bool,bool]: # (verified, timed_out, found_adv)
     model = gp.Model("check_unsat", env=env)
     img = bounded_x0.x[0, ..., 0].cpu().numpy()  # input: [784]
     delta = model.addMVar(img.shape, vtype=GRB.CONTINUOUS, name="delta")  # delta: [784]
@@ -126,21 +126,26 @@ def gurobi_complete_check(seqAT: SequentialAT, bounded_x0: L0BoundedInput,
     model.optimize()
 
     if model.Status == GRB.Status.INFEASIBLE:
-        return True
+        return True, False, False
     if model.Status in {GRB.Status.OPTIMAL, GRB.Status.SOLUTION_LIMIT}:
         if demo:
             print(f"Solution found")
             delta_values = np.asarray(delta.X)
             xs = np.nonzero(delta_values)
             print(f"Delta indices: {xs}, value: {delta_values[xs]}")
-            # check model input
+            print("Original input at delta indices:")
             print(img[xs])
+            print("Modified input at delta indices:")
             print(img[xs] + delta.X[xs])
-    elif model.Status == GRB.Status.INF_OR_UNBD:  # unsolvable
-        warnings.warn("Model is infeasible or unbounded")
+        return False, False, True
+    if model.Status == GRB.Status.TIME_LIMIT:
+        if demo: warnings.warn("Gurobi solver timed out")
+        return False, True, False
+    if model.Status == GRB.Status.INTERRUPTED:
+        warnings.warn("Gurobi solver interrupted")
     else:
         warnings.warn(f"Solver status: {model.Status}")
-    return False
+    return False, False, False
 
 class GurobiWorker:
     def __init__(self, seqAT: SequentialAT, channel_size: int):
@@ -263,6 +268,8 @@ if __name__ == "__main__":
         if not args.force_store and not args.demo:
             exit(1)
 
+    env.setParam("TimeLimit", args.timeout)
+
     if args.demo:
         args.test_batches = 1
 
@@ -285,35 +292,23 @@ if __name__ == "__main__":
                 else:
                     seqAT.tail.make_marginals(true_labels=pred_labels, device="cpu")
 
-                timed_out = True
-                safe = False
                 elapsed_time = 0.
-                try:
-                    signal.alarm(args.timeout)
-                    t0 = perf_counter()
-                    safe = gurobi_complete_check(seqAT, bounded_x0, demo=args.demo,
-                        ground_truth_label=pred_labels.item() if args.target_label is None else None)
-                    timed_out = False
-                    num_verified += 1
-                    signal.alarm(0)
-                except TimeoutException:
-                    if args.demo: print("Timeout")
-                except torch.OutOfMemoryError as e:
-                    if args.demo: print(e)
-                finally:
-                    bounded_x0.clear_cache()
+                t0 = perf_counter()
+                safe, timed_out, found_adv = gurobi_complete_check(
+                    seqAT, bounded_x0, demo=args.demo, ground_truth_label=pred_labels.item() if args.target_label is None else None
+                )
+                num_verified += 1
+                bounded_x0.clear_cache()
 
                 elapsed_time = perf_counter() - t0
                 total_time += elapsed_time
 
                 if args.demo:
-                    print(f"Verified safe: {safe}, Time: {elapsed_time:.2f}s, result NOT stored")
+                    print(f"Verified safe: {safe}, Timedout:{timed_out}, found_adv:{found_adv}, Time: {elapsed_time:.2f}s, result NOT stored")
                     break
                 insert_milp(
                     net=args.net, img=i, eps=args.epsilon,
-                    verified=safe,
-                    timed_out=timed_out,
-                    found_adv=not safe and not timed_out,
+                    verified=safe, timed_out=timed_out, found_adv=found_adv,
                     total_duration=round(elapsed_time, 3)
                 )
             else:
