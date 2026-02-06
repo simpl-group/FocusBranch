@@ -7,6 +7,7 @@ from typing import NamedTuple
 from topksum import selected_top_k_sum, selected_bottom_k_sum, top_top_sum, bottom_bottom_sum
 
 torch.set_default_dtype(torch.float32)
+torch.backends.cuda.matmul.allow_tf32 = True
 
 class RelationalPolyhedra:
     def __init__(self, weight: torch.Tensor, bias: torch.Tensor):
