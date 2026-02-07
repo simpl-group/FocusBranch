@@ -275,8 +275,6 @@ class Verifier:
             sample_start = perf_counter()
             if level == 0:
                 combs_to_check = torch.empty((1, 0), dtype=torch.int64)
-            elif level == 1:
-                combs_to_check = torch.arange(self.num_pixels).reshape(-1, 1)
             else:
                 combs_to_check = selected_indices_sample(self.num_pixels, level, self.rep_each_level)
             sample_counts[level] = combs_to_check.shape[0]
@@ -285,7 +283,7 @@ class Verifier:
                 with self.bounded_x0.selecting(combs_to_check_batch):
                     sample_successes[level] += int(self.__check_current_batch().sum().item())
             sample_durations[level] = perf_counter() - sample_start
-            if sample_successes[level] == sample_counts[level]: break  # All nodes are safe, no need to go deeper
+            if sample_successes[level] == math.comb(self.num_pixels, level): break  # All nodes are safe, no need to go deeper
         return sample_counts, sample_successes, sample_durations
 
     def superset_sample_all_k(self, level: int) -> tuple[list[int], list[int], list[float]]:

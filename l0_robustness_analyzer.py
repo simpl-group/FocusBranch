@@ -41,7 +41,26 @@ class LZeroRobustnessAnalyzer:
     def analyze(self):
         print('Planning stage started')
         analyzer_start_time = time.time()
-        concrete_safe_rate, mean_concrete_check_time, super_success_rate, mean_super_check_time = self.__sampling()
+        super_success_rate, mean_super_check_time = {}, {}
+        # Sample concrete nodes at all levels
+        sample_counts, sample_successes = [0] * (self.__t + 1), [0] * (self.__t + 1)
+        sample_durations: list[float] = [0.0] * (self.__t + 1)
+        for gpu_worker in self.__gpu_workers:
+            sc, ss, sd = gpu_worker.recv()
+            sample_counts = [a + b for a, b in zip(sample_counts, sc)]
+            sample_successes = [a + b for a, b in zip(sample_successes, ss)]
+            sample_durations = [a + b for a, b in zip(sample_durations, sd)]
+        concrete_safe_rate = [s / c if c > 0 else 0.0 for s, c in zip(sample_successes, sample_counts)]
+        mean_concrete_check_time = [d / c if c > 0 else 0.0 for d, c in zip(sample_durations, sample_counts)]
+        if all(sample_successes[i] != math.comb(self.__number_of_pixels, i) * len(self.__gpu_workers) for i in range(self.__t + 1)):
+            # Sample super-nodes at levels with high concrete safe rate
+            for l in range(self.__t + 1):
+                if CVD_MIN_T <= l <= CVD_MAX_T and concrete_safe_rate[l] > 0.99:  # tunable parameter
+                    print(f'Sampling super-node on level {l}')
+                    for gpu_worker in self.__gpu_workers:
+                        gpu_worker.send(('sample-all-k', l))
+                    self.__level = l
+                    super_success_rate[l], mean_super_check_time[l] = self.__estimate_sr_and_mt()
         estimated_time_per_level = [0.0] * (self.__t + 1)
         first_any_safe_level = 0
         for l in range(self.__t + 1):
@@ -60,7 +79,7 @@ class LZeroRobustnessAnalyzer:
         choosing_strategy_start = time.time()
         candidate_geometries: list[dict[str, object]] = []
         for l in range(first_any_safe_level, self.__t + 1):
-            if l == 0 or l == 1 and concrete_safe_rate[1] == 1.0:
+            if sample_successes[l] == math.comb(self.__number_of_pixels, l) * len(self.__gpu_workers):
                 best_strategy = (round(estimated_time_per_level[l], 3), 'skip', l)
                 break
             tail_time = sum(estimated_time_per_level[l + 1:])
@@ -195,29 +214,6 @@ class LZeroRobustnessAnalyzer:
         results['end_level'] = self.__level
         self.__stop_workers()
         return results
-
-    def __sampling(self):
-        super_success_rate, mean_super_check_time = {}, {}
-        # Sample concrete nodes at all levels
-        sample_counts, sample_successes = [0] * (self.__t + 1), [0] * (self.__t + 1)
-        sample_durations: list[float] = [0.0] * (self.__t + 1)
-        for gpu_worker in self.__gpu_workers:
-            sc, ss, sd = gpu_worker.recv()
-            sample_counts = [a + b for a, b in zip(sample_counts, sc)]
-            sample_successes = [a + b for a, b in zip(sample_successes, ss)]
-            sample_durations = [a + b for a, b in zip(sample_durations, sd)]
-        concrete_safe_rate = [s / c if c > 0 else 0.0 for s, c in zip(sample_successes, sample_counts)]
-        mean_concrete_check_time = [d / c if c > 0 else 0.0 for d, c in zip(sample_durations, sample_counts)]
-        if concrete_safe_rate[0] != 1.0 and concrete_safe_rate[1] != 1.0:
-            # Sample super-nodes at levels with high concrete safe rate
-            for l in range(self.__t + 1):
-                if CVD_MIN_T <= l <= CVD_MAX_T and concrete_safe_rate[l] > 0.99:  # tunable parameter
-                    print(f'Sampling super-node on level {l}')
-                    for gpu_worker in self.__gpu_workers:
-                        gpu_worker.send(('sample-all-k', l))
-                    self.__level = l
-                    super_success_rate[l], mean_super_check_time[l] = self.__estimate_sr_and_mt()
-        return concrete_safe_rate,mean_concrete_check_time,super_success_rate,mean_super_check_time
 
     def __estimate_sr_and_mt(self) -> tuple[dict[int, float], dict[int, float]]:
         sampling_lower_bound = self.__level
