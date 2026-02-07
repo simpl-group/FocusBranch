@@ -285,6 +285,7 @@ class Verifier:
                 with self.bounded_x0.selecting(combs_to_check_batch):
                     sample_successes[level] += int(self.__check_current_batch().sum().item())
             sample_durations[level] = perf_counter() - sample_start
+            if sample_successes[level] == sample_counts[level]: break  # All nodes are safe, no need to go deeper
         return sample_counts, sample_successes, sample_durations
 
     def superset_sample_all_k(self, level: int) -> tuple[list[int], list[int], list[float]]:
