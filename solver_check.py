@@ -297,7 +297,7 @@ if __name__ == "__main__":
                 safe, timed_out, found_adv = gurobi_complete_check(
                     seqAT, bounded_x0, demo=args.demo, ground_truth_label=pred_labels.item() if args.target_label is None else None
                 )
-                num_verified += 1
+                num_verified += 1 if safe else 0
                 bounded_x0.clear_cache()
 
                 elapsed_time = perf_counter() - t0
