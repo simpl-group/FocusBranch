@@ -1,16 +1,25 @@
 import argparse
 import sqlite3
 import subprocess
+import time
 from data import DB_PATH, DB_SCHEMA_PATH
 
-def _insert_row(table_name, columns, values, db=DB_PATH):
+def _insert_row(table_name, columns, values, db=DB_PATH, timeout=30, retries=4):
     placeholders = ", ".join(["?"] * len(columns))
     col_list = ", ".join(columns)
     query = f"INSERT OR REPLACE INTO {table_name} ({col_list}) VALUES ({placeholders})"
 
-    with sqlite3.connect(db) as c:
-        c.execute(query, values)
-        c.commit()
+    for attempt in range(retries):
+        try:
+            with sqlite3.connect(db, timeout=timeout) as c:
+                c.isolation_level = None  # Autocommit mode
+                c.execute(query, values)
+            return
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e) and attempt < retries - 1:
+                time.sleep(0.5 * (2 ** attempt)) # Exponential backoff: 0.5s, 1s, 2s，4s
+            else:
+                raise e
 
 def insert_lirpa(net: str, img: int, eps: int, cc=True, verified=False, timed_out=False, total_duration=0.0, db=DB_PATH):
     columns = ["net", "img", "eps", "cc", "verified", "timed_out", "total_duration", "skip"]
