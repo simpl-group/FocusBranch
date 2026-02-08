@@ -4,7 +4,7 @@ from pathlib import Path
 from enum import Enum, auto
 from dataclasses import dataclass
 from functools import cached_property
-from torchvision.datasets import MNIST, CIFAR10, VisionDataset
+from torchvision.datasets import MNIST, CIFAR10, FashionMNIST, VisionDataset
 from torchvision.transforms import ToTensor, Compose, Normalize
 import torch
 import csv
@@ -14,6 +14,7 @@ import numpy as np
 class DatasetName(Enum):
     MNIST   = auto()
     CIFAR10 = auto()
+    FASHIONMNIST = auto()
 
     def __str__(self) -> str:
         return self.name
@@ -118,6 +119,18 @@ DATASETS: dict[DatasetName, DatasetUtils] = {
         image_shape=(3, 32, 32),
         dataset_class=CIFAR10,
     ),
+    DatasetName.FASHIONMNIST: DatasetUtils(
+        csv_file=BASE_DIR / "fashion-mnist_test.csv",
+        pt_file=BASE_DIR / "fashion-mnist_test.pt",
+        classes=(
+            "T-shirt/top", "Trouser", "Pullover", "Dress", "Coat",
+            "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot",
+        ),
+        mean=(0.5,),
+        std=(0.5,),  # from coverd.py, not the actual dataset stats should be (0.2860,), (0.3530,)
+        image_shape=(1, 28, 28),
+        dataset_class=FashionMNIST,
+    )
 }
 
 def load_covering(v: int, k: int, t: int) -> list[list[int]]:

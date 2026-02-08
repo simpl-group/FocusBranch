@@ -58,24 +58,24 @@ if __name__ == "__main__":
     parser.add_argument("-cnn", "--cnn-only", action="store_true", help="Only convert CNN models")
     parser.add_argument("-fcn", "--fcn-only", action="store_true", help="Only convert FCN models")
     parser.add_argument("-mnist", "--mnist-only", action="store_true", help="Only convert MNIST models")
+    parser.add_argument("-fmnist", "--fashionmnist-only", action="store_true", help="Only convert FashionMNIST models")
     parser.add_argument("-cifar10", "--cifar10-only", action="store_true", help="Only convert CIFAR10 models")
     parser.add_argument("-f", "--force", action="store_true", help="Force conversion even if the model is already converted")
     args = parser.parse_args()
 
-    if not args.cifar10_only:
-        mnist_imgs, mnist_labels = DATASETS[DatasetName.MNIST].load_xy_from_csv(args.normalize)
-    if not args.mnist_only:
-        cifar10_imgs, cifar10_labels = DATASETS[DatasetName.CIFAR10].load_xy_from_csv(args.normalize)
     for model_spec in MODEL_SPECS.values():
         if model_spec.debug is True: continue
         if args.cnn_only and model_spec.constructor != CNN: continue
         if args.fcn_only and model_spec.constructor != FCN: continue
         if args.cifar10_only and model_spec.dataset_name != DatasetName.CIFAR10: continue
         if args.mnist_only and model_spec.dataset_name != DatasetName.MNIST: continue
+        if args.fashionmnist_only and model_spec.dataset_name != DatasetName.FASHIONMNIST: continue
         if model_spec.dataset_name == DatasetName.MNIST:
-            imgs, labels = mnist_imgs, mnist_labels
+            imgs, labels = DATASETS[DatasetName.MNIST].load_xy_from_csv(args.normalize)
         elif model_spec.dataset_name == DatasetName.CIFAR10:
-            imgs, labels = cifar10_imgs, cifar10_labels
+            imgs, labels = DATASETS[DatasetName.CIFAR10].load_xy_from_csv(args.normalize)
+        elif model_spec.dataset_name == DatasetName.FASHIONMNIST:
+            imgs, labels = DATASETS[DatasetName.FASHIONMNIST].load_xy_from_csv(args.normalize)
         else: assert False, "Unknown dataset"
 
         torch_net = model_spec.constructor(model_spec.layer_params)

@@ -241,6 +241,7 @@ cython_debug/
 
 data/MNIST
 data/cifar-10-batches-py
+data/FashionMNIST
 test*.py
 .vscode/
 *.json
@@ -250,3 +251,5 @@ test*.py
 *.gz
 *.txt
 *.xlsx
+*.sh
+*.db
