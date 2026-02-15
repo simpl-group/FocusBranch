@@ -60,24 +60,25 @@ def insert_coverd(net: str, img: int, eps: int, cc=True, verified=False, timed_o
                 values = [net, img, higher_eps, int(cc), 0, int(timed_out), int(found_adv), 0.0, 0.0, 0.0, 1]
                 _insert_row("coverd", columns, values, db=db)
 
-def insert_ours(net: str, img: int, eps: int, cc=True, estimated_time=0.0, use_cvd=False, starting_level=0, skip=True, verified=False, timed_out=False, found_adv=False, total_duration=0.0, db=DB_PATH):
+def insert_ours(net: str, img: int, eps: int, cc=True, estimated_time=0.0, use_cvd=False, starting_level=-1, skip=True, verified=False, timed_out=False, found_adv=False, total_duration=0.0, db=DB_PATH):
     """skip: equivalent to actually ran"""
     if not skip:  # plan_only
         with sqlite3.connect(db) as conn:
             result = conn.execute("SELECT time_limit_seconds FROM ours_config WHERE net = ? AND eps = ?", (net, eps)).fetchone()
         if estimated_time > result[0] or verified: # estimated_timed_out skip or end_level 0 or 1 skip -> equivalent to actually ran
             skip = True
+    _use_cvd = int(use_cvd) if cc else -1
     columns = ["net", "img", "eps", "cc", "estimated_time", "use_cvd", "starting_level", "skip", "verified", "timed_out", "found_adv", "total_duration"]
-    values = [net, img, eps, int(cc), estimated_time, int(use_cvd), starting_level, int(skip), int(verified), int(timed_out), int(found_adv), total_duration]
+    values = [net, img, eps, int(cc), estimated_time, _use_cvd, starting_level, int(skip), int(verified), int(timed_out), int(found_adv), total_duration]
     _insert_row("ours", columns, values, db=db)
     # if it actually ran and not verified
-    if skip and not verified or timed_out or found_adv:
+    if skip and not verified or timed_out or found_adv or not cc:
         with sqlite3.connect(db) as conn:
             result = conn.execute("SELECT max(eps) FROM ours_config WHERE net = ?", (net,)).fetchone()
         assert result and result[0] is not None
         max_eps = result[0]
         for higher_eps in range(eps + 1, max_eps + 1):
-            values = [net, img, higher_eps, int(cc), 0, 0, 0, 1, 0, int(timed_out), int(found_adv), 0.0]
+            values = [net, img, higher_eps, int(cc), 0, -1, -1, 1, 0, int(timed_out), int(found_adv), 0.0]
             _insert_row("ours", columns, values, db=db)
 
 def _insert_ours_detail(net: str, img: int, eps: int, true_label=-1, chosen_geometry="", choosing_strategy_duration=0.0, planning_duration=0.0, iterating_covering_duration=0.0, summed_duration=0.0, handle_unk_combs_duration=0.0, waiting_milp_duration=0.0, proved_with_milp=0, waiting_for_milp=0, end_level=0, adversarial_pixel_values="", adversarial_label=-1, db=DB_PATH):
@@ -85,7 +86,7 @@ def _insert_ours_detail(net: str, img: int, eps: int, true_label=-1, chosen_geom
     values = [net, img, eps, true_label, chosen_geometry, choosing_strategy_duration, planning_duration, iterating_covering_duration, summed_duration, handle_unk_combs_duration, waiting_milp_duration, proved_with_milp, waiting_for_milp, end_level, adversarial_pixel_values, adversarial_label]
     _insert_row("ours_detail", columns, values, db=db)
 
-def insert_strategies(net: str, img: int, eps: int, use_cvd=False, starting_level=0, estimated_time=0.0, geometry="", db=DB_PATH):
+def insert_strategies(net: str, img: int, eps: int, use_cvd=False, starting_level=-1, estimated_time=0.0, geometry="", db=DB_PATH):
     columns = ["net", "img", "eps", "use_cvd", "starting_level", "estimated_time", "geometry"]
     values = [net, img, eps, int(use_cvd), starting_level, estimated_time, geometry]
     _insert_row("candidate_strategies", columns, values, db=db)
@@ -95,7 +96,7 @@ def insert_geometries(net: str, img: int, eps: int, geometry="", estimated_time=
     values = [net, img, eps, geometry, estimated_time, num_blocks, mean_size]
     _insert_row("candidate_geometries", columns, values, db=db)
 
-def store_ours_result(net: str, eps: int, img: int, result, skip=True, db=DB_PATH):
+def store_ours_result(net: str, eps: int, img: int, result: dict, skip=True, db=DB_PATH):
     """Store image analysis result into database tables."""
     summary = result.get('analysis_summary', {})
     if not summary:
@@ -112,16 +113,11 @@ def store_ours_result(net: str, eps: int, img: int, result, skip=True, db=DB_PAT
     # Extract strategy info from best_strategy
     best_strategy = summary.get('best_strategy', [])
     use_cvd = False
-    starting_level = 0
+    starting_level = summary.get('starting_level', -1)
     chosen_geometry = ""
-    if best_strategy and len(best_strategy) >= 2:
-        use_cvd = best_strategy[1] == 'coverd'
-        if len(best_strategy) >= 3:
-            if isinstance(best_strategy[2], int):
-                starting_level = best_strategy[2]
-            else:
-                starting_level = int(best_strategy[2][-2])
-                chosen_geometry = best_strategy[2][9:-1] if best_strategy[2].startswith('Geometry(') else best_strategy[2]
+    if best_strategy and best_strategy[1] == 'coverd':
+        use_cvd = True
+        chosen_geometry = best_strategy[2][9:-1] if best_strategy[2].startswith('Geometry(') else best_strategy[2]
 
     # Insert main result into ours table
     insert_ours(net, img, eps, cc=True, estimated_time=estimated_time, use_cvd=use_cvd, starting_level=starting_level, skip=skip, verified=verified, timed_out=timed_out, found_adv=found_adv, total_duration=total_duration, db=db)

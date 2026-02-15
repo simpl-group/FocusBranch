@@ -18,12 +18,12 @@ CREATE TABLE IF NOT EXISTS ours (
     cc INTEGER DEFAULT 1,
     estimated_time REAL DEFAULT 0,
     use_cvd INTEGER DEFAULT 0,
-    starting_level INTEGER DEFAULT 0,
-    skip INTEGER DEFAULT 0,
+    starting_level INTEGER DEFAULT -1,
     verified INTEGER DEFAULT 0,
     timed_out INTEGER DEFAULT 0,
     found_adv INTEGER DEFAULT 0,
     total_duration REAL DEFAULT 0,
+    skip INTEGER DEFAULT 0,
     PRIMARY KEY (net, img, eps)
 );
 
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS ours_detail (
     waiting_milp_duration REAL DEFAULT 0,
     proved_with_milp INTEGER DEFAULT 0,
     waiting_for_milp INTEGER DEFAULT 0,
-    end_level INTEGER DEFAULT 0,
+    end_level INTEGER DEFAULT -1,
     adversarial_pixel_values TEXT DEFAULT '',
     adversarial_label INTEGER DEFAULT -1,
     PRIMARY KEY (net, img, eps)
