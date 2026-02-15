@@ -38,9 +38,12 @@ class LZeroRobustnessAnalyzer:
         for cpu_worker in self.__cpu_workers:
             cpu_worker.send((image, label))
 
+    def timed_out(self) -> bool:
+        return time.time() - self.analyzer_start_time > self.__timeout
+
     def analyze(self):
         print('Planning stage started')
-        analyzer_start_time = time.time()
+        self.analyzer_start_time = time.time()
         super_success_rate, mean_super_check_time = {}, {}
         # Sample concrete nodes at all levels
         sample_counts, sample_successes = [0] * (self.__t + 1), [0] * (self.__t + 1)
@@ -100,30 +103,29 @@ class LZeroRobustnessAnalyzer:
                     chosen_geometry, chosen_geometry_info = _best_geometry, geometries_data[0]
                     success_rate, mean_time, VT, refinement_strategy, fraction_robust = super_success_rate[l], mean_super_check_time[l], _VT, _refinement_strategy, _fraction_robust
         choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
-        planning_duration = round(time.time() - analyzer_start_time, 3)
+        planning_duration = round(time.time() - self.analyzer_start_time, 3)
         print(f"Planning stage took {planning_duration} s, choosing strategy duration: {choosing_strategy_duration} s, best strategy: {best_strategy}")
         results = {
-            'verified': time.time() - analyzer_start_time < self.__timeout and not self.__plan_only or best_strategy[1] == 'skip',
-            'timed_out': time.time() - analyzer_start_time >= self.__timeout,
+            'verified': best_strategy[1] == 'skip',
+            'timed_out': self.timed_out(),
             'choosing_strategy_duration': choosing_strategy_duration,
             'best_strategy': best_strategy,
             'estimated_verification_time': best_strategy[0],
+            'starting_level': best_strategy[2] if best_strategy[1] != 'coverd' else chosen_geometry.t,
             'planning_duration': planning_duration,
             'candidate_strategies': candidate_strategies
         }
         if len(candidate_geometries) > 0: results['candidate_geometries'] = candidate_geometries
 
-        if best_strategy[1] == 'skip' or results['timed_out'] or self.__plan_only:
-            self.__skip_this_image()
-            print('Early termination triggered')
-            results['end_level'] = best_strategy[2]
-            return results
         # to be deleted later if needed
         if best_strategy[1] == 'sbap' and best_strategy[2] >= 4 or best_strategy[0] > self.__timeout:
-            self.__skip_this_image()
-            results['verified'] = False
             results['timed_out'] = True
             print(f'{best_strategy[1]} at level {best_strategy[2]} estimated to take too long, skipping this image.')
+
+        if results['verified'] or results['timed_out'] or self.__plan_only:
+            self.__skip_this_image()
+            print('Early termination triggered')
+            if results['verified']: results['end_level'] = results['starting_level']
             return results
 
         self.unk_combs_settled = threading.Event()
@@ -132,7 +134,7 @@ class LZeroRobustnessAnalyzer:
         self.milp_job_queue = queue.Queue()
         self.milp_found_adversarial = threading.Event()
         self.adversarial_results = {'adversarial_pixels': None, 'adversarial_example': None, 'adversarial_label': None}
-        cpu_handler_thread = threading.Thread(target=self.__handle_cpu_workers_messages, args=(analyzer_start_time,))
+        cpu_handler_thread = threading.Thread(target=self.__handle_cpu_workers_messages, args=(self.analyzer_start_time,))
         cpu_handler_thread.start()
 
         if best_strategy[1] == 'sbap':
@@ -161,12 +163,12 @@ class LZeroRobustnessAnalyzer:
             )
             refinement_sizes = {v: self.covering_sizes[self.__level][(v, k)] for v, k in refinement_strategy.items() if k is not None}
             fr = {v: round(fraction_robust[v][k], 5) for v, k in refinement_strategy.items() if k is not None}
-            blocks_stats_by_size = defaultdict(lambda: {'runs': 0, 'successes': 0, 'total_duration': 0.})
+            supercheck_stats_by_size = defaultdict(lambda: {'num_checked': 0, 'successes': 0, 'total_duration': 0.})
 
             iterating_covering_start_time = time.time()
-            unk_combs = self.__handle_gpu_workers_messages(analyzer_start_time, blocks_stats_by_size, chosen_geometry.number_of_blocks(), refinement_strategy, refinement_sizes)
+            unk_combs = self.__handle_gpu_workers_messages(supercheck_stats_by_size, chosen_geometry.number_of_blocks(), refinement_strategy, refinement_sizes)
             iterating_covering_duration = round(time.time() - iterating_covering_start_time, 3)
-            summed_duration = round(sum(stats['total_duration'] for stats in blocks_stats_by_size.values()), 3)
+            summed_duration = round(sum(stats['total_duration'] for stats in supercheck_stats_by_size.values()), 3)
             print(f'GPU iterating coverings took {iterating_covering_duration} s, Summed duration (all gpu workers): {summed_duration} s')
             results['coverd'] = {
                 'chosen_geometry': chosen_geometry_info,
@@ -180,16 +182,16 @@ class LZeroRobustnessAnalyzer:
                 "R": refinement_strategy,
                 "refinement_sizes": refinement_sizes,
                 "fraction_robust": fr,
-                "runs": {size: stats['runs'] for size, stats in blocks_stats_by_size.items()},
-                "successes": {size: stats['successes'] for size, stats in blocks_stats_by_size.items()},
-                "success_rate": {size: round(stats['successes'] / stats['runs'], 5) if stats['runs'] > 0 else 0 for size, stats in blocks_stats_by_size.items()},
-                "total_duration": {size: round(stats['total_duration'], 6) for size, stats in blocks_stats_by_size.items()},
-                "mean_duration": {size: round(stats['total_duration'] / stats['runs'], 6) if stats['runs'] > 0 else 0 for size, stats in blocks_stats_by_size.items()},
+                "num_checked": {size: stats['num_checked'] for size, stats in supercheck_stats_by_size.items()},
+                "successes": {size: stats['successes'] for size, stats in supercheck_stats_by_size.items()},
+                "success_rate": {size: round(stats['successes'] / stats['num_checked'], 5) if stats['num_checked'] > 0 else 0 for size, stats in supercheck_stats_by_size.items()},
+                "total_duration": {size: round(stats['total_duration'], 6) for size, stats in supercheck_stats_by_size.items()},
+                "mean_duration": {size: round(stats['total_duration'] / stats['num_checked'], 6) if stats['num_checked'] > 0 else 0 for size, stats in supercheck_stats_by_size.items()},
             }
         else: assert False, f'Unknown best strategy: {best_strategy}'
 
         handle_unk_combs_start = time.time()
-        self.__handle_unk_combs(analyzer_start_time, unk_combs, deduplicate=best_strategy[1] == 'coverd')
+        self.__handle_unk_combs(unk_combs, deduplicate=best_strategy[1] == 'coverd')
         self.unk_combs_settled.set()
         handle_unk_combs_duration = round(time.time() - handle_unk_combs_start, 3)
         waiting_milp_start = time.time()
@@ -202,12 +204,11 @@ class LZeroRobustnessAnalyzer:
         if waiting_milp_duration > 0.1:
             print(f'Waiting for MILP duration: {waiting_milp_duration} s.')
             results['waiting_milp_duration'] = waiting_milp_duration
-        if time.time() - analyzer_start_time >= self.__timeout:
-            results['verified'] = False
-            results['timed_out'] = True
+        results['timed_out'] = self.timed_out()
         if self.milp_found_adversarial.is_set():
-            results['verified'] = False
             results['adversarial_results'] = self.adversarial_results
+        elif not results['timed_out']:
+            results['verified'] = True
         if len(self.innocent_suspects) + len(self.waiting_suspects) > 0:
             results['proved_with_milp'] = len(self.innocent_suspects)
             results['waiting_for_milp'] = len(self.waiting_suspects)
@@ -309,7 +310,6 @@ class LZeroRobustnessAnalyzer:
 
     def __handle_gpu_workers_messages(
         self,
-        analyzer_start_time: float,
         statistics_by_size: dict,
         initial_covering_size: int,
         refinement_strategy: dict[int,int|None],
@@ -323,7 +323,7 @@ class LZeroRobustnessAnalyzer:
         unk_combs_lst: list[list[int]] = []
         while done_count < len(self.__gpu_workers) \
             and not self.milp_found_adversarial.is_set() \
-            and time.time() - analyzer_start_time < self.__timeout:
+            and not self.timed_out():
             last_print_time = self.__print_progress(pbar, total_covering_size, num_finished, last_print_time)
 
             for gpu_worker in self.__gpu_workers:
@@ -336,35 +336,35 @@ class LZeroRobustnessAnalyzer:
                     elif isinstance(message, str) and message == 'done':
                         done_count += 1
                     else:  # update statistics
-                        num_indices, runs, num_verified, duration = message
+                        num_indices, num_checked, num_verified, duration = message
                         size_statistics = statistics_by_size[num_indices]
                         if num_indices < self.__level:
                             num_finished += num_verified
                         elif refinement_strategy[num_indices] is not None:  # could potentially be refined
-                            num_finished += runs
-                            size_statistics['runs'] += runs
+                            num_finished += num_checked
+                            size_statistics['num_checked'] += num_checked
                             size_statistics['successes'] += num_verified
                             size_statistics['total_duration'] += duration
-                            num_failed = runs - num_verified
+                            num_failed = num_checked - num_verified
                             if num_failed > 0:  # to be refined later, add to total covering size
                                 total_covering_size += refinement_sizes[num_indices] * num_failed
                         else:  # handled by sbap verifier, could be in a batch
-                            num_finished += runs
-                            size_statistics['runs'] += runs
+                            num_finished += num_checked
+                            size_statistics['num_checked'] += num_checked
                             size_statistics['total_duration'] += duration
                             size_statistics['successes'] += num_verified
         pbar.close()
         print(f"num_finished: {num_finished}, total_covering_size: {total_covering_size}, remaining: {total_covering_size - num_finished}")
         return np.vstack(unk_combs_lst) if len(unk_combs_lst) > 0 else np.empty((0, self.__number_of_pixels), dtype=int)
 
-    def __handle_unk_combs(self, analyzer_start_time: float, unk_combs: np.ndarray, deduplicate: bool = False):
-        if unk_combs.shape[0] == 0 or time.time() - analyzer_start_time > self.__timeout: return
+    def __handle_unk_combs(self, unk_combs: np.ndarray, deduplicate: bool = False):
+        if unk_combs.shape[0] == 0 or self.timed_out(): return
         unk_combs_tensor: torch.Tensor = torch.from_numpy(unk_combs)
         if deduplicate:
             print(f"Level {self.__level} Before deduplication, unk_combs size: {unk_combs.shape[0]}", end="; ")
             unk_combs_tensor = torch.unique(unk_combs_tensor.cuda(), dim=0).cpu()
             print(f'After deduplication, unk_combs size: {unk_combs_tensor.shape[0]}')
-        while unk_combs_tensor.shape[0] > 0 and self.__level < self.__t and time.time() - analyzer_start_time < self.__timeout:
+        while unk_combs_tensor.shape[0] > 0 and self.__level < self.__t and not self.timed_out():
             new_level_start_time = time.time()
             new_combs = split_and_prune_by_unk(unk_combs_tensor, self.__level, self.__number_of_pixels).numpy()
             self.__level += 1
