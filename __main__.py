@@ -82,7 +82,8 @@ if __name__ == '__main__':
         timeout=args.timeout,
         max_k=args.max_k,
         num_pixels=dataset_utils.num_pixels,
-        plan_only=args.plan_only
+        plan_only=args.plan_only,
+        greater_batch=10*args.batch_size
     )
 
     image_results_by_image_index = {}

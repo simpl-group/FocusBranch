@@ -2,6 +2,7 @@
 from utils import TQDM_BAR_FORMAT
 from data import load_covering_sizes
 from coverd_finite_geometries import get_possible_geometries, Geometry
+from covering_generator.estimator import estimate_generator_speed, estimate_extra_time
 from split_and_prune import split_and_prune_by_unk
 import threading
 import queue
@@ -21,7 +22,7 @@ CVD_MIN_T = 3
 CVD_MAX_T = 6
 
 class LZeroRobustnessAnalyzer:
-    def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int, plan_only: bool):
+    def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int, plan_only: bool, greater_batch: int):
         self.__gpu_workers = gpu_workers
         self.__cpu_workers = cpu_workers
         self.__t = t
@@ -30,6 +31,8 @@ class LZeroRobustnessAnalyzer:
         self.__refinement_db_max_v = max_k
         self.__plan_only = plan_only
         self.covering_sizes = {t:load_covering_sizes(t, clipping_size=500000) for t in range(CVD_MIN_T, min(self.__t + 1, CVD_MAX_T + 1))}
+        generator_launch_time, skipping_iter_speed, normal_iter_speed = estimate_generator_speed(Geometry(7,5,5), num_workers=len(gpu_workers), num_pixels=num_pixels)
+        self.cvd_extra_time = lambda geometry: generator_launch_time + estimate_extra_time(geometry, num_workers=len(gpu_workers), num_pixels=num_pixels, greater_batch=greater_batch, skipping_iter_speed=skipping_iter_speed, iter_speed=normal_iter_speed)
 
     def update_image(self, image: np.ndarray, label: int):
         for gpu_worker in self.__gpu_workers:
@@ -83,11 +86,11 @@ class LZeroRobustnessAnalyzer:
         candidate_geometries: list[dict[str, object]] = []
         for l in range(first_any_safe_level, self.__t + 1):
             if sample_successes[l] == math.comb(self.__number_of_pixels, l) * len(self.__gpu_workers):
-                best_strategy = (round(estimated_time_per_level[l], 3), 'skip', l)
+                best_strategy = (estimated_time_per_level[l], 'skip', l)
                 break
             tail_time = sum(estimated_time_per_level[l + 1:])
             sbap_time = (mean_concrete_check_time[l] * math.comb(self.__number_of_pixels, l) + tail_time) / len(self.__gpu_workers)
-            candidate_strategies.append((round(sbap_time, 3), 'sbap', l))
+            candidate_strategies.append((sbap_time, 'sbap', l))
             if sbap_time < best_strategy[0]:
                 best_strategy = candidate_strategies[-1]
             if l in super_success_rate:
@@ -96,7 +99,7 @@ class LZeroRobustnessAnalyzer:
                 _VT, _refinement_strategy = self.__choose_strategy(_fraction_robust, mean_super_check_time[l], super_success_rate[l])
                 _best_geometry, geometries_data = self.__choose_geometry(_VT)
                 candidate_geometries.extend(geometries_data)
-                coverd_time: float = (geometries_data[0]["estimated_summed_duration"] + tail_time) / len(self.__gpu_workers)
+                coverd_time: float = (geometries_data[0]["estimated_summed_duration"] + tail_time) / len(self.__gpu_workers) + self.cvd_extra_time(_best_geometry)
                 candidate_strategies.append((round(coverd_time, 3), 'coverd', str(_best_geometry)))
                 if coverd_time < best_strategy[0]:
                     best_strategy = candidate_strategies[-1]
@@ -104,6 +107,8 @@ class LZeroRobustnessAnalyzer:
                     success_rate, mean_time, VT, refinement_strategy, fraction_robust = super_success_rate[l], mean_super_check_time[l], _VT, _refinement_strategy, _fraction_robust
         choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
         planning_duration = round(time.time() - self.analyzer_start_time, 3)
+        candidate_strategies = [(round(s[0] + planning_duration, 3), s[1], s[2]) for s in candidate_strategies]
+        best_strategy = (round(best_strategy[0] + planning_duration, 3), best_strategy[1], best_strategy[2])
         print(f"Planning stage took {planning_duration} s, choosing strategy duration: {choosing_strategy_duration} s, best strategy: {best_strategy}")
         results = {
             'verified': best_strategy[1] == 'skip',
