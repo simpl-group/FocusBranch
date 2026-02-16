@@ -33,6 +33,9 @@ class LZeroRobustnessAnalyzer:
         self.covering_sizes = {t:load_covering_sizes(t, clipping_size=500000) for t in range(CVD_MIN_T, min(self.__t + 1, CVD_MAX_T + 1))}
         generator_launch_time, skipping_iter_speed, normal_iter_speed = estimate_generator_speed(Geometry(7,5,5), num_workers=len(gpu_workers), num_pixels=num_pixels)
         self.cvd_extra_time = lambda geometry: generator_launch_time + estimate_extra_time(geometry, num_workers=len(gpu_workers), num_pixels=num_pixels, greater_batch=greater_batch, skipping_iter_speed=skipping_iter_speed, iter_speed=normal_iter_speed)
+        # TODO: estimate pruning time for split_and_prune_by_unk and include it in the strategy comparison as well
+        # from split_and_prune import estimate_pruning_time
+        # self.estimated_pruning_time = lambda num_unk_combs: estimate_pruning_time(num_unk_combs, level, num_workers=len(gpu_workers))
 
     def update_image(self, image: np.ndarray, label: int):
         for gpu_worker in self.__gpu_workers:
@@ -61,7 +64,7 @@ class LZeroRobustnessAnalyzer:
         if all(sample_successes[i] != math.comb(self.__number_of_pixels, i) * len(self.__gpu_workers) for i in range(self.__t + 1)):
             # Sample super-nodes at levels with high concrete safe rate
             for l in range(self.__t + 1):
-                if CVD_MIN_T <= l <= CVD_MAX_T and concrete_safe_rate[l] > 0.99:  # tunable parameter
+                if CVD_MIN_T <= l <= CVD_MAX_T and concrete_safe_rate[l] > 0.99:  # tunable parameter TODO: SR<threshold but eps=max_T
                     print(f'Sampling super-node on level {l}')
                     for gpu_worker in self.__gpu_workers:
                         gpu_worker.send(('sample-all-k', l))
@@ -80,47 +83,55 @@ class LZeroRobustnessAnalyzer:
             estimated_time_per_level[l] = mean_concrete_check_time[l] * estimated_nodes_this_level
             if concrete_safe_rate[l] == 1.0:
                 break  # this level is estimated to be 100% robust and verified, no need to go deeper
-        best_strategy = (float('inf'), None, None)
-        candidate_strategies: list[tuple] = []
-        choosing_strategy_start = time.time()
+
+        candidate_strategies: list[tuple[float, str, int]] = []
+        def get_best_strategy():
+            return min(candidate_strategies, key=lambda s: s[0])
         candidate_geometries: list[dict[str, object]] = []
+        # The keys are levels
+        fraction_robusts: dict[int, dict[int, dict[int, float]]] = {}
+        VTs: dict[int, dict[int, float]] = {}
+        refinement_strategies: dict[int, dict[int, int|None]] = {}
+        chosen_geometries: dict[int, Geometry] = {}
+        chosen_geometries_info: dict[int, dict[str, object]] = {}
+
+        choosing_strategy_start = time.time()
         for l in range(first_any_safe_level, self.__t + 1):
             if sample_successes[l] == math.comb(self.__number_of_pixels, l) * len(self.__gpu_workers):
-                best_strategy = (estimated_time_per_level[l], 'skip', l)
+                candidate_strategies.append((estimated_time_per_level[l], 'skip', l))
                 break
             tail_time = sum(estimated_time_per_level[l + 1:])
             sbap_time = (mean_concrete_check_time[l] * math.comb(self.__number_of_pixels, l) + tail_time) / len(self.__gpu_workers)
             candidate_strategies.append((sbap_time, 'sbap', l))
-            if sbap_time < best_strategy[0]:
-                best_strategy = candidate_strategies[-1]
             if l in super_success_rate:
                 self.__level = l
-                _fraction_robust = self.__compute_fraction_robust(super_success_rate[l])
-                _VT, _refinement_strategy = self.__choose_strategy(_fraction_robust, mean_super_check_time[l], super_success_rate[l])
-                _best_geometry, geometries_data = self.__choose_geometry(_VT)
+                fraction_robusts[l] = self.__compute_fraction_robust(super_success_rate[l])
+                VTs[l], refinement_strategies[l] = self.__choose_strategy(fraction_robusts[l], mean_super_check_time[l], super_success_rate[l])
+                chosen_geometries[l], geometries_data = self.__choose_geometry(VTs[l])
+                chosen_geometries_info[l] = geometries_data[0]
                 candidate_geometries.extend(geometries_data)
-                coverd_time: float = (geometries_data[0]["estimated_summed_duration"] + tail_time) / len(self.__gpu_workers) + self.cvd_extra_time(_best_geometry)
-                candidate_strategies.append((round(coverd_time, 3), 'coverd', str(_best_geometry)))
-                if coverd_time < best_strategy[0]:
-                    best_strategy = candidate_strategies[-1]
-                    chosen_geometry, chosen_geometry_info = _best_geometry, geometries_data[0]
-                    success_rate, mean_time, VT, refinement_strategy, fraction_robust = super_success_rate[l], mean_super_check_time[l], _VT, _refinement_strategy, _fraction_robust
+                coverd_time: float = (chosen_geometries_info[l]["estimated_summed_duration"] + tail_time) / len(self.__gpu_workers) + self.cvd_extra_time(chosen_geometries[l])
+                candidate_strategies.append((round(coverd_time, 3), 'coverd', l))
         choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
         planning_duration = round(time.time() - self.analyzer_start_time, 3)
         candidate_strategies = [(round(s[0] + planning_duration, 3), s[1], s[2]) for s in candidate_strategies]
-        best_strategy = (round(best_strategy[0] + planning_duration, 3), best_strategy[1], best_strategy[2])
+        best_strategy = get_best_strategy()
+        self.__level = best_strategy[2]
         print(f"Planning stage took {planning_duration} s, choosing strategy duration: {choosing_strategy_duration} s, best strategy: {best_strategy}")
+
         results = {
             'verified': best_strategy[1] == 'skip',
             'timed_out': self.timed_out(),
             'choosing_strategy_duration': choosing_strategy_duration,
             'best_strategy': best_strategy,
             'estimated_verification_time': best_strategy[0],
-            'starting_level': best_strategy[2] if best_strategy[1] != 'coverd' else chosen_geometry.t,
+            'starting_level': self.__level,
             'planning_duration': planning_duration,
             'candidate_strategies': candidate_strategies
         }
-        if len(candidate_geometries) > 0: results['candidate_geometries'] = candidate_geometries
+        if len(chosen_geometries) > 0:
+            results['chosen_geometries'] = {l:str(g) for l,g in chosen_geometries.items()}
+            results['candidate_geometries'] = candidate_geometries
 
         # to be deleted later if needed
         if best_strategy[1] == 'sbap' and best_strategy[2] >= 4 or best_strategy[0] > self.__timeout:
@@ -143,7 +154,6 @@ class LZeroRobustnessAnalyzer:
         cpu_handler_thread.start()
 
         if best_strategy[1] == 'sbap':
-            self.__level = best_strategy[2]
             for gpu_worker in self.__gpu_workers:
                 gpu_worker.send(('sbap', self.__level))  # no geometry, no refinement strategy
             current_level_start_time = time.time()
@@ -155,7 +165,7 @@ class LZeroRobustnessAnalyzer:
             print(f'Level {self.__level} finished, unk_combs/all: {unk_combs.shape[0]}/{math.comb(self.__number_of_pixels, self.__level)}'
                 f' using {round(time.time() - current_level_start_time, 3)} s')
         elif best_strategy[1] == 'coverd':
-            self.__level = chosen_geometry.t
+            chosen_geometry, refinement_strategy = chosen_geometries[self.__level], refinement_strategies[self.__level]
             assert self.__level == min(refinement_strategy.keys()), f"Level mismatch: {self.__level} vs {min(refinement_strategy.keys())}"
             chosen_indices = random.sample(range(chosen_geometry.number_of_points()), self.__number_of_pixels)
             random.shuffle(chosen_indices)
@@ -163,11 +173,11 @@ class LZeroRobustnessAnalyzer:
                 gpu_worker.send(('coverd', chosen_geometry, chosen_indices, refinement_strategy))
 
             print(
-                f'Chosen {chosen_geometry_info}; Operating on level: {self.__level}'
+                f'Chosen {chosen_geometries_info[self.__level]}; Operating on level: {self.__level}'
                 # f"\nCandidate geometries: {candidate_geometries}"
+                f"\nCandidate strategies: {list(filter(lambda s: s[0] < self.__timeout, candidate_strategies))}"
             )
             refinement_sizes = {v: self.covering_sizes[self.__level][(v, k)] for v, k in refinement_strategy.items() if k is not None}
-            fr = {v: round(fraction_robust[v][k], 5) for v, k in refinement_strategy.items() if k is not None}
             supercheck_stats_by_size = defaultdict(lambda: {'num_checked': 0, 'successes': 0, 'total_duration': 0.})
 
             iterating_covering_start_time = time.time()
@@ -176,17 +186,17 @@ class LZeroRobustnessAnalyzer:
             summed_duration = round(sum(stats['total_duration'] for stats in supercheck_stats_by_size.values()), 3)
             print(f'GPU iterating coverings took {iterating_covering_duration} s, Summed duration (all gpu workers): {summed_duration} s')
             results['coverd'] = {
-                'chosen_geometry': chosen_geometry_info,
+                'chosen_geometry': chosen_geometries_info[self.__level],
                 'iterating_covering_duration': iterating_covering_duration,
                 'summed_duration': summed_duration
             }
             results['exec_details'] = {
-                "Success Rate": {k:round(v, 5) for k, v in success_rate.items()},
-                "Mean Time": {k:round(v, 6) for k, v in mean_time.items()},
-                "VT": {k:round(v, 6) for k, v in VT.items()},
+                "Success Rate": {k:round(v, 5) for k, v in super_success_rate[self.__level].items()},
+                "Mean Time": {k:round(v, 6) for k, v in mean_super_check_time[self.__level].items()},
+                "VT": {k:round(v, 6) for k, v in VTs[self.__level].items()},
                 "R": refinement_strategy,
                 "refinement_sizes": refinement_sizes,
-                "fraction_robust": fr,
+                "fraction_robust": {v: round(fraction_robusts[self.__level][v][k], 5) for v, k in refinement_strategy.items() if k is not None},
                 "num_checked": {size: stats['num_checked'] for size, stats in supercheck_stats_by_size.items()},
                 "successes": {size: stats['successes'] for size, stats in supercheck_stats_by_size.items()},
                 "success_rate": {size: round(stats['successes'] / stats['num_checked'], 5) if stats['num_checked'] > 0 else 0 for size, stats in supercheck_stats_by_size.items()},

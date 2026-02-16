@@ -112,12 +112,8 @@ def store_ours_result(net: str, eps: int, img: int, result: dict, skip=True, db=
 
     # Extract strategy info from best_strategy
     best_strategy = summary.get('best_strategy', [])
-    use_cvd = False
+    use_cvd = best_strategy[1] == 'coverd'
     starting_level = summary.get('starting_level', -1)
-    chosen_geometry = ""
-    if best_strategy and best_strategy[1] == 'coverd':
-        use_cvd = True
-        chosen_geometry = best_strategy[2][9:-1] if best_strategy[2].startswith('Geometry(') else best_strategy[2]
 
     # Insert main result into ours table
     insert_ours(net, img, eps, cc=True, estimated_time=estimated_time, use_cvd=use_cvd, starting_level=starting_level, skip=skip, verified=verified, timed_out=timed_out, found_adv=found_adv, total_duration=total_duration, db=db)
@@ -141,25 +137,17 @@ def store_ours_result(net: str, eps: int, img: int, result: dict, skip=True, db=
         adversarial_pixel_values = adv_results.get('adversarial_pixel_values', '')
         adversarial_label = adv_results.get('adversarial_label', -1)
 
-    # Extract chosen geometry from coverd if not already set
-    if not chosen_geometry:
-        coverd_info = summary.get('coverd', {})
-        chosen_geom_dict = coverd_info.get('chosen_geometry', {})
-        if chosen_geom_dict:
-            geom_key = list(chosen_geom_dict.keys())[0] if chosen_geom_dict.keys() else ""
-            if geom_key.startswith('Geometry('):
-                chosen_geometry = geom_key[9:-1]  # Extract content between Geometry( and )
+    # Extract chosen geometry from coverd
+    chosen_geometry = ""
+    coverd_info = summary.get('coverd', {})
+    chosen_geom_dict = coverd_info.get('chosen_geometry', {})
+    if chosen_geom_dict:
+        geom_key = list(chosen_geom_dict.keys())[0] if chosen_geom_dict.keys() else ""
+        if geom_key.startswith('Geometry('):
+            chosen_geometry = geom_key[9:-1]  # Extract content between Geometry( and )
 
     # Insert detail data into ours_detail table
     _insert_ours_detail(net, img, eps, true_label, chosen_geometry, choosing_strategy_duration, planning_duration, iterating_covering_duration, summed_duration, handle_unk_combs_duration, waiting_milp_duration, proved_with_milp, waiting_for_milp, end_level, adversarial_pixel_values, adversarial_label, db)
-
-    # Insert candidate strategies
-    for strategy in summary.get('candidate_strategies', []):
-        s_use_cvd = strategy[1] == 'coverd'
-        s_starting_level = strategy[2] if isinstance(strategy[2], int) else int(strategy[2][-2])
-        s_estimated_time = strategy[0]
-        s_geometry = strategy[2][9:-1] if isinstance(strategy[2], str) and strategy[2].startswith('Geometry(') else ''
-        insert_strategies(net, img, eps, s_use_cvd, s_starting_level, s_estimated_time, s_geometry, db)
 
     # Insert candidate geometries
     for geometry in summary.get('candidate_geometries', []):
@@ -170,6 +158,15 @@ def store_ours_result(net: str, eps: int, img: int, result: dict, skip=True, db=
         g_mean_size = float(g_info_str.split("mean size ")[1])
         g_estimated_time = geometry.get("estimated_summed_duration", 0.0)
         insert_geometries(net, img, eps, g_geometry, g_estimated_time, g_num_blocks, g_mean_size, db)
+    if 'chosen_geometries' in summary:
+        strategy_geometries = {l:g[9:-1] for l,g in summary.get('chosen_geometries', {}).items()}
+        # Insert candidate strategies
+        for strategy in summary.get('candidate_strategies', []):
+            s_use_cvd = strategy[1] == 'coverd'
+            s_starting_level = strategy[2]
+            s_estimated_time = strategy[0]
+            s_geometry = strategy_geometries.get(s_starting_level, "") if s_use_cvd else ""
+            insert_strategies(net, img, eps, s_use_cvd, s_starting_level, s_estimated_time, s_geometry, db)
 
 def _should_skip(table: str, net: str, img: int, eps: int, db=DB_PATH) -> bool:
     query = f"SELECT skip FROM {table} WHERE net = ? AND img = ? AND eps = ?"
