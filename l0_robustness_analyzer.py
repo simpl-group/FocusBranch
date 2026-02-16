@@ -252,8 +252,7 @@ class LZeroRobustnessAnalyzer:
     def __choose_strategy(self,
         fraction_robust: dict[int, dict[int, float]],
         mean_time: dict[int, float],
-        success_rate: dict[int, float],
-        sbap_VT: dict[int,float]|None=None
+        success_rate: dict[int, float]
     ) -> tuple[dict[int,float], dict[int,int|None]]:
         RT: dict[int,float] = {self.__level: 0.}  # estimated refinement time
         VT: dict[int,float] = {self.__level: mean_time[self.__level]}  # estimated verification time
@@ -271,10 +270,6 @@ class LZeroRobustnessAnalyzer:
             RT[v] = min_refine_time
             refinement_strategy[v] = best_next_k
             VT[v] = mean_time[v] + min_refine_time * (1 - success_rate[v])
-            if sbap_VT is not None and v in sbap_VT and sbap_VT[v] * 0.95 <= VT[v]:  # tunable coefficient
-                VT[v] = sbap_VT[v]
-                RT[v] = 0.
-                refinement_strategy[v] = None
         return VT, refinement_strategy
 
     def __choose_geometry(self, VT: dict[int,float]) -> tuple[Geometry, list[dict[str, object]]]:
