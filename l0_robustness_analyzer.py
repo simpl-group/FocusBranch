@@ -64,7 +64,7 @@ class LZeroRobustnessAnalyzer:
         if all(sample_successes[i] != math.comb(self.__number_of_pixels, i) * len(self.__gpu_workers) for i in range(self.__t + 1)):
             # Sample super-nodes at levels with high concrete safe rate
             for l in range(self.__t + 1):
-                if CVD_MIN_T <= l <= CVD_MAX_T and concrete_safe_rate[l] > 0.99:  # tunable parameter TODO: SR<threshold but eps=max_T
+                if CVD_MIN_T <= l <= CVD_MAX_T and (concrete_safe_rate[l] > 0.99 or l == self.__t):
                     print(f'Sampling super-node on level {l}')
                     for gpu_worker in self.__gpu_workers:
                         gpu_worker.send(('sample-all-k', l))
