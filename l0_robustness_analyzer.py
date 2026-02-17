@@ -85,8 +85,6 @@ class LZeroRobustnessAnalyzer:
                 break  # this level is estimated to be 100% robust and verified, no need to go deeper
 
         candidate_strategies: list[tuple[float, str, int]] = []
-        def get_best_strategy():
-            return min(candidate_strategies, key=lambda s: s[0])
         candidate_geometries: list[dict[str, object]] = []
         # The keys are levels
         fraction_robusts: dict[int, dict[int, dict[int, float]]] = {}
@@ -114,10 +112,14 @@ class LZeroRobustnessAnalyzer:
                 candidate_strategies.append((round(coverd_time, 3), 'coverd', l))
         choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
         planning_duration = round(time.time() - self.analyzer_start_time, 3)
-        candidate_strategies = [(round(s[0] + planning_duration, 3), s[1], s[2]) for s in candidate_strategies]
-        best_strategy = get_best_strategy()
+        candidate_strategies = sorted(map(lambda s: (round(s[0] + planning_duration, 3), s[1], s[2]), candidate_strategies), key=lambda s: s[0])
+        # TODO: add any condition to filter out strategies
+        best_strategy = candidate_strategies[0]
+        candidate_strategies = list(filter(lambda s: s[0] <= self.__timeout * 10, candidate_strategies))  # filter out noise strategies
+        if len(candidate_strategies) == 0: candidate_strategies.append(best_strategy)  # at least have one strategy to show, even if it's an outlier
         self.__level = best_strategy[2]
         print(f"Planning stage took {planning_duration} s, choosing strategy duration: {choosing_strategy_duration} s, best strategy: {best_strategy}")
+        print(f"Candidate strategies: {candidate_strategies}")
 
         results = {
             'verified': best_strategy[1] == 'skip',
@@ -175,7 +177,6 @@ class LZeroRobustnessAnalyzer:
             print(
                 f'Chosen {chosen_geometries_info[self.__level]}; Operating on level: {self.__level}'
                 # f"\nCandidate geometries: {candidate_geometries}"
-                f"\nCandidate strategies: {list(filter(lambda s: s[0] < self.__timeout, candidate_strategies))}"
             )
             refinement_sizes = {v: self.covering_sizes[self.__level][(v, k)] for v, k in refinement_strategy.items() if k is not None}
             supercheck_stats_by_size = defaultdict(lambda: {'num_checked': 0, 'successes': 0, 'total_duration': 0.})
