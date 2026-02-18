@@ -26,7 +26,6 @@ if __name__ == '__main__':
     parser.add_argument('--base_seed', type=int, default=42, help='the base seed')
     parser.add_argument("--detail", action="store_true", help="Output detailed superset statistics for each image in a separate excel file.")
     parser.add_argument("--plan_only", action="store_true", help="Only run the planning stage without actual verification.")
-    parser.add_argument("--json", action="store_true", help="Store results in a JSON file.")
     parser.add_argument("--strategy", type=lambda s: Strategy[s], choices=list(Strategy), default=Strategy.CheSaP, help="the strategy to use for verification")
     args = parser.parse_args()
     if not ours_config_consistent(net=args.net, eps=args.epsilon, img=args.start_idx+args.test_batches-1, batch_size=args.batch_size, gpu_num=args.gpu_num, timeout=args.timeout, rk=args.rep_each_k, rl=args.rep_each_level):
@@ -34,7 +33,8 @@ if __name__ == '__main__':
         if not args.force_store and not args.demo:
             exit(1)
 
-    args.output = args.output.split(".")[0] + f"{args.net}_t{args.epsilon}b{args.batch_size}g{args.gpu_num}s{args.start_idx}n{args.test_batches}"
+    export_results = args.output != None
+    args.output = f"{args.net}e{args.epsilon}s{args.start_idx}_n{args.test_batches}b{args.batch_size}g{args.gpu_num}"
     ilogname = args.output.rsplit("s", 1)[0]
     args.output = args.output + ".json"
     args.rep_each_k = max(args.rep_each_k, args.batch_size)
@@ -151,7 +151,7 @@ if __name__ == '__main__':
 
     print('analysis precision ', verified_images, '/ ', correctly_classified_images)
 
-    if args.json:
+    if export_results:
         results = {
             'netname': args.net,
             't': args.epsilon,
