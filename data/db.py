@@ -112,7 +112,7 @@ def store_ours_result(net: str, eps: int, img: int, result: dict, skip=True, db=
 
     # Extract strategy info from best_strategy
     best_strategy = summary.get('best_strategy', [])
-    use_cvd = best_strategy[1] == 'coverd'
+    use_cvd = best_strategy[1] == 'SCSaP'
     starting_level = summary.get('starting_level', -1)
 
     # Insert main result into ours table
@@ -121,8 +121,8 @@ def store_ours_result(net: str, eps: int, img: int, result: dict, skip=True, db=
     # Extract detail data
     choosing_strategy_duration = summary.get('choosing_strategy_duration', 0.0)
     planning_duration = summary.get('planning_duration', 0.0)
-    iterating_covering_duration = summary.get('coverd', {}).get('iterating_covering_duration', 0.0)
-    summed_duration = summary.get('coverd', {}).get('summed_duration', 0.0)
+    iterating_covering_duration = summary.get('SCSaP', {}).get('iterating_covering_duration', 0.0)
+    summed_duration = summary.get('SCSaP', {}).get('summed_duration', 0.0)
     handle_unk_combs_duration = summary.get('handle_unk_combs_duration', 0.0)
     waiting_milp_duration = summary.get('waiting_milp_duration', 0.0)
     proved_with_milp = summary.get('proved_with_milp', 0)
@@ -139,7 +139,7 @@ def store_ours_result(net: str, eps: int, img: int, result: dict, skip=True, db=
 
     # Extract chosen geometry from coverd
     chosen_geometry = ""
-    coverd_info = summary.get('coverd', {})
+    coverd_info = summary.get('SCSaP', {})
     chosen_geom_dict = coverd_info.get('chosen_geometry', {})
     if chosen_geom_dict:
         geom_key = list(chosen_geom_dict.keys())[0] if chosen_geom_dict.keys() else ""
@@ -162,7 +162,7 @@ def store_ours_result(net: str, eps: int, img: int, result: dict, skip=True, db=
         strategy_geometries = {l:g[9:-1] for l,g in summary.get('chosen_geometries', {}).items()}
         # Insert candidate strategies
         for strategy in summary.get('candidate_strategies', []):
-            s_use_cvd = strategy[1] == 'coverd'
+            s_use_cvd = strategy[1] == 'SCSaP'
             s_starting_level = strategy[2]
             s_estimated_time = strategy[0]
             s_geometry = strategy_geometries.get(s_starting_level, "") if s_use_cvd else ""

@@ -468,7 +468,7 @@ class Verifier:
                 if message[0] == 'skip':
                     message = self.conn.recv()
                     continue
-                if message[0] == 'sbap':
+                if message[0] == 'CCSaP':
                     self.__level = int(message[1])
                     all_concrete_combs = torch.combinations(torch.arange(self.num_pixels), self.__level)
                     num2check_each = all_concrete_combs.shape[0] // num_workers
@@ -478,7 +478,7 @@ class Verifier:
                         concrete_combs = all_concrete_combs[worker_id * num2check_each: (worker_id + 1) * num2check_each]
                     del all_concrete_combs
                     prove_thread = threading.Thread(target=self.__prove_concrete_combs, args=(concrete_combs,), daemon=True)
-                elif message[0] == 'coverd':
+                elif message[0] == 'SCSaP':
                     _, geometry, chosen_indices, self.refinement_strategy = message
                     self.__level = geometry.t
                     self.max_size_to_batch = self.max_sizes_to_batch[self.__level]

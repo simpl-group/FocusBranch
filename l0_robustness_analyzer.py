@@ -10,6 +10,7 @@ import math
 import time
 import random
 from itertools import chain
+from enum import Enum, auto
 from collections import defaultdict
 from multiprocessing.connection import Connection
 import torch
@@ -21,8 +22,17 @@ from tqdm import tqdm
 CVD_MIN_T = 3
 CVD_MAX_T = 6
 
+class Strategy(Enum):
+    CheSaP = auto()
+    CCSaP  = auto()
+    SCSaP  = auto()
+    CoVerD = auto()
+
+    def __str__(self) -> str:
+        return self.name
+
 class LZeroRobustnessAnalyzer:
-    def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int, plan_only: bool, greater_batch: int):
+    def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int, plan_only: bool, greater_batch: int, strategy: Strategy):
         self.__gpu_workers = gpu_workers
         self.__cpu_workers = cpu_workers
         self.__t = t
@@ -30,6 +40,7 @@ class LZeroRobustnessAnalyzer:
         self.__number_of_pixels = num_pixels
         self.__refinement_db_max_v = max_k
         self.__plan_only = plan_only
+        self.__strategy = strategy
         self.covering_sizes = {t:load_covering_sizes(t, clipping_size=500000) for t in range(CVD_MIN_T, min(self.__t + 1, CVD_MAX_T + 1))}
         generator_launch_time, skipping_iter_speed, normal_iter_speed = estimate_generator_speed(Geometry(7,5,5), num_workers=len(gpu_workers), num_pixels=num_pixels)
         self.cvd_extra_time = lambda geometry: generator_launch_time + estimate_extra_time(geometry, num_workers=len(gpu_workers), num_pixels=num_pixels, greater_batch=greater_batch, skipping_iter_speed=skipping_iter_speed, iter_speed=normal_iter_speed)
@@ -99,8 +110,8 @@ class LZeroRobustnessAnalyzer:
                 candidate_strategies.append((estimated_time_per_level[l], 'skip', l))
                 break
             tail_time = sum(estimated_time_per_level[l + 1:])
-            sbap_time = (mean_concrete_check_time[l] * math.comb(self.__number_of_pixels, l) + tail_time) / len(self.__gpu_workers)
-            candidate_strategies.append((sbap_time, 'sbap', l))
+            CCSaP_time = (mean_concrete_check_time[l] * math.comb(self.__number_of_pixels, l) + tail_time) / len(self.__gpu_workers)
+            candidate_strategies.append((CCSaP_time, 'CCSaP', l))
             if l in super_success_rate:
                 self.__level = l
                 fraction_robusts[l] = self.__compute_fraction_robust(super_success_rate[l])
@@ -108,12 +119,17 @@ class LZeroRobustnessAnalyzer:
                 chosen_geometries[l], geometries_data = self.__choose_geometry(VTs[l])
                 chosen_geometries_info[l] = geometries_data[0]
                 candidate_geometries.extend(geometries_data)
-                coverd_time: float = (chosen_geometries_info[l]["estimated_summed_duration"] + tail_time) / len(self.__gpu_workers) + self.cvd_extra_time(chosen_geometries[l])
-                candidate_strategies.append((round(coverd_time, 3), 'coverd', l))
+                SCSaP_time: float = (chosen_geometries_info[l]["estimated_summed_duration"] + tail_time) / len(self.__gpu_workers) + self.cvd_extra_time(chosen_geometries[l])
+                candidate_strategies.append((round(SCSaP_time, 3), 'SCSaP', l))
         choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
         planning_duration = round(time.time() - self.analyzer_start_time, 3)
         candidate_strategies = sorted(map(lambda s: (round(s[0] + planning_duration, 3), s[1], s[2]), candidate_strategies), key=lambda s: s[0])
-        # TODO: add any condition to filter out strategies
+        if self.__strategy == Strategy.CCSaP:
+            candidate_strategies = list(filter(lambda s: s[1] == 'CCSaP', candidate_strategies))
+        elif self.__strategy == Strategy.SCSaP:
+            candidate_strategies = list(filter(lambda s: s[1] == 'SCSaP', candidate_strategies))
+        elif self.__strategy == Strategy.CoVerD:
+            candidate_strategies = list(filter(lambda s: s[1] == 'SCSaP' and s[2] == self.__t, candidate_strategies))
         best_strategy = candidate_strategies[0]
         candidate_strategies = list(filter(lambda s: s[0] <= self.__timeout * 10, candidate_strategies))  # filter out noise strategies
         if len(candidate_strategies) == 0: candidate_strategies.append(best_strategy)  # at least have one strategy to show, even if it's an outlier
@@ -136,7 +152,7 @@ class LZeroRobustnessAnalyzer:
             results['candidate_geometries'] = candidate_geometries
 
         # to be deleted later if needed
-        if best_strategy[1] == 'sbap' and best_strategy[2] >= 4 or best_strategy[0] > self.__timeout:
+        if best_strategy[1] == 'CCSaP' and best_strategy[2] >= 4 or best_strategy[0] > self.__timeout:
             results['timed_out'] = True
             print(f'{best_strategy[1]} at level {best_strategy[2]} estimated to take too long, skipping this image.')
 
@@ -155,9 +171,9 @@ class LZeroRobustnessAnalyzer:
         cpu_handler_thread = threading.Thread(target=self.__handle_cpu_workers_messages, args=(self.analyzer_start_time,))
         cpu_handler_thread.start()
 
-        if best_strategy[1] == 'sbap':
+        if best_strategy[1] == 'CCSaP':
             for gpu_worker in self.__gpu_workers:
-                gpu_worker.send(('sbap', self.__level))  # no geometry, no refinement strategy
+                gpu_worker.send(('CCSaP', self.__level))  # no geometry, no refinement strategy
             current_level_start_time = time.time()
             # collect all unknown combinations
             unk_combs_lst: list[np.ndarray] = []
@@ -166,13 +182,13 @@ class LZeroRobustnessAnalyzer:
             unk_combs = np.vstack(unk_combs_lst)
             print(f'Level {self.__level} finished, unk_combs/all: {unk_combs.shape[0]}/{math.comb(self.__number_of_pixels, self.__level)}'
                 f' using {round(time.time() - current_level_start_time, 3)} s')
-        elif best_strategy[1] == 'coverd':
+        elif best_strategy[1] == 'SCSaP':
             chosen_geometry, refinement_strategy = chosen_geometries[self.__level], refinement_strategies[self.__level]
             assert self.__level == min(refinement_strategy.keys()), f"Level mismatch: {self.__level} vs {min(refinement_strategy.keys())}"
             chosen_indices = random.sample(range(chosen_geometry.number_of_points()), self.__number_of_pixels)
             random.shuffle(chosen_indices)
             for gpu_worker in self.__gpu_workers:
-                gpu_worker.send(('coverd', chosen_geometry, chosen_indices, refinement_strategy))
+                gpu_worker.send(('SCSaP', chosen_geometry, chosen_indices, refinement_strategy))
 
             print(
                 f'Chosen {chosen_geometries_info[self.__level]}; Operating on level: {self.__level}'
@@ -186,7 +202,7 @@ class LZeroRobustnessAnalyzer:
             iterating_covering_duration = round(time.time() - iterating_covering_start_time, 3)
             summed_duration = round(sum(stats['total_duration'] for stats in supercheck_stats_by_size.values()), 3)
             print(f'GPU iterating coverings took {iterating_covering_duration} s, Summed duration (all gpu workers): {summed_duration} s')
-            results['coverd'] = {
+            results['SCSaP'] = {
                 'chosen_geometry': chosen_geometries_info[self.__level],
                 'iterating_covering_duration': iterating_covering_duration,
                 'summed_duration': summed_duration
@@ -207,7 +223,7 @@ class LZeroRobustnessAnalyzer:
         else: assert False, f'Unknown best strategy: {best_strategy}'
 
         handle_unk_combs_start = time.time()
-        self.__handle_unk_combs(unk_combs, deduplicate=best_strategy[1] == 'coverd')
+        self.__handle_unk_combs(unk_combs, deduplicate=best_strategy[1] == 'SCSaP')
         self.unk_combs_settled.set()
         handle_unk_combs_duration = round(time.time() - handle_unk_combs_start, 3)
         waiting_milp_start = time.time()
@@ -359,7 +375,7 @@ class LZeroRobustnessAnalyzer:
                             num_failed = num_checked - num_verified
                             if num_failed > 0:  # to be refined later, add to total covering size
                                 total_covering_size += refinement_sizes[num_indices] * num_failed
-                        else:  # handled by sbap verifier, could be in a batch
+                        else:  # handled by CCSaP verifier, could be in a batch
                             num_finished += num_checked
                             size_statistics['num_checked'] += num_checked
                             size_statistics['total_duration'] += duration

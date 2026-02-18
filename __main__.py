@@ -3,7 +3,7 @@ import sys
 import os
 import argparse
 import warnings
-from l0_robustness_analyzer import LZeroRobustnessAnalyzer
+from l0_robustness_analyzer import LZeroRobustnessAnalyzer, Strategy
 from multiprocessing.connection import Listener
 from subprocess import Popen
 import json
@@ -27,6 +27,7 @@ if __name__ == '__main__':
     parser.add_argument("--detail", action="store_true", help="Output detailed superset statistics for each image in a separate excel file.")
     parser.add_argument("--plan_only", action="store_true", help="Only run the planning stage without actual verification.")
     parser.add_argument("--json", action="store_true", help="Store results in a JSON file.")
+    parser.add_argument("--strategy", type=lambda s: Strategy[s], choices=list(Strategy), default=Strategy.CheSaP, help="the strategy to use for verification")
     args = parser.parse_args()
     if not ours_config_consistent(net=args.net, eps=args.epsilon, img=args.start_idx+args.test_batches-1, batch_size=args.batch_size, gpu_num=args.gpu_num, timeout=args.timeout, rk=args.rep_each_k, rl=args.rep_each_level):
         warnings.warn(f"Configuration inconsistent: net={args.net}, eps={args.epsilon}, img={args.start_idx+args.test_batches-1}, timeout={args.timeout}, batch_size={args.batch_size}, gpu_num={args.gpu_num}, rk={args.rep_each_k}, rl={args.rep_each_level}.")
@@ -83,7 +84,8 @@ if __name__ == '__main__':
         max_k=args.max_k,
         num_pixels=dataset_utils.num_pixels,
         plan_only=args.plan_only,
-        greater_batch=10*args.batch_size
+        greater_batch=10*args.batch_size,
+        strategy=args.strategy
     )
 
     image_results_by_image_index = {}
