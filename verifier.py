@@ -1,5 +1,5 @@
 from AbstractInterpreter import L0BoundedInput, SequentialAT
-from split_and_prune import split_and_prune
+from split_and_prune import split_and_prune, prepare4pruning, prune
 from bimm import combs2bitmasks
 from covering_generator import launch_covering_generator
 from data import load_covering
@@ -496,8 +496,17 @@ class Verifier:
                             if hasattr(self, 'blocks_generator_process') and self.blocks_generator_process.poll() is None:  # means still running
                                 self.blocks_generator_process.terminate()
                             break
+                        if message[0] == 'SaP&CC':
+                            new_combs, reference_bitmasks, target_s_cnt = prepare4pruning(torch.from_numpy(message[1]), self.num_pixels)
+                            # stepping on new_combs before pruning can make each worker's pruned_combs.shape[0] roughly the same, which can slightly speed up the proving process since the workload is more balanced among workers.
+                            new_combs = new_combs.to(self.device)[worker_id::num_workers].contiguous() # faster than on CPU.
+                            pruned_combs = prune(new_combs, reference_bitmasks, target_s_cnt, self.__level)
+                            self.conn.send(pruned_combs.shape[0])
+                        elif message[0] == 'CC':
+                            pruned_combs = torch.from_numpy(message[1])
+                        else: assert False, f"Unknown message {message}"
                         self.__level += 1
-                        prove_thread = threading.Thread(target=self.__prove_concrete_combs, args=(torch.from_numpy(message),), daemon=True)
+                        prove_thread = threading.Thread(target=self.__prove_concrete_combs, args=(pruned_combs,), daemon=True)
                         prove_thread.start()
                 prove_thread.join()
                 self.conn.send('stopped')

@@ -121,7 +121,8 @@ class LZeroRobustnessAnalyzer:
                 candidate_strategies.append((estimated_CC_time_per_l[l], 'skip', l))
                 break
             tail_CC_time = sum(estimated_CC_time_per_l[l + 1:])
-            tail_SaP_time = sum(estimated_SaP_time_per_l[l:])  # TODO: share workload across all GPU workers
+            tail_SaP_time = sum(estimated_SaP_time_per_l[l:])
+            if tail_SaP_time > 1.0: tail_SaP_time /= len(self.__gpu_workers)
             CCSaP_time = (mean_concrete_check_time[l] * math.comb(self.__number_of_pixels, l) + tail_CC_time) / len(self.__gpu_workers) + tail_SaP_time
             candidate_strategies.append((CCSaP_time, 'CCSaP', l))
             if l in super_success_rate:
@@ -238,13 +239,13 @@ class LZeroRobustnessAnalyzer:
         self.__handle_unk_combs(unk_combs, deduplicate=best_strategy[1] == 'SCSaP')
         self.unk_combs_settled.set()
         handle_unk_combs_duration = round(time.time() - handle_unk_combs_start, 3)
-        waiting_milp_start = time.time()
-        cpu_handler_thread.join()
-        waiting_milp_duration = round(time.time() - waiting_milp_start, 3)
-
         if handle_unk_combs_duration > 0.01:
             print(f'Handling unk_combs duration: {handle_unk_combs_duration} s.')
             results['handle_unk_combs_duration'] = handle_unk_combs_duration
+
+        waiting_milp_start = time.time()
+        cpu_handler_thread.join()
+        waiting_milp_duration = round(time.time() - waiting_milp_start, 3)
         if waiting_milp_duration > 0.1:
             print(f'Waiting for MILP duration: {waiting_milp_duration} s.')
             results['waiting_milp_duration'] = waiting_milp_duration
@@ -405,29 +406,39 @@ class LZeroRobustnessAnalyzer:
             print(f'After deduplication, unk_combs size: {unk_combs_tensor.shape[0]}')
         while unk_combs_tensor.shape[0] > 0 and self.__level < self.__t and not self.timed_out():
             new_level_start_time = time.time()
-            new_combs_tensor, reference_bitmasks, target_s_cnt = prepare4pruning(unk_combs_tensor, self.__number_of_pixels)
-            if new_combs_tensor.shape[0] == 0: return
-            if self.estimate_pruning_time(new_combs_tensor.shape[0], unk_combs_tensor.shape[0], self.__level) > 1.0:
-                # TODO: share the workload across all GPU workers to speed up pruning
-                new_combs = prune(new_combs_tensor, reference_bitmasks, target_s_cnt, self.__level).numpy()
+            if self.__level > 1 and self.estimate_SaP_time(unk_combs_tensor.shape[0], self.__level) > 1.0:
+                print(f'Level {self.__level} estimated SaP time: {self.estimate_SaP_time(unk_combs_tensor.shape[0], self.__level):3f} s. Sharing SaP workload across all GPU workers...')
+                for i, gpu_worker in enumerate(self.__gpu_workers):
+                    gpu_worker.send(('SaP&CC', unk_combs_tensor.numpy()))
+                num_new_combs_per_worker = [0] * len(self.__gpu_workers)
+                for i, gpu_worker in enumerate(self.__gpu_workers):
+                    num_new_combs_per_worker[i] = gpu_worker.recv()
+                concrete_check_start_time = time.time()
+                SaP_duration = round(concrete_check_start_time - new_level_start_time, 3)
+                self.__level += 1
+                num_pruned = sum(num_new_combs_per_worker)
+                print(f'Current level: {self.__level}, SaP duration: {SaP_duration}s, num_pruned: {num_pruned}, each worker got: {num_new_combs_per_worker}')
             else:
-                new_combs = prune(new_combs_tensor, reference_bitmasks, target_s_cnt, self.__level).numpy()
-            if new_combs.shape[0] == 0: return
-            concrete_check_start_time = time.time()
-            pruning_duration = round(concrete_check_start_time - new_level_start_time, 3)
-            self.__level += 1
-            print(f'Current level: {self.__level}, pruning duration: {pruning_duration}s, new_combs size: {new_combs.shape[0]}')
-            for i, gpu_worker in enumerate(self.__gpu_workers):
-                num_each = new_combs.shape[0] // len(self.__gpu_workers)
-                if i == len(self.__gpu_workers) - 1:
-                    gpu_worker.send(new_combs[i * num_each : ])
-                else:
-                    gpu_worker.send(new_combs[i * num_each : (i + 1) * num_each])
+                new_combs_tensor, reference_bitmasks, target_s_cnt = prepare4pruning(unk_combs_tensor, self.__number_of_pixels)
+                if new_combs_tensor.shape[0] == 0: return
+                pruned_combs = prune(new_combs_tensor, reference_bitmasks, target_s_cnt, self.__level).numpy()
+                if pruned_combs.shape[0] == 0: return
+                concrete_check_start_time = time.time()
+                SaP_duration = round(concrete_check_start_time - new_level_start_time, 3)
+                self.__level += 1
+                num_pruned = pruned_combs.shape[0]
+                print(f'Current level: {self.__level}, SaP duration: {SaP_duration}s, num_pruned: {num_pruned}')
+                for i, gpu_worker in enumerate(self.__gpu_workers):
+                    num_each = pruned_combs.shape[0] // len(self.__gpu_workers)
+                    if i == len(self.__gpu_workers) - 1:
+                        gpu_worker.send(('CC', pruned_combs[i * num_each :]))
+                    else:
+                        gpu_worker.send(('CC', pruned_combs[i * num_each : (i + 1) * num_each]))
             unk_combs_lst: list[np.ndarray] = []
             for gpu_worker in self.__gpu_workers:
                 unk_combs_lst.append(gpu_worker.recv())  # wait for gpu workers to finish
             unk_combs_tensor = torch.from_numpy(np.vstack(unk_combs_lst))
-            print(f'Level {self.__level} finished, unk_combs/all: {unk_combs_tensor.shape[0]}/{new_combs.shape[0]}'
+            print(f'Level {self.__level} finished, unk_combs/all: {unk_combs_tensor.shape[0]}/{num_pruned}'
                 f' using {round(time.time() - new_level_start_time, 3)} s, checking duration: {round(time.time() - concrete_check_start_time, 3)} s')
         if self.__level == self.__t and unk_combs_tensor.shape[0] > 0:
             print(f'Checked deepest level {self.__t}, remaining unk_combs size: {unk_combs_tensor.shape[0]}')
