@@ -10,6 +10,7 @@ import json
 import itertools
 import time
 import random
+from torch.cuda import device_count
 import pandas as pd
 from utils.shared import add_shared_arguments
 from data.db import store_ours_result, ours_should_skip, ours_config_consistent
@@ -33,8 +34,15 @@ if __name__ == '__main__':
         if not args.force_store and not args.demo:
             exit(1)
 
+    if "CUDA_VISIBLE_DEVICES" in os.environ:
+        available_gpus = [int(x) for x in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if x.strip().isdigit()]
+    else:
+        available_gpus = list(range(device_count()))
+    if len(available_gpus) < args.gpu_num:
+        warnings.warn(f"Requested {args.gpu_num} GPU workers but only {len(available_gpus)} GPU are available.")
+
     export_results = args.output != None
-    args.output = f"{args.net}e{args.epsilon}s{args.start_idx}_n{args.test_batches}b{args.batch_size}g{args.gpu_num}"
+    args.output = f"{args.output if args.output else ''}{args.net}e{args.epsilon}s{args.start_idx}_n{args.test_batches}b{args.batch_size}g{args.gpu_num}"
     ilogname = args.output.rsplit("s", 1)[0]
     args.output = args.output + ".json"
     args.rep_each_k = max(args.rep_each_k, args.batch_size)
@@ -43,7 +51,7 @@ if __name__ == '__main__':
     with Listener(address) as gpu_listener, Listener(address) as cpu_listener:
         for worker_id in range(args.gpu_num):
             my_env = os.environ.copy()
-            my_env["CUDA_VISIBLE_DEVICES"] = str(worker_id % args.gpu_num)
+            my_env["CUDA_VISIBLE_DEVICES"] = str(available_gpus[worker_id % len(available_gpus)])
             Popen([
                 sys.executable, verifier_file,
                 "--worker_id", str(worker_id),
