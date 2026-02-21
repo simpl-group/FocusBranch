@@ -1,3 +1,14 @@
+CREATE TABLE IF NOT EXISTS sigma0 (
+    net TEXT,
+    img INTEGER,
+    min_eps INTEGER DEFAULT 500,
+    total_duration REAL DEFAULT 0,
+    true_label INTEGER DEFAULT -1,
+    adversarial_label INTEGER DEFAULT -1,
+    seed INTEGER DEFAULT 0,
+    PRIMARY KEY (net, img)
+);
+
 CREATE TABLE IF NOT EXISTS ours_config (
     net TEXT,
     eps INTEGER,

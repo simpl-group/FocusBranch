@@ -21,6 +21,17 @@ def _insert_row(table_name, columns, values, db=DB_PATH, timeout=30, retries=4):
             else:
                 raise e
 
+def insert_sigma0(net: str, img: int, min_eps: int, true_label=-1, adversarial_label=-1, total_duration=0.0, seed=0, db=DB_PATH):
+    columns = ["net", "img", "min_eps", "true_label", "adversarial_label", "total_duration", "seed"]
+    values = [net, img, min_eps, true_label, adversarial_label, total_duration, seed]
+    _insert_row("sigma0", columns, values, db=db)
+
+def sigma0_min_eps(net: str, img: int, db=DB_PATH) -> int | None:
+    query = "SELECT min_eps FROM sigma0 WHERE net = ? AND img = ?"
+    with sqlite3.connect(db) as c:
+        result = c.execute(query, (net, img)).fetchone()
+    return result[0] if result else None
+
 def insert_lirpa(net: str, img: int, eps: int, cc=True, verified=False, timed_out=False, total_duration=0.0, db=DB_PATH):
     columns = ["net", "img", "eps", "cc", "verified", "timed_out", "total_duration", "skip"]
     values = [net, img, eps, int(cc), int(verified), int(timed_out), total_duration, 1]
@@ -168,16 +179,13 @@ def store_ours_result(net: str, eps: int, img: int, result: dict, skip=True, db=
             s_geometry = strategy_geometries.get(s_starting_level, "") if s_use_cvd else ""
             insert_strategies(net, img, eps, s_use_cvd, s_starting_level, s_estimated_time, s_geometry, db)
 
-def _should_skip(table: str, net: str, img: int, eps: int, db=DB_PATH) -> bool:
-    query = f"SELECT skip FROM {table} WHERE net = ? AND img = ? AND eps = ?"
-    with sqlite3.connect(db) as c:
-        result = c.execute(query, (net, img, eps)).fetchone()
-    return result and result[0] == 1
-
 def _make_should_skip(table: str):
     """Factory function to create should_skip checkers for different tables."""
     def should_skip(net: str, img: int, eps: int, db=DB_PATH) -> bool:
-        return _should_skip(table, net, img, eps, db)
+        query = f"SELECT skip FROM {table} WHERE net = ? AND img = ? AND eps = ?"
+        with sqlite3.connect(db) as c:
+            result = c.execute(query, (net, img, eps)).fetchone()
+        return result and result[0] == 1
     return should_skip
 
 ours_should_skip = _make_should_skip("ours")

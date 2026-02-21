@@ -13,7 +13,7 @@ import random
 from torch.cuda import device_count
 import pandas as pd
 from utils.shared import add_shared_arguments
-from data.db import store_ours_result, ours_should_skip, ours_config_consistent
+from data.db import store_ours_result, ours_should_skip, ours_config_consistent, sigma0_min_eps, insert_ours
 from data.prepare import build_loader
 from models import get_network_and_dataset_utils
 from solver_check import launch_gurobi_worker
@@ -113,6 +113,12 @@ if __name__ == '__main__':
         skip = ours_should_skip(net=args.net, img=i, eps=args.epsilon)
         if skip:
             warnings.warn(f"Image {i} for net={args.net}, eps={args.epsilon} should be skipped.")
+        else:
+            adv_min_eps = sigma0_min_eps(net=args.net, img=i)
+            if adv_min_eps is not None and adv_min_eps <= args.epsilon:
+                warnings.warn(f"Image {i} already has a known adversarial example with eps={adv_min_eps} <= epsilon={args.epsilon}. Skipping analysis.")
+                skip = True
+                insert_ours(net=args.net, img=i, eps=adv_min_eps, found_adv=True, use_cvd=-1)
         if not skip or args.force_store or args.demo:
             if is_correctly_classified:
                 correctly_classified_images += 1
