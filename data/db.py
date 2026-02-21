@@ -76,7 +76,7 @@ def insert_ours(net: str, img: int, eps: int, cc=True, estimated_time=0.0, use_c
     if not skip:  # plan_only
         with sqlite3.connect(db) as conn:
             result = conn.execute("SELECT time_limit_seconds FROM ours_config WHERE net = ? AND eps = ?", (net, eps)).fetchone()
-        if estimated_time > result[0] or verified: # estimated_timed_out skip or end_level 0 or 1 skip -> equivalent to actually ran
+        if estimated_time > result[0] * 2 or verified: # estimated_timed_out skip or end_level 0 or 1 skip -> equivalent to actually ran
             skip = True
     _use_cvd = int(use_cvd) if cc else -1
     columns = ["net", "img", "eps", "cc", "estimated_time", "use_cvd", "starting_level", "skip", "verified", "timed_out", "found_adv", "total_duration"]
