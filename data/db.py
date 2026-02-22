@@ -246,6 +246,7 @@ def coverd_config_consistent(net: str, eps: int, img: int, gpu_num: int, timeout
 
 def main():
     parser = argparse.ArgumentParser(description="DB helper")
+    parser.add_argument("--database", "-db", metavar="FILE", help="Path to SQLite database file")
     parser.add_argument("--init", action="store_true", help="Initialize database schema")
     parser.add_argument("--select", '-s', metavar="COLUMNS", default="*", help="Columns to select")
     parser.add_argument("--from", '-f', dest="from_table", metavar="TABLE", help="Table to select from")
@@ -257,8 +258,10 @@ def main():
     parser.add_argument("--export", '-e', metavar="FILE", help="Export rows to SQL file with INSERT OR REPLACE statements (use with -f and optionally -w)")
     args = parser.parse_args()
 
+    db_path = args.database or DB_PATH
+
     if args.init:
-        with sqlite3.connect(DB_PATH) as c:
+        with sqlite3.connect(db_path) as c:
             c.executescript(open(DB_SCHEMA_PATH).read())
         return None
 
@@ -272,7 +275,7 @@ def main():
         if confirm not in ['yes', 'y']:
             print("Operation cancelled.")
             return None
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(db_path) as conn:
             conn.execute(query)
             conn.commit()
         print(f"Executed: {query}")
@@ -295,14 +298,14 @@ def main():
 
         sql_input = "\n".join(sql_commands)
 
-        subprocess.run(['sqlite3', DB_PATH], input=sql_input.encode(), check=True)
+        subprocess.run(['sqlite3', db_path], input=sql_input.encode(), check=True)
 
         # Count rows for feedback
         count_query = f"SELECT COUNT(*) FROM {args.from_table}"
         if args.where:
             count_query += f" WHERE {args.where}"
 
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(db_path) as conn:
             count = conn.execute(count_query).fetchone()[0]
 
         print(f"Exported {count} rows from {args.from_table} to {args.export}")
@@ -317,11 +320,11 @@ def main():
         if args.limit is not None:
             query += f" LIMIT {args.limit}"
 
-        subprocess.run(['sqlite3', DB_PATH, '-header', '-column', '-nullvalue', 'NULL', query])
+        subprocess.run(['sqlite3', db_path, '-header', '-column', '-nullvalue', 'NULL', query])
         return None
 
     if args.query:
-        subprocess.run(['sqlite3', DB_PATH, '-header', '-column', '-nullvalue', 'NULL', args.query])
+        subprocess.run(['sqlite3', db_path, '-header', '-column', '-nullvalue', 'NULL', args.query])
         return None
 
     if args.select and args.select != "*":
