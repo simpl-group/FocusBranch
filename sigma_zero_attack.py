@@ -111,7 +111,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Sample-wise (local) L0 robustness verification for neural networks', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     add_shared_arguments(parser)
     parser.add_argument('--base_seed', type=int, default=42, help='the base seed')
-    parser.add_argument('--step', type=int, default=1000, help='the number of steps for the attack')
+    parser.add_argument('--step', type=int, default=100, help='the number of steps for the attack')
     parser.add_argument("--verbose", '-v', action="store_true", help="Output verbose logs during the attack.")
     args = parser.parse_args()
     net, dataset_utils = get_network_and_dataset_utils(args.net)
@@ -130,7 +130,7 @@ if __name__ == '__main__':
         i = args.start_idx + _i
         print(f"{_i+1:3}/{args.test_batches:3} Image{i:3}", end=': ', flush=True)
         if not net(image).argmax(dim=1).eq(true_label).all().item():
-            print(f"Misclassified, skipping.")
+            print(f"Misclassified, skipping.", end='\r', flush=True)
             continue
         previous_eps = sigma0_min_eps(net=args.net, img=i)
         if previous_eps is not None:
@@ -151,7 +151,8 @@ if __name__ == '__main__':
             adversarial_pixel_values: dict[int, float] = {idx.item(): adv_image.flatten()[idx].item() for idx in (delta.flatten(1).ne(0)).nonzero(as_tuple=True)[1]}
             print(f"Adversarial indices and values: {adversarial_pixel_values}")
         if not args.force_store and (args.demo or previous_eps is not None and min_eps >= previous_eps):
-            print("Results NOT stored.")
+            print("Results NOT stored", end='\r', flush=True)
         else:
             insert_sigma0(net=args.net, img=i, min_eps=min_eps, true_label=true_label.item(), adversarial_label=adv_label, total_duration=duration, seed=args.base_seed)
-            print("Results stored.")
+            print("Results stored    ")
+    print(" "*120, end='\r', flush=True)
