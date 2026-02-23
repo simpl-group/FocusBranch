@@ -214,7 +214,7 @@ class LZeroRobustnessAnalyzer:
             unk_combs = self.__handle_gpu_workers_messages(supercheck_stats_by_size, chosen_geometry.number_of_blocks(), refinement_strategy, refinement_sizes)
             iterating_covering_duration = round(time.time() - iterating_covering_start_time, 3)
             summed_duration = round(sum(stats['total_duration'] for stats in supercheck_stats_by_size.values()), 3)
-            print(f'GPU iterating coverings took {iterating_covering_duration} s, Summed duration (all gpu workers): {summed_duration} s')
+            print(f'GPU iterating coverings took {iterating_covering_duration} s, Summed duration (all gpu workers): {summed_duration} s', flush=True)
             results['SCSaP'] = {
                 'chosen_geometry': chosen_geometries_info[self.__level],
                 'iterating_covering_duration': iterating_covering_duration,

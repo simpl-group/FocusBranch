@@ -17,7 +17,7 @@ done
 
 net=bcv4
 for seed in $(seq $seed_start $seed_end); do
-    logfile="$logpath/${net}_seed${seed}.log"
+    logfile="$logpath/${net}.log"
     echo "$(date): Running: net=$net seed=$seed -> $logfile          " | tee -a "$logfile"
     python sigma_zero_attack.py --net "$net" -e 1 -tb 10 --step 100 --base_seed $seed >> "$logfile" 2>&1
 done
