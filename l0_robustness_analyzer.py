@@ -215,6 +215,8 @@ class LZeroRobustnessAnalyzer:
             iterating_covering_duration = round(time.time() - iterating_covering_start_time, 3)
             summed_duration = round(sum(stats['total_duration'] for stats in supercheck_stats_by_size.values()), 3)
             print(f'GPU iterating coverings took {iterating_covering_duration} s, Summed duration (all gpu workers): {summed_duration} s', flush=True)
+            if self.milp_job_queue.unfinished_tasks > 0:
+                print(f'Waiting for MILP jobs to finish, remaining: {self.milp_job_queue.unfinished_tasks}', flush=True)
             results['SCSaP'] = {
                 'chosen_geometry': chosen_geometries_info[self.__level],
                 'iterating_covering_duration': iterating_covering_duration,
@@ -246,6 +248,8 @@ class LZeroRobustnessAnalyzer:
         waiting_milp_start = time.time()
         cpu_handler_thread.join()
         waiting_milp_duration = round(time.time() - waiting_milp_start, 3)
+        if self.milp_job_queue.unfinished_tasks > 0:
+            print(f'MILP jobs unfinished: {self.milp_job_queue.unfinished_tasks}')
         if waiting_milp_duration > 0.1:
             print(f'Waiting for MILP duration: {waiting_milp_duration} s.')
             results['waiting_milp_duration'] = waiting_milp_duration
