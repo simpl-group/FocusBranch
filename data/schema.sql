@@ -227,11 +227,13 @@ INSERT OR REPLACE INTO ours_config (net, eps, batch_size, gpu_num, time_limit_se
 ('bcv6', 3, 200, 4, 1800, 200, 500, 100),
 ('bcv6', 4, 200, 4, 1800, 200, 500, 100),
 ('bcv6', 5, 200, 4, 1800, 200, 500, 100),
+('bcv6', 6, 200, 4, 1800, 200, 500, 100),
 ('bcv7', 1, 200, 4, 1800, 200, 500, 100),
 ('bcv7', 2, 200, 4, 1800, 200, 500, 100),
 ('bcv7', 3, 200, 4, 1800, 200, 500, 100),
 ('bcv7', 4, 200, 4, 1800, 200, 500, 100),
-('bcv7', 5, 200, 4, 1800, 200, 500, 100);
+('bcv7', 5, 200, 4, 1800, 200, 500, 100),
+('bcv7', 6, 200, 4, 1800, 200, 500, 100);
 
 INSERT OR REPLACE INTO lirpa_config (net, eps, method, time_limit_seconds, max_iteration, num_img) VALUES
 ('afc1', 1, 'CROWN-Optimized', 1800, 1000, 100),
