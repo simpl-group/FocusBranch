@@ -82,7 +82,7 @@ def insert_ours(net: str, img: int, eps: int, cc=True, estimated_time=0.0, use_c
     columns = ["net", "img", "eps", "cc", "estimated_time", "use_cvd", "starting_level", "skip", "verified", "timed_out", "found_adv", "total_duration"]
     values = [net, img, eps, int(cc), estimated_time, _use_cvd, starting_level, int(skip), int(verified), int(timed_out), int(found_adv), total_duration]
     _insert_row("ours", columns, values, db=db)
-    if found_adv or not cc:
+    if timed_out or found_adv or not cc:  # keep timed_out here for now
         with sqlite3.connect(db) as conn:
             result = conn.execute("SELECT max(eps) FROM ours_config WHERE net = ?", (net,)).fetchone()
         assert result and result[0] is not None
