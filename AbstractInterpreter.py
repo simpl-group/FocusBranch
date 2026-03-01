@@ -93,7 +93,11 @@ class L0BoundedInput(BoundedInput):
                 f"and at most {self.x.shape[1]}, but got {partial_indices.shape[-1]}."
             if partial_indices.device != self.device:
                 partial_indices = partial_indices.to(self.device)
+            if self.channel_size > 1:
+                partial_indices = partial_indices * self.channel_size
             if partial_indices.ndim == 1:
+                if self.channel_size > 1:
+                    partial_indices = partial_indices.repeat_interleave(self.channel_size) + torch.arange(self.channel_size, device=self.device).repeat(partial_indices.numel())
                 self.U_X = self.__U_X[:, :, partial_indices]
                 self.L_X = self.__L_X[:, :, partial_indices]
             elif partial_indices.ndim == 2:  # (batch_size, num_partial_pixels): batched partial
@@ -101,6 +105,8 @@ class L0BoundedInput(BoundedInput):
                 if self.batch_size != partial_batch_size:
                     self.__update_batch_size(partial_batch_size)
                 partial_indices = partial_indices.unsqueeze(1)  # (batch_size, 1, num_partial_pixels)
+                if self.channel_size > 1:
+                    partial_indices = partial_indices.repeat_interleave(self.channel_size, dim=2) + torch.arange(self.channel_size, device=self.device).repeat(partial_indices.shape[0], 1, partial_indices.shape[2])
                 self.U_X = self.__U_X.expand(self.batch_size, 1, -1).gather(dim=2, index=partial_indices)
                 self.L_X = self.__L_X.expand(self.batch_size, 1, -1).gather(dim=2, index=partial_indices)
             else: assert False  # should not happen, partial_indices should be 1D or 2D tensor
@@ -148,7 +154,7 @@ class L0BoundedInput(BoundedInput):
             # 2. only have all rpw, but pass in partial indices and level to compute_udiff
             WX_diff = torch.where(rpW > 0, rpW * self.__U_X, rpW * self.__L_X)
             if self.channel_size > 1:
-                WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, self.num_pixels).sum(dim=2)
+                WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, -1).sum(dim=2)
             if WX_diff.shape[0] != self.batch_size:
                 WX_diff = WX_diff.repeat(self.batch_size, 1, 1)
             assert WX_diff.is_cuda
@@ -160,7 +166,7 @@ class L0BoundedInput(BoundedInput):
                 rpW = rpW.expand(self.batch_size, -1, -1).gather(dim=2, index=self.partial_indices.expand(-1, rpW.shape[1], -1))
         WX_diff = torch.where(rpW > 0, rpW * self.U_X, rpW * self.L_X)
         if self.channel_size > 1:
-            WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, self.num_pixels).sum(dim=2)
+            WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, -1).sum(dim=2)
         if WX_diff.shape[0] != self.batch_size:
             WX_diff = WX_diff.repeat(self.batch_size, 1, 1)
 
@@ -184,7 +190,7 @@ class L0BoundedInput(BoundedInput):
             # print(f"rpW shape: {rpW.shape}, self.U_X shape: {self.U_X.shape}, self.__U_X shape: {self.__U_X.shape}")
             WX_diff = torch.where(rpW < 0, rpW * self.__U_X, rpW * self.__L_X)
             if self.channel_size > 1:
-                WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, self.num_pixels).sum(dim=2)
+                WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, -1).sum(dim=2)
             if WX_diff.shape[0] != self.batch_size:
                 WX_diff = WX_diff.repeat(self.batch_size, 1, 1)
             assert WX_diff.is_cuda
@@ -196,7 +202,7 @@ class L0BoundedInput(BoundedInput):
                 rpW = rpW.expand(self.batch_size, -1, -1).gather(dim=2, index=self.partial_indices.expand(-1, rpW.shape[1], -1))
         WX_diff = torch.where(rpW < 0, rpW * self.U_X, rpW * self.L_X)
         if self.channel_size > 1:
-            WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, self.num_pixels).sum(dim=2)
+            WX_diff = WX_diff.reshape(WX_diff.shape[0], WX_diff.shape[1], self.channel_size, -1).sum(dim=2)
         if WX_diff.shape[0] != self.batch_size:
             WX_diff = WX_diff.repeat(self.batch_size, 1, 1)
 

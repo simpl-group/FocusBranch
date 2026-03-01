@@ -97,16 +97,31 @@ def gurobi_complete_check(seqAT: SequentialAT, bounded_x0: L0BoundedInput,
     demo: bool = True, ground_truth_label: int | None = None
 ) -> tuple[bool,bool,bool]: # (verified, timed_out, found_adv)
     model = gp.Model("check_unsat", env=env)
-    img = bounded_x0.x[0, ..., 0].cpu().numpy()  # input: [784]
-    delta = model.addMVar(img.shape, vtype=GRB.CONTINUOUS, name="delta")  # delta: [784]
+    img = bounded_x0.x[0, ..., 0].cpu().numpy()  # input: [784] or [3072]
+    delta = model.addMVar((bounded_x0.num_features,), vtype=GRB.CONTINUOUS, name="delta")
     for i in range(img.shape[0]):
         model.addConstr(delta[i] <= bounded_x0.U - img[i])
         model.addConstr(bounded_x0.L - img[i] <= delta[i])
     x = img + delta  # input
 
-    epsilon = bounded_x0.eps
-    l0_loss = model.addVar(lb=epsilon, ub=epsilon)
-    model.addGenConstrNorm(l0_loss, delta, 0.0)
+    if bounded_x0.channel_size == 1:
+        model.addGenConstrNorm(model.addVar(lb=0.0, ub=bounded_x0.eps), delta, 0.0)
+    else:
+        # For RGB images, we want to count the number of pixels that are changed, not the number of features that are changed. For example, if one pixel is changed from (0, 0, 0) to (1, 1, 1), we want to count it as 1 change, not 3 changes.
+        # We can use an auxiliary binary variable for each pixel to indicate whether it is changed or not.
+        pixel_changed = model.addMVar(bounded_x0.num_pixels, vtype=GRB.BINARY, name="pixel_changed")
+        # pixel-major interleaved features, so the features of pixel i are at indices [i*channel_size, (i+1)*channel_size)
+        M = bounded_x0.U - bounded_x0.L  # big-M constant
+        feature_changed = model.addMVar(bounded_x0.num_features, vtype=GRB.BINARY, name="feature_changed")
+        for j in range(bounded_x0.num_features):
+            # feature_changed[j] == 1 iff delta[j] != 0, using big-M formulation
+            model.addConstr(delta[j] <= M * feature_changed[j])
+            model.addConstr(delta[j] >= -M * feature_changed[j])
+        for i in range(bounded_x0.num_pixels):
+            # If any of the features of pixel i is changed, then pixel_changed[i] should be 1
+            feature_vars = [feature_changed[j] for j in range(i * bounded_x0.channel_size, (i + 1) * bounded_x0.channel_size)]
+            model.addGenConstrOr(pixel_changed[i], feature_vars)
+        model.addConstr(pixel_changed.sum() <= bounded_x0.eps)
 
     x = add_forward_constraints(model, seqAT, bounded_x0, x)
 

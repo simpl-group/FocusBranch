@@ -32,12 +32,13 @@ class Strategy(Enum):
         return self.name
 
 class LZeroRobustnessAnalyzer:
-    def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int, plan_only: bool, greater_batch: int, strategy: Strategy):
+    def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int, channel_size: int, plan_only: bool, greater_batch: int, strategy: Strategy):
         self.__gpu_workers = gpu_workers
         self.__cpu_workers = cpu_workers
         self.__t = t
         self.__timeout = timeout
         self.__number_of_pixels = num_pixels
+        self.__channel_size = channel_size
         self.__refinement_db_max_v = max_k
         self.__plan_only = plan_only
         self.__strategy = strategy
@@ -216,7 +217,7 @@ class LZeroRobustnessAnalyzer:
             summed_duration = round(sum(stats['total_duration'] for stats in supercheck_stats_by_size.values()), 3)
             print(f'GPU iterating coverings took {iterating_covering_duration} s, Summed duration (all gpu workers): {summed_duration} s', flush=True)
             if self.milp_job_queue.unfinished_tasks > 0:
-                print(f'Waiting for MILP jobs to finish, remaining: {self.milp_job_queue.unfinished_tasks}', flush=True)
+                print(f'Waiting for MILP jobs to finish, remaining: {self.milp_job_queue.unfinished_tasks}, finished: {len(self.innocent_suspects)}', flush=True)
             results['SCSaP'] = {
                 'chosen_geometry': chosen_geometries_info[self.__level],
                 'iterating_covering_duration': iterating_covering_duration,
@@ -249,7 +250,7 @@ class LZeroRobustnessAnalyzer:
         cpu_handler_thread.join()
         waiting_milp_duration = round(time.time() - waiting_milp_start, 3)
         if self.milp_job_queue.unfinished_tasks > 0:
-            print(f'MILP jobs unfinished: {self.milp_job_queue.unfinished_tasks}')
+            print(f'MILP jobs unfinished: {self.milp_job_queue.unfinished_tasks}, finished: {len(self.innocent_suspects)}')
         if waiting_milp_duration > 0.1:
             print(f'Waiting for MILP duration: {waiting_milp_duration} s.')
             results['waiting_milp_duration'] = waiting_milp_duration
@@ -483,11 +484,18 @@ class LZeroRobustnessAnalyzer:
                         self.innocent_suspects.add(tuple(pixel_indices))
                     else:
                         self.milp_found_adversarial.set()
-                        print(f'Adversarial example found, changing label to "{adversarial_label}" while perturbing pixels: {dict((i, adversarial_example[i]) for i in pixel_indices)}')
                         self.adversarial_results['adversarial_pixels'] = str(pixel_indices)
                         # adversarial_example: list[int]
                         # pixel_indices: list[int]
-                        self.adversarial_results['adversarial_pixel_values'] = str(dict((i, adversarial_example[i]) for i in pixel_indices))
+                        if self.__channel_size > 1:
+                            indices = []
+                            for pixel in pixel_indices:
+                                for i in range(self.__channel_size):
+                                    indices.append(pixel * self.__channel_size + i)
+                            pixel_indices = indices
+                        delta_dict = dict((i, adversarial_example[i]) for i in pixel_indices)
+                        print(f'\nAdversarial example found, changing label to "{adversarial_label}" while perturbing pixels: {delta_dict}')
+                        self.adversarial_results['adversarial_pixel_values'] = str(delta_dict)
                         self.adversarial_results['adversarial_example'] = str(adversarial_example)
                         self.adversarial_results['adversarial_label'] = adversarial_label
                         return
