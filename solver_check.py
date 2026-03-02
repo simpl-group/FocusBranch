@@ -168,6 +168,8 @@ class GurobiWorker:
         self.__ub = 1. # (1. - self.__means) / self.__stds
         self.__lb = 0. # (0. - self.__means) / self.__stds
         self.__channel_size = channel_size
+        self.__model_lock = threading.Lock()
+        self.__current_model = None
 
     def work(self, port: int):
         with Client(('localhost', port)) as self.conn:
@@ -181,6 +183,11 @@ class GurobiWorker:
     def __handle_image(self, image, label):
         job_queue = queue.Queue()
         stop_event = threading.Event()
+
+        def terminate_current_model():
+            with self.__model_lock:
+                if self.__current_model is not None:
+                    self.__current_model.terminate()
 
         def worker():
             while not stop_event.is_set():
@@ -198,6 +205,7 @@ class GurobiWorker:
             message = self.conn.recv()
             if message == 'stop':
                 stop_event.set()
+                terminate_current_model()
                 break
             job_queue.put(message)
         worker_thread.join()
@@ -217,6 +225,8 @@ class GurobiWorker:
 
         # constraint
         model = gp.Model("check_unsat", env=env)
+        with self.__model_lock:
+            self.__current_model = model
         img = model.addMVar(image.shape, vtype=GRB.CONTINUOUS, name="x")
         for i in range(image.shape[0]):
             if i not in pixel_indices:
@@ -240,6 +250,9 @@ class GurobiWorker:
         model.addGenConstrOr(res, any_not_safe)
 
         model.optimize()
+        with self.__model_lock:
+            if self.__current_model is model:
+                self.__current_model = None
 
         # return args
         if model.Status == GRB.Status.INFEASIBLE:
@@ -249,6 +262,8 @@ class GurobiWorker:
             for i in range(label_size):
                 if any_not_safe[i].X > 0.5:
                     return False, adv_image, i
+        if model.Status in {GRB.Status.TIME_LIMIT, GRB.Status.INTERRUPTED}:
+            return False, None, None
         raise NotImplementedError(f"Unknown state: {model.Status}.")
 
     def update_indices_if_needed(self, pixel_indices):
