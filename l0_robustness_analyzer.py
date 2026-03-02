@@ -363,7 +363,7 @@ class LZeroRobustnessAnalyzer:
         num_finished = 0
         done_count = 0
         total_covering_size = initial_covering_size
-        pbar = tqdm(total=initial_covering_size, desc="Processing", bar_format=TQDM_BAR_FORMAT)
+        pbar = tqdm(total=initial_covering_size, desc="SuperChecking", bar_format=TQDM_BAR_FORMAT)
         last_print_time = time.time()
         unk_combs_lst: list[list[int]] = []
         while done_count < len(self.__gpu_workers) \
@@ -460,9 +460,12 @@ class LZeroRobustnessAnalyzer:
 
     def __handle_cpu_workers_messages(self, analyzer_start_time: float):
         next_cpu_worker_id = 0
+        pbar = None
         while not self.unk_combs_settled.is_set() or self.milp_job_queue.unfinished_tasks > 0:
+            if pbar is None and self.unk_combs_settled.is_set():
+                pbar = tqdm(total=self.milp_job_queue.unfinished_tasks, desc="MILP jobs", bar_format=TQDM_BAR_FORMAT)
             try:
-                pixel_indices = self.milp_job_queue.get(timeout=0.1)
+                pixel_indices = self.milp_job_queue.get(timeout=0.0001)
                 suspect = tuple(pixel_indices)
                 if suspect in self.innocent_suspects or suspect in self.waiting_suspects:
                     self.milp_job_queue.task_done()
@@ -473,12 +476,14 @@ class LZeroRobustnessAnalyzer:
             except queue.Empty:
                 ...
             if time.time() - analyzer_start_time >= self.__timeout:
+                if pbar is not None: pbar.close()
                 return
 
             for cpu_worker in self.__cpu_workers:
                 if cpu_worker.poll():
                     pixel_indices, verified, adversarial_example, adversarial_label = cpu_worker.recv()
                     self.milp_job_queue.task_done()
+                    if pbar is not None: pbar.update(1)
                     if verified:
                         self.waiting_suspects.remove(tuple(pixel_indices))
                         self.innocent_suspects.add(tuple(pixel_indices))
@@ -498,6 +503,7 @@ class LZeroRobustnessAnalyzer:
                         self.adversarial_results['adversarial_pixel_values'] = str(delta_dict)
                         self.adversarial_results['adversarial_example'] = str(adversarial_example)
                         self.adversarial_results['adversarial_label'] = adversarial_label
+                        if pbar is not None: pbar.close()
                         return
 
     def __stop_workers(self):
