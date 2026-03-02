@@ -471,6 +471,7 @@ class LZeroRobustnessAnalyzer:
                 suspect = tuple(pixel_indices)
                 if suspect in self.innocent_suspects or suspect in self.waiting_suspects:
                     self.milp_job_queue.task_done()
+                    if pbar is not None: pbar.total -= 1  # remove from progress bar since it's already verified
                 else:
                     self.waiting_suspects.add(suspect)
                     self.__cpu_workers[next_cpu_worker_id].send(pixel_indices)
