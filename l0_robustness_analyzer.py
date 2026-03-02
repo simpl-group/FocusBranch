@@ -171,6 +171,7 @@ class LZeroRobustnessAnalyzer:
             print(f'{best_strategy[1]} at level {best_strategy[2]} estimated to take too long, skipping this image.')
 
         if results['verified'] or results['timed_out'] or self.__plan_only:
+            results['running_time'] = round(time.time() - self.analyzer_start_time, 3)
             self.__skip_this_image()
             print('Early termination triggered')
             if results['verified']: results['end_level'] = results['starting_level']
@@ -249,12 +250,13 @@ class LZeroRobustnessAnalyzer:
         waiting_milp_start = time.time()
         cpu_handler_thread.join()
         waiting_milp_duration = round(time.time() - waiting_milp_start, 3)
+        results['timed_out'] = self.timed_out()
+        results['running_time'] = round(time.time() - self.analyzer_start_time, 3)
         if self.milp_job_queue.unfinished_tasks > 0:
             print(f'MILP jobs unfinished: {self.milp_job_queue.unfinished_tasks}, finished: {len(self.innocent_suspects)}')
         if waiting_milp_duration > 0.1:
             print(f'Waiting for MILP duration: {waiting_milp_duration} s.')
             results['waiting_milp_duration'] = waiting_milp_duration
-        results['timed_out'] = self.timed_out()
         if self.milp_found_adversarial.is_set():
             results['adversarial_results'] = self.adversarial_results
         elif not results['timed_out']:
