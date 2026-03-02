@@ -157,7 +157,7 @@ if __name__ == '__main__':
             f"correct:  {correctly_classified_images}/{1 + i - args.start_idx}, "
             f"verified: {verified_images}/{correctly_classified_images}, "
             f"unsafe: {unsafe_images}/{correctly_classified_images}, ",
-            f"time: {image_results['running_time']}; {0 if cum_time == 0 else cum_time / correctly_classified_images:.3f}; {cum_time:.3f}"
+            f"time: {round(time.time() - start, 3)}; {0 if cum_time == 0 else cum_time / correctly_classified_images:.3f}; {cum_time:.3f}"
         )
         print('*******************************************************')
 
