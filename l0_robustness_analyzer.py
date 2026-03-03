@@ -465,7 +465,7 @@ class LZeroRobustnessAnalyzer:
         pbar = None
         while not self.unk_combs_settled.is_set() or self.milp_job_queue.unfinished_tasks > 0:
             if pbar is None and self.unk_combs_settled.is_set():
-                pbar = tqdm(total=self.milp_job_queue.unfinished_tasks, desc="MILP jobs", bar_format=TQDM_BAR_FORMAT)
+                pbar = tqdm(total=self.milp_job_queue.unfinished_tasks, desc="MILP jobs", bar_format=TQDM_BAR_FORMAT, mininterval=1.0, maxinterval=2.0)
             try:
                 pixel_indices = self.milp_job_queue.get(timeout=0.0001)
                 suspect = tuple(pixel_indices)
