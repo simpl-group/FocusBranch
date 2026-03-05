@@ -4,6 +4,7 @@ from data import load_covering_sizes
 from coverd_finite_geometries import get_possible_geometries, Geometry
 from covering_generator.estimator import estimate_generator_speed, estimate_extra_time
 from split_and_prune import estimate_SaP_speed, estimate_SaP_time, prepare4pruning, prune
+from bimm import combs2bitmasks, bitmasks2combs, superset_sum
 import threading
 import queue
 import math
@@ -34,7 +35,9 @@ class Strategy(Enum):
 class LZeroRobustnessAnalyzer:
     def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int, channel_size: int, plan_only: bool, greater_batch: int, strategy: Strategy):
         self.__gpu_workers = gpu_workers
+        self.__num_gpu_workers = len(gpu_workers)
         self.__cpu_workers = cpu_workers
+        self.__num_cpu_workers = len(cpu_workers)
         self.__t = t
         self.__timeout = timeout
         self.__number_of_pixels = num_pixels
@@ -44,14 +47,15 @@ class LZeroRobustnessAnalyzer:
         self.__strategy = strategy
         self.covering_sizes = {t:load_covering_sizes(t, clipping_size=500000) for t in range(CVD_MIN_T, min(self.__t + 1, CVD_MAX_T + 1))}
         print(f"Estimating generator speed ...")
-        generator_launch_time, skipping_iter_speed, normal_iter_speed = estimate_generator_speed(num_workers=len(gpu_workers), num_pixels=num_pixels)
-        self.cvd_extra_time = lambda geometry: generator_launch_time + estimate_extra_time(geometry, num_workers=len(gpu_workers), num_pixels=num_pixels, greater_batch=greater_batch, skipping_iter_speed=skipping_iter_speed, iter_speed=normal_iter_speed)
+        generator_launch_time, skipping_iter_speed, normal_iter_speed = estimate_generator_speed(num_workers=self.__num_gpu_workers, num_pixels=num_pixels)
+        self.cvd_extra_time = lambda geometry: generator_launch_time + estimate_extra_time(geometry, num_workers=self.__num_gpu_workers, num_pixels=num_pixels, greater_batch=greater_batch, skipping_iter_speed=skipping_iter_speed, iter_speed=normal_iter_speed)
         print(f"Estimating SaP speed on level", end="")
         splitting_speed, pruning_speed = estimate_SaP_speed(epsilon=self.__t, num_indices=num_pixels, show_progress=True)
         self.estimate_SaP_time = lambda num_unk, level: estimate_SaP_time(num_unk, level, num_pixels, splitting_speed[level], pruning_speed[level])
         self.estimate_pruning_time = lambda num_new_combs, num_references, level: num_new_combs * num_references / pruning_speed[level]
 
     def update_image(self, image: np.ndarray, label: int):
+        self.__deduplicated = False
         for gpu_worker in self.__gpu_workers:
             worker_seed = random.randint(0, 2 ** 32 - 1)
             gpu_worker.send((worker_seed, image, label))
@@ -75,7 +79,7 @@ class LZeroRobustnessAnalyzer:
             sample_durations = [a + b for a, b in zip(sample_durations, sd)]
         concrete_safe_rate = [s / c if c > 0 else 0.0 for s, c in zip(sample_successes, sample_counts)]
         mean_concrete_check_time = [d / c if c > 0 else 0.0 for d, c in zip(sample_durations, sample_counts)]
-        if all(sample_successes[i] != math.comb(self.__number_of_pixels, i) * len(self.__gpu_workers) for i in range(self.__t + 1)):
+        if all(sample_successes[i] != math.comb(self.__number_of_pixels, i) * self.__num_gpu_workers for i in range(self.__t + 1)):
             # Sample super-nodes at levels with high concrete safe rate
             for l in range(self.__t + 1):
                 if CVD_MIN_T <= l <= CVD_MAX_T and (concrete_safe_rate[l] > 0.99 or l == self.__t):
@@ -118,13 +122,13 @@ class LZeroRobustnessAnalyzer:
 
         choosing_strategy_start = time.time()
         for l in range(first_any_safe_level, self.__t + 1):
-            if sample_successes[l] == math.comb(self.__number_of_pixels, l) * len(self.__gpu_workers):
+            if sample_successes[l] == math.comb(self.__number_of_pixels, l) * self.__num_gpu_workers:
                 candidate_strategies.append((estimated_CC_time_per_l[l], 'skip', l))
                 break
             tail_CC_time = sum(estimated_CC_time_per_l[l + 1:])
             tail_SaP_time = sum(estimated_SaP_time_per_l[l:])
-            if tail_SaP_time > 1.0: tail_SaP_time /= len(self.__gpu_workers)
-            CCSaP_time = (mean_concrete_check_time[l] * math.comb(self.__number_of_pixels, l) + tail_CC_time) / len(self.__gpu_workers) + tail_SaP_time
+            if tail_SaP_time > 1.0: tail_SaP_time /= self.__num_gpu_workers
+            CCSaP_time = (mean_concrete_check_time[l] * math.comb(self.__number_of_pixels, l) + tail_CC_time) / self.__num_gpu_workers + tail_SaP_time
             candidate_strategies.append((CCSaP_time, 'CCSaP', l))
             if l in super_success_rate:
                 self.__level = l
@@ -133,7 +137,7 @@ class LZeroRobustnessAnalyzer:
                 chosen_geometries[l], geometries_data = self.__choose_geometry(VTs[l])
                 chosen_geometries_info[l] = geometries_data[0]
                 candidate_geometries.extend(geometries_data)
-                SCSaP_time: float = (chosen_geometries_info[l]["estimated_summed_duration"] + tail_CC_time) / len(self.__gpu_workers) + self.cvd_extra_time(chosen_geometries[l]) + tail_SaP_time
+                SCSaP_time: float = (chosen_geometries_info[l]["estimated_summed_duration"] + tail_CC_time) / self.__num_gpu_workers + self.cvd_extra_time(chosen_geometries[l]) + tail_SaP_time
                 candidate_strategies.append((round(SCSaP_time, 3), 'SCSaP', l))
         choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
         planning_duration = round(time.time() - self.analyzer_start_time, 3)
@@ -187,6 +191,7 @@ class LZeroRobustnessAnalyzer:
         cpu_handler_thread.start()
 
         if best_strategy[1] == 'CCSaP':
+            self.__deduplicated = True  # SaP won't create duplicates
             for gpu_worker in self.__gpu_workers:
                 gpu_worker.send(('CCSaP', self.__level))  # no geometry, no refinement strategy
             current_level_start_time = time.time()
@@ -198,6 +203,7 @@ class LZeroRobustnessAnalyzer:
             print(f'Level {self.__level} finished, unk_combs/all: {unk_combs.shape[0]}/{math.comb(self.__number_of_pixels, self.__level)}'
                 f' using {round(time.time() - current_level_start_time, 3)} s')
         elif best_strategy[1] == 'SCSaP':
+            self.__deduplicated = self.__level < self.__t  # SaP won't be used on the last level, so we might have duplicates on the last level
             chosen_geometry, refinement_strategy = chosen_geometries[self.__level], refinement_strategies[self.__level]
             assert self.__level == min(refinement_strategy.keys()), f"Level mismatch: {self.__level} vs {min(refinement_strategy.keys())}"
             chosen_indices = random.sample(range(chosen_geometry.number_of_points()), self.__number_of_pixels)
@@ -368,7 +374,7 @@ class LZeroRobustnessAnalyzer:
         pbar = tqdm(total=initial_covering_size, desc="SuperChecking", bar_format=TQDM_BAR_FORMAT)
         last_print_time = time.time()
         unk_combs_lst: list[list[int]] = []
-        while done_count < len(self.__gpu_workers) \
+        while done_count < self.__num_gpu_workers \
             and not self.milp_found_adversarial.is_set() \
             and not self.timed_out():
             last_print_time = self.__print_progress(pbar, total_covering_size, num_finished, last_print_time)
@@ -417,7 +423,7 @@ class LZeroRobustnessAnalyzer:
                 print(f'Level {self.__level} estimated SaP time: {self.estimate_SaP_time(unk_combs_tensor.shape[0], self.__level):3f} s. Sharing SaP workload across all GPU workers...')
                 for i, gpu_worker in enumerate(self.__gpu_workers):
                     gpu_worker.send(('SaP&CC', unk_combs_tensor.numpy()))
-                num_new_combs_per_worker = [0] * len(self.__gpu_workers)
+                num_new_combs_per_worker = [0] * self.__num_gpu_workers
                 for i, gpu_worker in enumerate(self.__gpu_workers):
                     num_new_combs_per_worker[i] = gpu_worker.recv()
                 concrete_check_start_time = time.time()
@@ -436,8 +442,8 @@ class LZeroRobustnessAnalyzer:
                 num_pruned = pruned_combs.shape[0]
                 print(f'Current level: {self.__level}, SaP duration: {SaP_duration}s, num_pruned: {num_pruned}')
                 for i, gpu_worker in enumerate(self.__gpu_workers):
-                    num_each = pruned_combs.shape[0] // len(self.__gpu_workers)
-                    if i == len(self.__gpu_workers) - 1:
+                    num_each = pruned_combs.shape[0] // self.__num_gpu_workers
+                    if i == self.__num_gpu_workers - 1:
                         gpu_worker.send(('CC', pruned_combs[i * num_each :]))
                     else:
                         gpu_worker.send(('CC', pruned_combs[i * num_each : (i + 1) * num_each]))
@@ -460,32 +466,67 @@ class LZeroRobustnessAnalyzer:
         pbar.set_postfix({'FNS/AGG': f'{num_finished}/{int(total_covering_size)}'})
         return current
 
+    def __deduplicate_milp_jobs(self):
+        # Deduplicate suspects in the jobs queue before showing progress bar.
+        queued_jobs: list[list[int]] = []
+        while True:
+            try:
+                queued_jobs.append(self.milp_job_queue.get_nowait())
+                self.milp_job_queue.task_done()
+            except queue.Empty:
+                break
+        if len(queued_jobs) > 0:
+            known_suspects = self.innocent_suspects.union(self.waiting_suspects)
+            unique_jobs = torch.tensor(queued_jobs, device="cuda").unique(dim=0)
+            if len(known_suspects) > 0:
+                bitmask_length = (self.__number_of_pixels + 63) // 64
+                known_suspects_bm = combs2bitmasks(torch.tensor(list(known_suspects), device="cuda"), bitmask_length)
+                unique_jobs_bm = combs2bitmasks(unique_jobs, bitmask_length)
+                unique_jobs = bitmasks2combs(unique_jobs_bm[superset_sum(unique_jobs_bm, known_suspects_bm)==0], self.__t).tolist()
+            removed = len(queued_jobs) - len(unique_jobs)
+            for job in unique_jobs:
+                self.milp_job_queue.put(job)
+            if removed > 0:
+                assert self.milp_job_queue.unfinished_tasks == len(unique_jobs) + len(self.waiting_suspects), f"Unfinished tasks in queue {self.milp_job_queue.unfinished_tasks} doesn't match expected {len(unique_jobs) + len(self.waiting_suspects)} after deduplication."
+                print(f"Deduplicated MILP jobs queue, removed {removed} duplicates, remaining jobs: {self.milp_job_queue.unfinished_tasks}")
+        self.__deduplicated = True
+
     def __handle_cpu_workers_messages(self, analyzer_start_time: float):
-        next_cpu_worker_id = 0
+        jobs_limit = 3
+        jobs_each_worker = np.zeros(self.__num_cpu_workers, dtype=int)
+        def get_first_avail_worker_id():
+            min_jobs = int(jobs_each_worker.min())
+            if min_jobs >= jobs_limit:
+                return None
+            return int(jobs_each_worker.argmin())
         pbar = None
         while not self.unk_combs_settled.is_set() or self.milp_job_queue.unfinished_tasks > 0:
             if pbar is None and self.unk_combs_settled.is_set():
+                if not self.__deduplicated:
+                    self.__deduplicate_milp_jobs()
                 pbar = tqdm(total=self.milp_job_queue.unfinished_tasks, desc="MILP jobs", bar_format=TQDM_BAR_FORMAT, mininterval=1.0, maxinterval=2.0)
-            try:
-                pixel_indices = self.milp_job_queue.get(timeout=0.0001)
-                suspect = tuple(pixel_indices)
-                if suspect in self.innocent_suspects or suspect in self.waiting_suspects:
-                    self.milp_job_queue.task_done()
-                    if pbar is not None: pbar.total -= 1  # remove from progress bar since it's already verified
-                else:
-                    self.waiting_suspects.add(suspect)
-                    self.__cpu_workers[next_cpu_worker_id].send(pixel_indices)
-                    next_cpu_worker_id = (next_cpu_worker_id + 1) % len(self.__cpu_workers)
-            except queue.Empty:
-                ...
+            first_avail_worker_id = get_first_avail_worker_id()
+            if first_avail_worker_id is not None:
+                try:
+                    pixel_indices = self.milp_job_queue.get(timeout=0.0001)
+                    suspect = tuple(pixel_indices)
+                    if not self.__deduplicated and (suspect in self.innocent_suspects or suspect in self.waiting_suspects):
+                        self.milp_job_queue.task_done()
+                    else:
+                        self.waiting_suspects.add(suspect)
+                        self.__cpu_workers[first_avail_worker_id].send(pixel_indices)
+                        jobs_each_worker[first_avail_worker_id] += 1
+                except queue.Empty:
+                    ...
             if time.time() - analyzer_start_time >= self.__timeout:
                 if pbar is not None: pbar.close()
                 return
 
-            for cpu_worker in self.__cpu_workers:
+            for i, cpu_worker in enumerate(self.__cpu_workers):
                 if cpu_worker.poll():
                     pixel_indices, verified, adversarial_example, adversarial_label = cpu_worker.recv()
                     self.milp_job_queue.task_done()
+                    jobs_each_worker[i] -= 1
                     if pbar is not None: pbar.update(1)
                     if verified:
                         self.waiting_suspects.remove(tuple(pixel_indices))
