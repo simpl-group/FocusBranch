@@ -111,15 +111,13 @@ if __name__ == '__main__':
         image_results = {}
         image_results['is_correctly_classified'] = is_correctly_classified
         image_results['true_label'] = label
-        skip = ours_should_skip(net=args.net, img=i, eps=args.epsilon)
-        if skip:
-            print(f"Image {i} for net={args.net}, eps={args.epsilon} should be skipped.")
-        else:
-            adv_min_eps = sigma0_min_eps(net=args.net, img=i)
-            if adv_min_eps is not None and adv_min_eps <= args.epsilon:
-                print(f"Image {i} already has a known adversarial example with eps={adv_min_eps} <= epsilon={args.epsilon}. Skipping analysis.")
-                skip = True
-                insert_ours(net=args.net, img=i, eps=adv_min_eps, found_adv=True, use_cvd=-1)
+        adv_min_eps = sigma0_min_eps(net=args.net, img=i)
+        if adv_min_eps is not None and adv_min_eps <= args.epsilon:
+            print(f"Image {i} already has a known adversarial example with eps={adv_min_eps} <= epsilon={args.epsilon}. Skipping analysis.")
+            skip = True
+            insert_ours(net=args.net, img=i, eps=args.epsilon, found_adv=True, use_cvd=-1)
+        else: skip = ours_should_skip(net=args.net, img=i, eps=args.epsilon)
+        if skip: print(f"Image {i} for net={args.net}, eps={args.epsilon} should be skipped.")
         if not skip or args.force_store or args.demo:
             if is_correctly_classified:
                 correctly_classified_images += 1
