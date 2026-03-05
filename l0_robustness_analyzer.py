@@ -33,7 +33,7 @@ class Strategy(Enum):
         return self.name
 
 class LZeroRobustnessAnalyzer:
-    def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int, channel_size: int, plan_only: bool, greater_batch: int, strategy: Strategy, until_timedout: bool):
+    def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int, channel_size: int, plan_only: bool, pool_size: int, strategy: Strategy, until_timedout: bool):
         self.__gpu_workers = gpu_workers
         self.__num_gpu_workers = len(gpu_workers)
         self.__cpu_workers = cpu_workers
@@ -49,7 +49,7 @@ class LZeroRobustnessAnalyzer:
         self.covering_sizes = {t:load_covering_sizes(t, clipping_size=500000) for t in range(CVD_MIN_T, min(self.__t + 1, CVD_MAX_T + 1))}
         print(f"Estimating generator speed ...")
         generator_launch_time, skipping_iter_speed, normal_iter_speed = estimate_generator_speed(num_workers=self.__num_gpu_workers, num_pixels=num_pixels)
-        self.cvd_extra_time = lambda geometry: generator_launch_time + estimate_extra_time(geometry, num_workers=self.__num_gpu_workers, num_pixels=num_pixels, greater_batch=greater_batch, skipping_iter_speed=skipping_iter_speed, iter_speed=normal_iter_speed)
+        self.cvd_extra_time = lambda geometry: generator_launch_time + estimate_extra_time(geometry, num_workers=self.__num_gpu_workers, num_pixels=num_pixels, pool_size=pool_size, skipping_iter_speed=skipping_iter_speed, iter_speed=normal_iter_speed)
         print(f"Estimating SaP speed on level", end="")
         splitting_speed, pruning_speed = estimate_SaP_speed(epsilon=self.__t, num_indices=num_pixels, show_progress=True)
         self.estimate_SaP_time = lambda num_unk, level: estimate_SaP_time(num_unk, level, num_pixels, splitting_speed[level], pruning_speed[level])

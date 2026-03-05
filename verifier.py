@@ -65,6 +65,7 @@ class Verifier:
         max_k: int=200,
         rep_each_k: int=50,
         rep_each_level: int=5000,
+        pool_size: int=2000,
         timeout: int=0,
         demo: bool=False
     ) -> None:
@@ -81,7 +82,7 @@ class Verifier:
         self.rep_each_level = rep_each_level
         self.timeout = timeout
         self.demo = demo
-        self.__greater_batch = self.batch_size * 10
+        self.__pool_size = pool_size
 
     def __check_current_batch(self) -> torch.Tensor:
         """
@@ -395,7 +396,7 @@ class Verifier:
             self.conn.send((num_indices, 1, 1, 0.))
         elif num_indices <= self.max_size_to_batch:  # batched super check
             self.batch_pool[num_indices].append(superset)
-            if len(self.batch_pool[num_indices]) == self.__greater_batch:
+            if len(self.batch_pool[num_indices]) == self.__pool_size:
                 self.__handle_supersets(num_indices)
         else:  # no need to do super check (default to not safe), just refine
             self.conn.send((num_indices, 1, 0, 0.))
@@ -521,6 +522,7 @@ if __name__ == '__main__':
     parser.add_argument('--worker_id', type=int, default=0, help='The index of the worker')
     parser.add_argument('--num-workers', type=int, default=1, help='Total number of workers')
     parser.add_argument('--port', type=int, default=0, help='The port main verification process is listening on')
+    parser.add_argument('--pool-size', type=int, default=2000, help='The size of the batch pool')
     args = parser.parse_args()
 
     verifier = get_verifier(args)

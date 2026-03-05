@@ -60,7 +60,7 @@ def estimate_generator_speed(geometry=Geometry(7,5,5), num_workers=4, num_pixels
     iter_speed = geometry.number_of_blocks() / iter_duration2
     return (launch_time1+launch_time2)*0.5, skipping_iter_speed, iter_speed
 
-def estimate_extra_time(geometry: Geometry, num_workers, num_pixels, greater_batch, skipping_iter_speed, iter_speed):
+def estimate_extra_time(geometry: Geometry, num_workers, num_pixels, pool_size, skipping_iter_speed, iter_speed):
     mean = geometry.block_size() * num_pixels / geometry.number_of_points()
     std  = math.sqrt(mean * (1 - mean + (geometry.block_size() - 1) * (num_pixels - 1) / (geometry.number_of_points() - 1)))
     num_of_blocks = math.floor(geometry.number_of_blocks() / num_workers)
@@ -68,8 +68,8 @@ def estimate_extra_time(geometry: Geometry, num_workers, num_pixels, greater_bat
     if worker_id < geometry.number_of_blocks() % num_workers:
         num_of_blocks += 1
     expected_number_of_blocks_of_mean_size = (norm.cdf(math.floor(mean)+1, mean, std) - norm.cdf(math.floor(mean), mean, std)).item() * num_of_blocks
-    if greater_batch > expected_number_of_blocks_of_mean_size:
+    if pool_size > expected_number_of_blocks_of_mean_size:
         return num_of_blocks / skipping_iter_speed
-    prefilling_number_of_blocks = num_of_blocks * (greater_batch / expected_number_of_blocks_of_mean_size)
+    prefilling_number_of_blocks = num_of_blocks * (pool_size / expected_number_of_blocks_of_mean_size)
     rest_number_of_blocks = num_of_blocks - prefilling_number_of_blocks
     return prefilling_number_of_blocks / skipping_iter_speed + rest_number_of_blocks / iter_speed
