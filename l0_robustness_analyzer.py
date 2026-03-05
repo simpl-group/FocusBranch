@@ -33,7 +33,7 @@ class Strategy(Enum):
         return self.name
 
 class LZeroRobustnessAnalyzer:
-    def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int, channel_size: int, plan_only: bool, greater_batch: int, strategy: Strategy):
+    def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int, channel_size: int, plan_only: bool, greater_batch: int, strategy: Strategy, until_timedout: bool):
         self.__gpu_workers = gpu_workers
         self.__num_gpu_workers = len(gpu_workers)
         self.__cpu_workers = cpu_workers
@@ -45,6 +45,7 @@ class LZeroRobustnessAnalyzer:
         self.__refinement_db_max_v = max_k
         self.__plan_only = plan_only
         self.__strategy = strategy
+        self.__until_timedout = until_timedout
         self.covering_sizes = {t:load_covering_sizes(t, clipping_size=500000) for t in range(CVD_MIN_T, min(self.__t + 1, CVD_MAX_T + 1))}
         print(f"Estimating generator speed ...")
         generator_launch_time, skipping_iter_speed, normal_iter_speed = estimate_generator_speed(num_workers=self.__num_gpu_workers, num_pixels=num_pixels)
@@ -170,7 +171,7 @@ class LZeroRobustnessAnalyzer:
             results['candidate_geometries'] = candidate_geometries
 
         # to be deleted later if needed
-        if best_strategy[1] == 'CCSaP' and best_strategy[2] >= 4 or best_strategy[0] > self.__timeout * 2:
+        if best_strategy[1] == 'CCSaP' and best_strategy[2] >= 4 or best_strategy[0] > self.__timeout * 2 and not self.__until_timedout:
             results['timed_out'] = True
             print(f'{best_strategy[1]} at level {best_strategy[2]} estimated to take too long, skipping this image.')
 

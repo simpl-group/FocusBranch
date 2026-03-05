@@ -28,6 +28,7 @@ if __name__ == '__main__':
     parser.add_argument("--detail", action="store_true", help="Output detailed superset statistics for each image in a separate excel file.")
     parser.add_argument("--plan_only", action="store_true", help="Only run the planning stage without actual verification.")
     parser.add_argument("--strategy", type=lambda s: Strategy[s], choices=list(Strategy), default=Strategy.CheSaP, help="the strategy to use for verification")
+    parser.add_argument("--until-timedout", "-ut", action="store_true", help="Continue running until timeout is reached, even if the estimated verification time is larger than twice the timeout.")
     args = parser.parse_args()
     if not ours_config_consistent(net=args.net, eps=args.epsilon, img=args.start_idx+args.test_batches-1, batch_size=args.batch_size, gpu_num=args.gpu_num, timeout=args.timeout, rk=args.rep_each_k, rl=args.rep_each_level):
         warnings.warn(f"Configuration inconsistent: net={args.net}, eps={args.epsilon}, img={args.start_idx+args.test_batches-1}, timeout={args.timeout}, batch_size={args.batch_size}, gpu_num={args.gpu_num}, rk={args.rep_each_k}, rl={args.rep_each_level}.")
@@ -94,7 +95,8 @@ if __name__ == '__main__':
         channel_size=dataset_utils.channel_size,
         plan_only=args.plan_only,
         greater_batch=10*args.batch_size,
-        strategy=args.strategy
+        strategy=args.strategy,
+        until_timedout=args.until_timedout
     )
 
     image_results_by_image_index = {}
