@@ -47,7 +47,6 @@ if __name__ == '__main__':
     args.output = f"{args.output if args.output else ''}{args.net}e{args.epsilon}s{args.start_idx}_n{args.test_batches}b{args.batch_size}g{args.gpu_num}"
     ilogname = args.output.rsplit("s", 1)[0]
     args.output = args.output + ".json"
-    args.rep_each_k = max(args.rep_each_k, args.batch_size)
     args.pool_size = min(max(args.pool_size, args.batch_size), args.batch_size * 10)
 
     address = ('localhost', 0)
