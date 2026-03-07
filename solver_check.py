@@ -2,7 +2,7 @@ from AbstractInterpreter import SequentialAT, L0BoundedInput, AffineAT, ReLUAT, 
 from utils import timeout_handler, TQDM_BAR_FORMAT
 from utils.shared import get4, add_shared_arguments
 from models import get_network_and_dataset_utils
-from data.db import insert_milp, milp_should_skip, milp_config_consistent
+from data.db import insert_milp, milp_should_skip, milp_config_consistent, sigma0_min_eps
 import argparse
 import signal
 import warnings
@@ -311,9 +311,13 @@ if __name__ == "__main__":
     pbar = tqdm(total=args.test_batches, bar_format=TQDM_BAR_FORMAT, disable=args.demo)
     for _i, (images, pred_labels) in enumerate(data_loader):
         i = _i + args.start_idx
-        skip = milp_should_skip(net=args.net, img=i, eps=args.epsilon)
-        if skip:
-            warnings.warn(f"Image {i} for net={args.net}, eps={args.epsilon} should be skipped.")
+        adv_min_eps = sigma0_min_eps(net=args.net, img=i)
+        if adv_min_eps is not None and adv_min_eps <= args.epsilon:
+            print(f"Image {i} already has a known adversarial example with eps={adv_min_eps} <= epsilon={args.epsilon}.")
+            skip = True
+            insert_milp(net=args.net, img=i, eps=args.epsilon, found_adv=True)
+        else: skip = milp_should_skip(net=args.net, img=i, eps=args.epsilon)
+        if skip: print(f"Image {i} for net={args.net}, eps={args.epsilon} should be skipped.")
         if not skip or args.force_store or args.demo:
             if net(images).argmax(dim=1).eq(pred_labels).all():
                 bounded_x0.update_x(images.flatten(start_dim=1).unsqueeze(2))  # (batch, d1, 1)
