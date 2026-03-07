@@ -336,22 +336,20 @@ INSERT OR REPLACE INTO milp_config (net, eps, time_limit_seconds, num_img) VALUE
 ('bcv3', 4, 1800, 100),
 ('bcv3', 5, 1800, 100),
 ('bcv3', 6, 1800, 100),
-('bcv4', 1, 1800, 10),
-('bcv4', 2, 1800, 10),
-('bcv4', 3, 1800, 10),
-('bcv5', 1, 1800, 100),
-('bcv5', 2, 1800, 100),
-('bcv5', 3, 1800, 100),
+('bcv4', 3, 3600, 10),
+('bcv5', 3, 1800, 10),
 ('bcv6', 1, 1800, 100),
 ('bcv6', 2, 1800, 100),
 ('bcv6', 3, 1800, 100),
 ('bcv6', 4, 1800, 100),
 ('bcv6', 5, 1800, 100),
+('bcv6', 6, 1800, 100),
 ('bcv7', 1, 1800, 100),
 ('bcv7', 2, 1800, 100),
 ('bcv7', 3, 1800, 100),
 ('bcv7', 4, 1800, 100),
-('bcv7', 5, 1800, 100);
+('bcv7', 5, 1800, 100),
+('bcv7', 6, 1800, 100);
 
 INSERT OR REPLACE INTO coverd_config (net, eps, time_limit_seconds, gpu_num, num_img) VALUES
 ('bafc1', 3, 1800, 4, 100),
