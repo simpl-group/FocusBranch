@@ -120,7 +120,7 @@ DATASETS: dict[DatasetName, DatasetUtils] = {
         dataset_class=CIFAR10,
     ),
     DatasetName.FASHIONMNIST: DatasetUtils(
-        csv_file=BASE_DIR / "fashion-mnist_test.csv",
+        csv_file=BASE_DIR / "fashion-mnist_test100.csv",
         pt_file=BASE_DIR / "fashion-mnist_test.pt",
         classes=(
             "T-shirt/top", "Trouser", "Pullover", "Dress", "Coat",
