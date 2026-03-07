@@ -287,6 +287,7 @@ def launch_gurobi_worker(netname: str, port: int) -> Process:
     return process
 
 if __name__ == "__main__":
+    import sys
     signal.signal(signal.SIGALRM, timeout_handler)
     parser = argparse.ArgumentParser(
         description="Complete verification of L0 robustness using Gurobi."
@@ -308,7 +309,7 @@ if __name__ == "__main__":
     total_time = 0.
     num_verified = 0
     net.cpu()
-    pbar = tqdm(total=args.test_batches, bar_format=TQDM_BAR_FORMAT, disable=args.demo)
+    pbar = tqdm(total=args.test_batches, bar_format=TQDM_BAR_FORMAT, disable=args.demo, file=sys.stdout)
     for _i, (images, pred_labels) in enumerate(data_loader):
         i = _i + args.start_idx
         adv_min_eps = sigma0_min_eps(net=args.net, img=i)

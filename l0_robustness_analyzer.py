@@ -10,6 +10,7 @@ import queue
 import math
 import time
 import random
+import sys
 from itertools import chain
 from enum import Enum, auto
 from collections import defaultdict
@@ -372,7 +373,7 @@ class LZeroRobustnessAnalyzer:
         num_finished = 0
         done_count = 0
         total_covering_size = initial_covering_size
-        pbar = tqdm(total=initial_covering_size, desc="SuperChecking", bar_format=TQDM_BAR_FORMAT)
+        pbar = tqdm(total=initial_covering_size, desc="SuperChecking", bar_format=TQDM_BAR_FORMAT, file=sys.stdout)
         last_print_time = time.time()
         unk_combs_lst: list[list[int]] = []
         while done_count < self.__num_gpu_workers \
@@ -505,7 +506,7 @@ class LZeroRobustnessAnalyzer:
             if pbar is None and self.unk_combs_settled.is_set():
                 if not self.__deduplicated:
                     self.__deduplicate_milp_jobs()
-                pbar = tqdm(total=self.milp_job_queue.unfinished_tasks, desc="MILP jobs", bar_format=TQDM_BAR_FORMAT, mininterval=1.0, maxinterval=2.0)
+                pbar = tqdm(total=self.milp_job_queue.unfinished_tasks, desc="MILP jobs", bar_format=TQDM_BAR_FORMAT, mininterval=1.0, maxinterval=2.0, file=sys.stdout)
             first_avail_worker_id = get_first_avail_worker_id()
             if first_avail_worker_id is not None:
                 try:
