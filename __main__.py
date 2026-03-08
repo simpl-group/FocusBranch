@@ -28,7 +28,6 @@ if __name__ == '__main__':
     parser.add_argument("--detail", action="store_true", help="Output detailed superset statistics for each image in a separate excel file.")
     parser.add_argument("--plan_only", action="store_true", help="Only run the planning stage without actual verification.")
     parser.add_argument("--strategy", type=lambda s: Strategy[s], choices=list(Strategy), default=Strategy.CheSaP, help="the strategy to use for verification")
-    parser.add_argument('--pool-size', "-ps", type=int, default=2000, help='The size of the batch pool')
     parser.add_argument("--until-timedout", "-ut", action="store_true", help="Continue running until timeout is reached, even if the estimated verification time is larger than twice the timeout.")
     parser.add_argument("--force-reestimate", action="store_true", help="Force re-estimation of generator and SaP speed even if existing estimates are found in the database.")
     args = parser.parse_args()

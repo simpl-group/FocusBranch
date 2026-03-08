@@ -127,7 +127,7 @@ def __estimate_SaP_speed_on_level(
     unk_combs: torch.Tensor,
     level: int,  # the size of each combination in unk_combs is `level`
     num_indices: int,  # Number of pixels in the image (e.g., 1024 for 32x32 images)
-) -> torch.Tensor:
+) -> tuple[float, float]:
     last_item = unk_combs[:, -1] if level > 0 else torch.tensor([-1], dtype=torch.int64)
     num_children = num_indices - last_item - 1
     children_start_offset = num_children.cumsum(dim=0) - num_children
@@ -149,19 +149,19 @@ def batched_randsample(upper_bound: int, sample_size: int, batch_size: int) -> t
 def estimate_SaP_speed(epsilon:int, num_indices:int, show_progress=False, force_reestimate=False, size_a: int=13740, size_b: int=53740) -> tuple[dict[int, float], dict[int, float]]:
     splitting_speed: dict[int, float] = {}
     pruning_speed: dict[int, float] = {}
-    start_epsilon = 2  # Level 0 and 1 are very fast, we can skip estimation on those levels
+    start_level = 2  # Level 0 and 1 are very fast, we can skip estimation on those levels
     if not force_reestimate:
         for level in range(2, epsilon):
             # Try to get existing speed estimates from the database
             existing_speeds = get_SaP_speed(chunk_size, num_indices, level)
             if existing_speeds:
                 splitting_speed[level], pruning_speed[level] = existing_speeds
-                start_epsilon = level + 1
+                start_level = level + 1
             else: break
-        if start_epsilon >= epsilon:
+        if start_level >= epsilon:
             return splitting_speed, pruning_speed
     print(f"Estimating SaP speed on level", end="")
-    for level in range(start_epsilon, epsilon):
+    for level in range(start_level, epsilon):
         if show_progress: print(f" {level}", end="" if level != epsilon - 1 else "\n", flush=True)
         unk_combs = batched_randsample(num_indices, level, size_a).unique(dim=0)
         splitting_speed_a, pruning_speed_a = __estimate_SaP_speed_on_level(unk_combs, level=level, num_indices=num_indices)

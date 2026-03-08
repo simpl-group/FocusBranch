@@ -522,7 +522,6 @@ if __name__ == '__main__':
     parser.add_argument('--worker_id', type=int, default=0, help='The index of the worker')
     parser.add_argument('--num-workers', type=int, default=1, help='Total number of workers')
     parser.add_argument('--port', type=int, default=0, help='The port main verification process is listening on')
-    parser.add_argument('--pool-size', type=int, default=2000, help='The size of the batch pool')
     args = parser.parse_args()
 
     verifier = get_verifier(args)
