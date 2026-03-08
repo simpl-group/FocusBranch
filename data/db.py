@@ -21,6 +21,28 @@ def _insert_row(table_name, columns, values, db=DB_PATH, timeout=30, retries=4):
             else:
                 raise e
 
+def insert_generator_speed(num_workers: int, num_pixels: int, generator_launch_time: float, skipping_iter_speed: float, normal_iter_speed: float, db=DB_PATH):
+    columns = ["num_workers", "num_pixels", "generator_launch_time", "skipping_iter_speed", "normal_iter_speed"]
+    values = [num_workers, num_pixels, generator_launch_time, skipping_iter_speed, normal_iter_speed]
+    _insert_row("generator_speed", columns, values, db=db)
+
+def get_generator_speed(num_workers: int, num_pixels: int, db=DB_PATH) -> tuple[float, float, float] | None:
+    query = "SELECT generator_launch_time, skipping_iter_speed, normal_iter_speed FROM generator_speed WHERE num_workers = ? AND num_pixels = ?"
+    with sqlite3.connect(db) as c:
+        result = c.execute(query, (num_workers, num_pixels)).fetchone()
+    return result if result else None
+
+def insert_SaP_speed(chunk_size: int, num_indices: int, level: int, splitting_speed: float, pruning_speed: float, db=DB_PATH):
+    columns = ["chunk_size", "num_indices", "level", "splitting_speed", "pruning_speed"]
+    values = [chunk_size, num_indices, level, splitting_speed, pruning_speed]
+    _insert_row("SaP_speed", columns, values, db=db)
+
+def get_SaP_speed(chunk_size: int, num_indices: int, level: int, db=DB_PATH) -> tuple[float, float] | None:
+    query = "SELECT splitting_speed, pruning_speed FROM SaP_speed WHERE chunk_size = ? AND num_indices = ? AND level = ?"
+    with sqlite3.connect(db) as c:
+        result = c.execute(query, (chunk_size, num_indices, level)).fetchone()
+    return result if result else None
+
 def insert_sigma0(net: str, img: int, min_eps: int, true_label=-1, adversarial_label=-1, total_duration=0.0, seed=0, db=DB_PATH):
     columns = ["net", "img", "min_eps", "true_label", "adversarial_label", "total_duration", "seed"]
     values = [net, img, min_eps, true_label, adversarial_label, total_duration, seed]

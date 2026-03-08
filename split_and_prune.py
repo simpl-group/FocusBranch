@@ -3,6 +3,7 @@ import math
 import torch
 from tqdm import tqdm
 from bimm import combs2bitmasks, bitmasks2combs, superset_sum
+from data.db import insert_SaP_speed, get_SaP_speed
 from utils import DEVICE, TQDM_BAR_FORMAT
 
 chunk_size = 4000  # Adjust based on GPU memory availability
@@ -145,16 +146,29 @@ def batched_randsample(upper_bound: int, sample_size: int, batch_size: int) -> t
     rand_combs = torch.rand(batch_size, upper_bound, device=DEVICE).topk(sample_size, dim=1, sorted=False).indices
     return rand_combs.sort().values.cpu()
 
-def estimate_SaP_speed(epsilon:int, num_indices:int, show_progress=False, size_a: int=13740, size_b: int=53740):
+def estimate_SaP_speed(epsilon:int, num_indices:int, show_progress=False, force_reestimate=False, size_a: int=13740, size_b: int=53740) -> tuple[dict[int, float], dict[int, float]]:
     splitting_speed: dict[int, float] = {}
     pruning_speed: dict[int, float] = {}
-    for level in range(2, epsilon):
+    start_epsilon = 2  # Level 0 and 1 are very fast, we can skip estimation on those levels
+    if not force_reestimate:
+        for level in range(2, epsilon):
+            # Try to get existing speed estimates from the database
+            existing_speeds = get_SaP_speed(chunk_size, num_indices, level)
+            if existing_speeds:
+                splitting_speed[level], pruning_speed[level] = existing_speeds
+                start_epsilon = level + 1
+            else: break
+        if start_epsilon >= epsilon:
+            return splitting_speed, pruning_speed
+    print(f"Estimating SaP speed on level", end="")
+    for level in range(start_epsilon, epsilon):
         if show_progress: print(f" {level}", end="" if level != epsilon - 1 else "\n", flush=True)
         unk_combs = batched_randsample(num_indices, level, size_a).unique(dim=0)
         splitting_speed_a, pruning_speed_a = __estimate_SaP_speed_on_level(unk_combs, level=level, num_indices=num_indices)
         unk_combs = batched_randsample(num_indices, level, size_b).unique(dim=0)
         splitting_speed_b, pruning_speed_b = __estimate_SaP_speed_on_level(unk_combs, level=level, num_indices=num_indices)
         splitting_speed[level], pruning_speed[level] = max(splitting_speed_a, splitting_speed_b), max(pruning_speed_a, pruning_speed_b)
+        insert_SaP_speed(chunk_size, num_indices, level, splitting_speed[level], pruning_speed[level])
     return splitting_speed, pruning_speed
 
 def estimate_SaP_time(num_unk: int, level: int, num_indices: int, splitting_speed: float, pruning_speed: float) -> float:

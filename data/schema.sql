@@ -1,3 +1,21 @@
+CREATE TABLE IF NOT EXISTS generator_speed (
+    num_workers INTEGER,
+    num_pixels INTEGER,
+    generator_launch_time REAL,
+    skipping_iter_speed REAL,
+    normal_iter_speed REAL,
+    PRIMARY KEY (num_workers, num_pixels)
+);
+
+CREATE TABLE IF NOT EXISTS SaP_speed (
+    chunk_size INTEGER,
+    num_indices INTEGER,
+    level INTEGER,
+    splitting_speed REAL,
+    pruning_speed REAL,
+    PRIMARY KEY (chunk_size, num_indices, level)
+);
+
 CREATE TABLE IF NOT EXISTS sigma0 (
     net TEXT,
     img INTEGER,

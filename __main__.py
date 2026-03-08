@@ -30,6 +30,7 @@ if __name__ == '__main__':
     parser.add_argument("--strategy", type=lambda s: Strategy[s], choices=list(Strategy), default=Strategy.CheSaP, help="the strategy to use for verification")
     parser.add_argument('--pool-size', "-ps", type=int, default=2000, help='The size of the batch pool')
     parser.add_argument("--until-timedout", "-ut", action="store_true", help="Continue running until timeout is reached, even if the estimated verification time is larger than twice the timeout.")
+    parser.add_argument("--force-reestimate", action="store_true", help="Force re-estimation of generator and SaP speed even if existing estimates are found in the database.")
     args = parser.parse_args()
     if not ours_config_consistent(net=args.net, eps=args.epsilon, img=args.start_idx+args.test_batches-1, batch_size=args.batch_size, gpu_num=args.gpu_num, timeout=args.timeout, rk=args.rep_each_k, rl=args.rep_each_level):
         warnings.warn(f"Configuration inconsistent: net={args.net}, eps={args.epsilon}, img={args.start_idx+args.test_batches-1}, timeout={args.timeout}, batch_size={args.batch_size}, gpu_num={args.gpu_num}, rk={args.rep_each_k}, rl={args.rep_each_level}.")
@@ -98,7 +99,8 @@ if __name__ == '__main__':
         plan_only=args.plan_only,
         pool_size=args.pool_size,
         strategy=args.strategy,
-        until_timedout=args.until_timedout
+        until_timedout=args.until_timedout,
+        force_reestimate=args.force_reestimate
     )
 
     image_results_by_image_index = {}

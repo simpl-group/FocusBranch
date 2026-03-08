@@ -1,5 +1,6 @@
 from coverd_finite_geometries import Geometry
 from . import launch_covering_generator
+from data.db import insert_generator_speed, get_generator_speed
 from multiprocessing.connection import Listener
 from scipy.stats import norm
 import random
@@ -7,7 +8,13 @@ import math
 import time
 
 
-def estimate_generator_speed(geometry=Geometry(7,5,5), num_workers=4, num_pixels=784):
+def estimate_generator_speed(geometry=Geometry(7,5,5), num_workers=4, num_pixels=784, force_reestimate=False):
+    if not force_reestimate:
+        # Try to get existing speed estimates from the database
+        existing_speeds = get_generator_speed(num_workers, num_pixels)
+        if existing_speeds: return existing_speeds
+
+    print(f"Estimating generator speed ...")
     num_of_blocks = math.floor(geometry.number_of_blocks() / num_workers)
     worker_id = 0
     if worker_id < geometry.number_of_blocks() % num_workers:
@@ -58,7 +65,9 @@ def estimate_generator_speed(geometry=Geometry(7,5,5), num_workers=4, num_pixels
                 iter_duration2 = time.time() - iter_start_time2
                 blocks_conn.send('done')
     iter_speed = geometry.number_of_blocks() / iter_duration2
-    return (launch_time1+launch_time2)*0.5, skipping_iter_speed, iter_speed
+    generator_launch_time = (launch_time1+launch_time2)*0.5
+    insert_generator_speed(num_workers, num_pixels, generator_launch_time, skipping_iter_speed, iter_speed)
+    return generator_launch_time, skipping_iter_speed, iter_speed
 
 def estimate_extra_time(geometry: Geometry, num_workers, num_pixels, pool_size, skipping_iter_speed, iter_speed):
     mean = geometry.block_size() * num_pixels / geometry.number_of_points()
