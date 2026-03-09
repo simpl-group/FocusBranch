@@ -146,7 +146,7 @@ def batched_randsample(upper_bound: int, sample_size: int, batch_size: int) -> t
     rand_combs = torch.rand(batch_size, upper_bound, device=DEVICE).topk(sample_size, dim=1, sorted=False).indices
     return rand_combs.sort().values.cpu()
 
-def estimate_SaP_speed(epsilon:int, num_indices:int, show_progress=False, force_reestimate=False, size_a: int=13740, size_b: int=53740) -> tuple[dict[int, float], dict[int, float]]:
+def estimate_SaP_speed(epsilon:int, num_indices:int, force_reestimate=False, size_a: int=13740, size_b: int=53740) -> tuple[dict[int, float], dict[int, float]]:
     splitting_speed: dict[int, float] = {}
     pruning_speed: dict[int, float] = {}
     start_level = 2  # Level 0 and 1 are very fast, we can skip estimation on those levels
@@ -162,7 +162,7 @@ def estimate_SaP_speed(epsilon:int, num_indices:int, show_progress=False, force_
             return splitting_speed, pruning_speed
     print(f"Estimating SaP speed on level", end="")
     for level in range(start_level, epsilon):
-        if show_progress: print(f" {level}", end="" if level != epsilon - 1 else "\n", flush=True)
+        print(f" {level}", end="" if level != epsilon - 1 else "\n", flush=True)
         unk_combs = batched_randsample(num_indices, level, size_a).unique(dim=0)
         splitting_speed_a, pruning_speed_a = __estimate_SaP_speed_on_level(unk_combs, level=level, num_indices=num_indices)
         unk_combs = batched_randsample(num_indices, level, size_b).unique(dim=0)

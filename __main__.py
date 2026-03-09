@@ -10,20 +10,19 @@ import json
 import itertools
 import time
 import random
+from inspect import signature
 from torch.cuda import device_count
 import pandas as pd
-from utils.shared import add_shared_arguments
+from utils.shared import add_shared_arguments, get2
 from data.db import store_ours_result, ours_should_skip, ours_config_consistent, sigma0_min_eps, insert_ours
-from data.prepare import build_loader
-from models import get_network_and_dataset_utils
 from solver_check import launch_gurobi_worker
 from verifier import __file__ as verifier_file
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Sample-wise (local) L0 robustness verification for neural networks', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     add_shared_arguments(parser)
-    parser.add_argument("--gpu_num", type=int, default=2, help="the number of GPUs used in the analysis")
-    parser.add_argument("--milp_num", type=int, default=1, help="the number of MILP instances used in the analysis")
+    parser.add_argument("--gpu_num", type=int, default=4, help="the number of GPUs used in the analysis")
+    parser.add_argument("--milp_num", type=int, default=5, help="the number of MILP instances used in the analysis")
     parser.add_argument('--base_seed', type=int, default=42, help='the base seed')
     parser.add_argument("--detail", action="store_true", help="Output detailed superset statistics for each image in a separate excel file.")
     parser.add_argument("--plan_only", action="store_true", help="Only run the planning stage without actual verification.")
@@ -31,8 +30,11 @@ if __name__ == '__main__':
     parser.add_argument("--until-timedout", "-ut", action="store_true", help="Continue running until timeout is reached, even if the estimated verification time is larger than twice the timeout.")
     parser.add_argument("--force-reestimate", action="store_true", help="Force re-estimation of generator and SaP speed even if existing estimates are found in the database.")
     args = parser.parse_args()
-    if not ours_config_consistent(net=args.net, eps=args.epsilon, img=args.start_idx+args.test_batches-1, batch_size=args.batch_size, gpu_num=args.gpu_num, timeout=args.timeout, rk=args.rep_each_k, rl=args.rep_each_level):
-        warnings.warn(f"Configuration inconsistent: net={args.net}, eps={args.epsilon}, img={args.start_idx+args.test_batches-1}, timeout={args.timeout}, batch_size={args.batch_size}, gpu_num={args.gpu_num}, rk={args.rep_each_k}, rl={args.rep_each_level}.")
+    config_params = signature(ours_config_consistent).parameters.keys()
+    config_kwargs = {name: getattr(args, name) for name in config_params if hasattr(args, name)}
+    consistent, warning_msg = ours_config_consistent(img=args.start_idx+args.test_batches-1, **config_kwargs)
+    if not consistent:
+        warnings.warn(f"Configuration inconsistent:\n{warning_msg}.")
         if not args.force_store and not args.demo:
             exit(1)
 
@@ -44,10 +46,10 @@ if __name__ == '__main__':
         warnings.warn(f"Requested {args.gpu_num} GPU workers but only {len(available_gpus)} GPU are available.")
 
     export_results = args.output != None
-    args.output = f"{args.output if args.output else ''}{args.net}e{args.epsilon}s{args.start_idx}_n{args.test_batches}b{args.batch_size}g{args.gpu_num}"
-    ilogname = args.output.rsplit("s", 1)[0]
+    args.output = f"{args.output if args.output else ''}{args.net}e{args.epsilon}s{args.start_idx}_n{args.test_batches}g{args.gpu_num}m{args.milp_num}cb{args.concretecheck_batch}sb{args.supercheck_batch}ps{args.pool_size}"
+    ilogname = f"{args.net}e{args.epsilon}g{args.gpu_num}b{args.supercheck_batch}p{args.pool_size}"
     args.output = args.output + ".json"
-    args.pool_size = min(max(args.pool_size, args.batch_size), args.batch_size * 10)
+    args.pool_size = min(max(args.pool_size, args.supercheck_batch), args.supercheck_batch * 10)
 
     address = ('localhost', 0)
     with Listener(address) as gpu_listener, Listener(address) as cpu_listener:
@@ -60,7 +62,8 @@ if __name__ == '__main__':
                 "--num-workers", str(args.gpu_num),
                 "--port", str(gpu_listener.address[1]),
                 "--net",  args.net,
-                "--batch-size", str(args.batch_size),
+                "--concretecheck-batch", str(args.concretecheck_batch),
+                "--supercheck-batch", str(args.supercheck_batch),
                 "--pool-size", str(args.pool_size),
                 "--epsilon", str(args.epsilon),
                 "--max-k", str(args.max_k),
@@ -77,33 +80,19 @@ if __name__ == '__main__':
         print("Waiting for gpu workers")
         gpu_workers = [gpu_listener.accept() for _ in range(args.gpu_num)]
 
-    net, dataset_utils = get_network_and_dataset_utils(args.net)
-    images, labels = dataset_utils.load_xy_from_csv(normalize=False)  # TODO: add option to normalize
-    data_loader = build_loader(
-        images,
-        labels,
-        batch_size=args.grain_size,
-        target_label=args.target_label,
-        start_idx=args.start_idx,
-        num_batches=args.test_batches
-    )
+    verifier, data_loader = get2(args)
     analyzer = LZeroRobustnessAnalyzer(
+        verifier=verifier,
         gpu_workers=gpu_workers,
         cpu_workers=cpu_workers,
-        t=args.epsilon,
-        timeout=args.timeout,
-        max_k=args.max_k,
-        num_pixels=dataset_utils.num_pixels,
-        channel_size=dataset_utils.channel_size,
         plan_only=args.plan_only,
-        pool_size=args.pool_size,
         strategy=args.strategy,
         until_timedout=args.until_timedout,
         force_reestimate=args.force_reestimate
     )
 
     image_results_by_image_index = {}
-    correctly_classified_images = 0
+    tried_images = 0
     verified_images = 0
     unsafe_images = 0
     cum_time = 0.
@@ -112,7 +101,7 @@ if __name__ == '__main__':
         numpy_img = image.reshape(-1).numpy()  # shape (1, C, H, W) -> (C*H*W)
         label = true_label.item()
         start = time.time()
-        is_correctly_classified = net(image).argmax(dim=1).eq(true_label).all().item()
+        is_correctly_classified = verifier.torch_net(image).argmax(dim=1).eq(true_label).all().item()
         image_results = {}
         image_results['is_correctly_classified'] = is_correctly_classified
         image_results['true_label'] = label
@@ -125,11 +114,15 @@ if __name__ == '__main__':
         if skip: print(f"Image {i} for net={args.net}, eps={args.epsilon} should be skipped.")
         if not skip or args.force_store or args.demo:
             if is_correctly_classified:
-                correctly_classified_images += 1
+                tried_images += 1
+                if analyzer.mean_concretecheck_time == None:
+                    verifier.adapt_target_images(image, true_label)
+                    analyzer.mean_concretecheck_time = verifier.estimate_mean_concretecheck_time(netname=args.net, force_reestimate=args.force_reestimate)
                 print(f'Starting to analyze image {i}, label {label}')
 
                 random.seed(args.base_seed + i)
                 analyzer.update_image(numpy_img, label)
+                start = time.time()
                 analysis_summary = analyzer.analyze()
                 exec_details = analysis_summary.pop('exec_details', None)
                 if exec_details is not None and args.detail:
@@ -157,25 +150,27 @@ if __name__ == '__main__':
 
         print(
             f"progress: {1 + i - args.start_idx}/{args.test_batches}, "
-            f"correct:  {correctly_classified_images}/{1 + i - args.start_idx}, "
-            f"verified: {verified_images}/{correctly_classified_images}, "
-            f"unsafe: {unsafe_images}/{correctly_classified_images}, ",
-            f"time: {round(time.time() - start, 3)}; {0 if cum_time == 0 else cum_time / correctly_classified_images:.3f}; {cum_time:.3f}"
+            f"correct:  {tried_images}/{1 + i - args.start_idx}, "
+            f"verified: {verified_images}/{tried_images}, "
+            f"unsafe: {unsafe_images}/{tried_images}, ",
+            f"time: {round(time.time() - start, 3)}; {0 if cum_time == 0 else cum_time / tried_images:.3f}; {cum_time:.3f}"
         )
         print('*******************************************************')
 
     for worker in itertools.chain(gpu_workers, cpu_workers):
         worker.send('terminate')
 
-    print('analysis precision ', verified_images, '/ ', correctly_classified_images)
+    print('analysis precision ', verified_images, '/ ', tried_images)
 
     if export_results:
         results = {
             'netname': args.net,
-            't': args.epsilon,
+            'epsilon': args.epsilon,
             'rep_each_k': args.rep_each_k,
             'rep_each_level': args.rep_each_level,
-            'batch_size': args.batch_size,
+            'concretecheck_batch': args.concretecheck_batch,
+            'supercheck_batch': args.supercheck_batch,
+            'pool_size': args.pool_size,
             'gpu_num': args.gpu_num,
             'milp_num': args.milp_num,
             'timeout': args.timeout,

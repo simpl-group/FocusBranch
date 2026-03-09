@@ -5,6 +5,7 @@ from coverd_finite_geometries import get_possible_geometries, Geometry
 from covering_generator.estimator import estimate_generator_speed, estimate_extra_time
 from split_and_prune import estimate_SaP_speed, estimate_SaP_time, prepare4pruning, prune
 from bimm import combs2bitmasks, bitmasks2combs, superset_sum
+from verifier import Verifier
 import threading
 import queue
 import math
@@ -34,25 +35,25 @@ class Strategy(Enum):
         return self.name
 
 class LZeroRobustnessAnalyzer:
-    def __init__(self, gpu_workers: list[Connection], cpu_workers: list[Connection], t: int, timeout: int, max_k: int, num_pixels: int, channel_size: int, plan_only: bool, pool_size: int, strategy: Strategy, until_timedout: bool, force_reestimate: bool):
+    def __init__(self, verifier: Verifier, gpu_workers: list[Connection], cpu_workers: list[Connection], plan_only: bool, strategy: Strategy, until_timedout: bool, force_reestimate: bool):
+        self.verifier = verifier
         self.__gpu_workers = gpu_workers
         self.__num_gpu_workers = len(gpu_workers)
         self.__cpu_workers = cpu_workers
         self.__num_cpu_workers = len(cpu_workers)
-        self.__t = t
-        self.__timeout = timeout
-        self.__number_of_pixels = num_pixels
-        self.__channel_size = channel_size
-        self.__refinement_db_max_v = max_k
         self.__plan_only = plan_only
         self.__strategy = strategy
         self.__until_timedout = until_timedout
-        self.covering_sizes = {t:load_covering_sizes(t, clipping_size=500000) for t in range(CVD_MIN_T, min(self.__t + 1, CVD_MAX_T + 1))}
-        generator_launch_time, skipping_iter_speed, normal_iter_speed = estimate_generator_speed(num_workers=self.__num_gpu_workers, num_pixels=num_pixels, force_reestimate=force_reestimate)
-        self.cvd_extra_time = lambda geometry: generator_launch_time + estimate_extra_time(geometry, num_workers=self.__num_gpu_workers, num_pixels=num_pixels, pool_size=pool_size, skipping_iter_speed=skipping_iter_speed, iter_speed=normal_iter_speed)
-        splitting_speed, pruning_speed = estimate_SaP_speed(epsilon=self.__t, num_indices=num_pixels, show_progress=True, force_reestimate=force_reestimate)
-        self.estimate_SaP_time = lambda num_unk, level: estimate_SaP_time(num_unk, level, num_pixels, splitting_speed[level], pruning_speed[level])
+        self.__e, self.__v, self.__timeout, self.__channel_size = verifier.eps, verifier.num_pixels, verifier.timeout, verifier.bounded_x0.channel_size
+        self.__refinement_db_max_v = verifier.max_k
+
+        self.covering_sizes = {t:load_covering_sizes(t, clipping_size=500000) for t in range(CVD_MIN_T, min(self.__e + 1, CVD_MAX_T + 1))}
+        generator_launch_time, skipping_iter_speed, normal_iter_speed = estimate_generator_speed(num_workers=self.__num_gpu_workers, num_pixels=self.__v, force_reestimate=force_reestimate)
+        self.cvd_extra_time = lambda geometry: generator_launch_time + estimate_extra_time(geometry, num_workers=self.__num_gpu_workers, num_pixels=self.__v, pool_size=verifier.pool_size, skipping_iter_speed=skipping_iter_speed, iter_speed=normal_iter_speed)
+        splitting_speed, pruning_speed = estimate_SaP_speed(epsilon=self.__e, num_indices=self.__v, force_reestimate=force_reestimate)
+        self.estimate_SaP_time = lambda num_unk, level: estimate_SaP_time(num_unk, level, self.__v, splitting_speed[level], pruning_speed[level])
         self.estimate_pruning_time = lambda num_new_combs, num_references, level: num_new_combs * num_references / pruning_speed[level]
+        self.mean_concretecheck_time: list[float]|None = None
 
     def update_image(self, image: np.ndarray, label: int):
         self.__deduplicated = False
@@ -66,47 +67,45 @@ class LZeroRobustnessAnalyzer:
         return time.time() - self.analyzer_start_time > self.__timeout
 
     def analyze(self):
+        assert self.mean_concretecheck_time is not None, "mean_concretecheck_time should have been set by now."
         print('Planning stage started')
         self.analyzer_start_time = time.time()
-        super_success_rate, mean_super_check_time = {}, {}
+        super_success_rate, mean_supercheck_time = {}, {}
         # Sample concrete nodes at all levels
-        sample_counts, sample_successes = [0] * (self.__t + 1), [0] * (self.__t + 1)
-        sample_durations: list[float] = [0.0] * (self.__t + 1)
+        sample_counts, sample_successes = [0] * (self.__e + 1), [0] * (self.__e + 1)
         for gpu_worker in self.__gpu_workers:
-            sc, ss, sd = gpu_worker.recv()
+            sc, ss = gpu_worker.recv()
             sample_counts = [a + b for a, b in zip(sample_counts, sc)]
             sample_successes = [a + b for a, b in zip(sample_successes, ss)]
-            sample_durations = [a + b for a, b in zip(sample_durations, sd)]
         concrete_safe_rate = [s / c if c > 0 else 0.0 for s, c in zip(sample_successes, sample_counts)]
-        mean_concrete_check_time = [d / c if c > 0 else 0.0 for d, c in zip(sample_durations, sample_counts)]
-        if all(sample_successes[i] != math.comb(self.__number_of_pixels, i) * self.__num_gpu_workers for i in range(self.__t + 1)):
+        if all(sample_successes[i] != math.comb(self.__v, i) * self.__num_gpu_workers for i in range(self.__e + 1)):
             # Sample super-nodes at levels with high concrete safe rate
-            for l in range(self.__t + 1):
-                if CVD_MIN_T <= l <= CVD_MAX_T and (concrete_safe_rate[l] > 0.99 or l == self.__t):
+            for l in range(self.__e + 1):
+                if CVD_MIN_T <= l <= CVD_MAX_T and (concrete_safe_rate[l] > 0.99 or l == self.__e):
                     print(f'Sampling super-node on level {l}')
                     for gpu_worker in self.__gpu_workers:
                         gpu_worker.send(('sample-all-k', l))
                     self.__level = l
-                    super_success_rate[l], mean_super_check_time[l] = self.__estimate_sr_and_mt()
-        estimated_CC_time_per_l = [0.0] * (self.__t + 1)
-        estimated_SaP_time_per_l = [0.0] * (self.__t + 1)  # only estimate SaP time for levels >= 2, since level 0 and 1 are usually very fast and don't need pruning
+                    super_success_rate[l], mean_supercheck_time[l] = self.__estimate_sr_and_mt()
+        estimated_CC_time_per_l = [0.0] * (self.__e + 1)
+        estimated_SaP_time_per_l = [0.0] * (self.__e + 1)  # only estimate SaP time for levels >= 2, since level 0 and 1 are usually very fast and don't need pruning
         first_any_safe_level = 0
         # TODO: Add logging for estimated CC&SaP time
-        for l in range(self.__t + 1):
+        for l in range(self.__e + 1):
             if concrete_safe_rate[l] == 0.0:
                 first_any_safe_level += 1  # not to start on this level
                 continue
             if l < 2:  # avoid estimating SaP time for level 0 and 1
-                estimated_nodes_this_level = math.comb(self.__number_of_pixels, l)
+                estimated_nodes_this_level = math.comb(self.__v, l)
             else:
-                estimated_nodes_this_level = math.ceil(math.comb(self.__number_of_pixels, l) * (1 - concrete_safe_rate[l - 1]) ** 2)
+                estimated_nodes_this_level = math.ceil(math.comb(self.__v, l) * (1 - concrete_safe_rate[l - 1]) ** 2)
                 # print(f"Estimated concretes  on level {l}: {estimated_nodes_this_level} with concrete safe rate {concrete_safe_rate[l]:.4f}")
-                if l < self.__t:
+                if l < self.__e:
                     estimated_unk_nodes_this_level = estimated_nodes_this_level * (1 - concrete_safe_rate[l])
                     estimated_SaP_time_per_l[l] = self.estimate_SaP_time(estimated_unk_nodes_this_level, l)
                     # print(f"Estimated unknowns   on level {l}: {estimated_unk_nodes_this_level:.2f}")
                     # print(f"Estimated SaP   time on level {l}: {estimated_SaP_time_per_l[l]:.2f} seconds")
-            estimated_CC_time_per_l[l] = mean_concrete_check_time[l] * estimated_nodes_this_level
+            estimated_CC_time_per_l[l] = self.mean_concretecheck_time[l] * estimated_nodes_this_level
             # print(f"Estimated check time on level {l}: {estimated_CC_time_per_l[l]:.2f} seconds")
             if concrete_safe_rate[l] == 1.0:
                 break  # this level is estimated to be 100% robust and verified, no need to go deeper
@@ -121,19 +120,19 @@ class LZeroRobustnessAnalyzer:
         chosen_geometries_info: dict[int, dict[str, object]] = {}
 
         choosing_strategy_start = time.time()
-        for l in range(first_any_safe_level, self.__t + 1):
-            if sample_successes[l] == math.comb(self.__number_of_pixels, l) * self.__num_gpu_workers:
+        for l in range(first_any_safe_level, self.__e + 1):
+            if sample_successes[l] == math.comb(self.__v, l) * self.__num_gpu_workers:
                 candidate_strategies.append((estimated_CC_time_per_l[l], 'skip', l))
                 break
             tail_CC_time = sum(estimated_CC_time_per_l[l + 1:])
             tail_SaP_time = sum(estimated_SaP_time_per_l[l:])
             if tail_SaP_time > 1.0: tail_SaP_time /= self.__num_gpu_workers
-            CCSaP_time = (mean_concrete_check_time[l] * math.comb(self.__number_of_pixels, l) + tail_CC_time) / self.__num_gpu_workers + tail_SaP_time
+            CCSaP_time = (self.mean_concretecheck_time[l] * math.comb(self.__v, l) + tail_CC_time) / self.__num_gpu_workers + tail_SaP_time
             candidate_strategies.append((CCSaP_time, 'CCSaP', l))
             if l in super_success_rate:
                 self.__level = l
                 fraction_robusts[l] = self.__compute_fraction_robust(super_success_rate[l])
-                VTs[l], refinement_strategies[l] = self.__choose_strategy(fraction_robusts[l], mean_super_check_time[l], super_success_rate[l])
+                VTs[l], refinement_strategies[l] = self.__choose_strategy(fraction_robusts[l], mean_supercheck_time[l], super_success_rate[l])
                 chosen_geometries[l], geometries_data = self.__choose_geometry(VTs[l])
                 chosen_geometries_info[l] = geometries_data[0]
                 candidate_geometries.extend(geometries_data)
@@ -147,7 +146,7 @@ class LZeroRobustnessAnalyzer:
         elif self.__strategy == Strategy.SCSaP:
             candidate_strategies = list(filter(lambda s: s[1] == 'SCSaP', candidate_strategies))
         elif self.__strategy == Strategy.CoVerD:
-            candidate_strategies = list(filter(lambda s: s[1] == 'SCSaP' and s[2] == self.__t, candidate_strategies))
+            candidate_strategies = list(filter(lambda s: s[1] == 'SCSaP' and s[2] == self.__e, candidate_strategies))
         best_strategy = candidate_strategies[0]
         candidate_strategies = list(filter(lambda s: s[0] <= self.__timeout * 10, candidate_strategies))  # filter out noise strategies
         if len(candidate_strategies) == 0: candidate_strategies.append(best_strategy)  # at least have one strategy to show, even if it's an outlier
@@ -200,13 +199,13 @@ class LZeroRobustnessAnalyzer:
             for gpu_worker in self.__gpu_workers:
                 unk_combs_lst.append(gpu_worker.recv())  # wait for gpu workers to finish
             unk_combs = np.vstack(unk_combs_lst)
-            print(f'Level {self.__level} finished, unk_combs/all: {unk_combs.shape[0]}/{math.comb(self.__number_of_pixels, self.__level)}'
+            print(f'Level {self.__level} finished, unk_combs/all: {unk_combs.shape[0]}/{math.comb(self.__v, self.__level)}'
                 f' using {round(time.time() - current_level_start_time, 3)} s')
         elif best_strategy[1] == 'SCSaP':
-            self.__deduplicated = self.__level < self.__t  # SaP won't be used on the last level, so we might have duplicates on the last level
+            self.__deduplicated = self.__level < self.__e  # SaP won't be used on the last level, so we might have duplicates on the last level
             chosen_geometry, refinement_strategy = chosen_geometries[self.__level], refinement_strategies[self.__level]
             assert self.__level == min(refinement_strategy.keys()), f"Level mismatch: {self.__level} vs {min(refinement_strategy.keys())}"
-            chosen_indices = random.sample(range(chosen_geometry.number_of_points()), self.__number_of_pixels)
+            chosen_indices = random.sample(range(chosen_geometry.number_of_points()), self.__v)
             random.shuffle(chosen_indices)
             for gpu_worker in self.__gpu_workers:
                 gpu_worker.send(('SCSaP', chosen_geometry, chosen_indices, refinement_strategy))
@@ -232,7 +231,7 @@ class LZeroRobustnessAnalyzer:
             }
             results['exec_details'] = {
                 "Success Rate": {k:round(v, 5) for k, v in super_success_rate[self.__level].items()},
-                "Mean Time": {k:round(v, 6) for k, v in mean_super_check_time[self.__level].items()},
+                "Mean Time": {k:round(v, 6) for k, v in mean_supercheck_time[self.__level].items()},
                 "VT": {k:round(v, 6) for k, v in VTs[self.__level].items()},
                 "R": refinement_strategy,
                 "refinement_sizes": refinement_sizes,
@@ -334,10 +333,10 @@ class LZeroRobustnessAnalyzer:
         best_geometry: Geometry = None
         best_time = float('inf')
         geometries = []
-        for geometry in get_possible_geometries(self.__number_of_pixels, self.__level):
+        for geometry in get_possible_geometries(self.__v, self.__level):
             estimated_time = 0
-            pseudo_k = geometry.block_size() * self.__number_of_pixels / geometry.number_of_points()  # mean block size
-            std_dev = math.sqrt(pseudo_k * (1 - pseudo_k + (geometry.block_size() - 1) * (self.__number_of_pixels - 1) / (geometry.number_of_points() - 1)))
+            pseudo_k = geometry.block_size() * self.__v / geometry.number_of_points()  # mean block size
+            std_dev = math.sqrt(pseudo_k * (1 - pseudo_k + (geometry.block_size() - 1) * (self.__v - 1) / (geometry.number_of_points() - 1)))
             total_number_of_blocks = geometry.number_of_blocks()
 
             if (1 - norm.cdf(self.__refinement_db_max_v, pseudo_k, std_dev)) * total_number_of_blocks > 1e-2:
@@ -408,7 +407,7 @@ class LZeroRobustnessAnalyzer:
                             size_statistics['successes'] += num_verified
         pbar.close()
         print(f"num_finished: {num_finished}, total_covering_size: {total_covering_size}, remaining: {total_covering_size - num_finished}")
-        return np.vstack(unk_combs_lst) if len(unk_combs_lst) > 0 else np.empty((0, self.__number_of_pixels), dtype=int)
+        return np.vstack(unk_combs_lst) if len(unk_combs_lst) > 0 else np.empty((0, self.__v), dtype=int)
 
     def __handle_unk_combs(self, unk_combs: np.ndarray, deduplicate: bool = False):
         if unk_combs.shape[0] == 0 or self.timed_out(): return
@@ -417,7 +416,7 @@ class LZeroRobustnessAnalyzer:
             print(f"Level {self.__level} Before deduplication, unk_combs size: {unk_combs.shape[0]}", end="; ")
             unk_combs_tensor = torch.unique(unk_combs_tensor.cuda(), dim=0).cpu()
             print(f'After deduplication, unk_combs size: {unk_combs_tensor.shape[0]}')
-        while unk_combs_tensor.shape[0] > 0 and self.__level < self.__t and not self.timed_out():
+        while unk_combs_tensor.shape[0] > 0 and self.__level < self.__e and not self.timed_out():
             new_level_start_time = time.time()
             if self.__level > 1 and self.estimate_SaP_time(unk_combs_tensor.shape[0], self.__level) > 1.0:
                 print(f'Level {self.__level} estimated SaP time: {self.estimate_SaP_time(unk_combs_tensor.shape[0], self.__level):3f} s. Sharing SaP workload across all GPU workers...')
@@ -426,18 +425,18 @@ class LZeroRobustnessAnalyzer:
                 num_new_combs_per_worker = [0] * self.__num_gpu_workers
                 for i, gpu_worker in enumerate(self.__gpu_workers):
                     num_new_combs_per_worker[i] = gpu_worker.recv()
-                concrete_check_start_time = time.time()
-                SaP_duration = round(concrete_check_start_time - new_level_start_time, 3)
+                concretecheck_start_time = time.time()
+                SaP_duration = round(concretecheck_start_time - new_level_start_time, 3)
                 self.__level += 1
                 num_pruned = sum(num_new_combs_per_worker)
                 print(f'Current level: {self.__level}, SaP duration: {SaP_duration}s, num_pruned: {num_pruned}, each worker got: {num_new_combs_per_worker}')
             else:
-                new_combs_tensor, reference_bitmasks, target_s_cnt = prepare4pruning(unk_combs_tensor, self.__number_of_pixels)
+                new_combs_tensor, reference_bitmasks, target_s_cnt = prepare4pruning(unk_combs_tensor, self.__v)
                 if new_combs_tensor.shape[0] == 0: return
                 pruned_combs = prune(new_combs_tensor, reference_bitmasks, target_s_cnt, self.__level).numpy()
                 if pruned_combs.shape[0] == 0: return
-                concrete_check_start_time = time.time()
-                SaP_duration = round(concrete_check_start_time - new_level_start_time, 3)
+                concretecheck_start_time = time.time()
+                SaP_duration = round(concretecheck_start_time - new_level_start_time, 3)
                 self.__level += 1
                 num_pruned = pruned_combs.shape[0]
                 print(f'Current level: {self.__level}, SaP duration: {SaP_duration}s, num_pruned: {num_pruned}')
@@ -452,9 +451,9 @@ class LZeroRobustnessAnalyzer:
                 unk_combs_lst.append(gpu_worker.recv())  # wait for gpu workers to finish
             unk_combs_tensor = torch.from_numpy(np.vstack(unk_combs_lst))
             print(f'Level {self.__level} finished, unk_combs/all: {unk_combs_tensor.shape[0]}/{num_pruned}'
-                f' using {round(time.time() - new_level_start_time, 3)} s, checking duration: {round(time.time() - concrete_check_start_time, 3)} s')
-        if self.__level == self.__t and unk_combs_tensor.shape[0] > 0:
-            print(f'Checked deepest level {self.__t}, remaining unk_combs size: {unk_combs_tensor.shape[0]}')
+                f' using {round(time.time() - new_level_start_time, 3)} s, checking duration: {round(time.time() - concretecheck_start_time, 3)} s')
+        if self.__level == self.__e and unk_combs_tensor.shape[0] > 0:
+            print(f'Checked deepest level {self.__e}, remaining unk_combs size: {unk_combs_tensor.shape[0]}')
             for combs in unk_combs_tensor.tolist():
                 self.milp_job_queue.put(combs)
 
@@ -479,10 +478,10 @@ class LZeroRobustnessAnalyzer:
             known_suspects = self.innocent_suspects.union(self.waiting_suspects)
             unique_jobs = torch.tensor(queued_jobs, device="cuda").unique(dim=0)
             if len(known_suspects) > 0:
-                bitmask_length = (self.__number_of_pixels + 63) // 64
+                bitmask_length = (self.__v + 63) // 64
                 known_suspects_bm = combs2bitmasks(torch.tensor(list(known_suspects), device="cuda"), bitmask_length)
                 unique_jobs_bm = combs2bitmasks(unique_jobs, bitmask_length)
-                unique_jobs = bitmasks2combs(unique_jobs_bm[superset_sum(unique_jobs_bm, known_suspects_bm)==0], self.__t).tolist()
+                unique_jobs = bitmasks2combs(unique_jobs_bm[superset_sum(unique_jobs_bm, known_suspects_bm)==0], self.__e).tolist()
             removed = len(queued_jobs) - len(unique_jobs)
             for job in unique_jobs:
                 self.milp_job_queue.put(job)

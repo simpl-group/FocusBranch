@@ -9,7 +9,9 @@ import torch
 def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--net", type=str, choices=MODEL_SPECS.keys(), default="afc2", help="Neural network architecture",)
     parser.add_argument("-e", "--epsilon", type=int, default=3, help="L0 norm bound.")
-    parser.add_argument("-bs", "--batch-size", type=int, default=50)
+    parser.add_argument("-bs", "--batch-size", type=int, default=200)
+    parser.add_argument("-cb", "--concretecheck-batch", type=int, default=200, help="Batch size for ConcreteChecks. Defaults to the same as --batch-size if not specified.")
+    parser.add_argument("-sb", "--supercheck-batch", type=int, default=200, help="Batch size for SuperChecks. Defaults to the same as --batch-size if not specified.")
     parser.add_argument("--grain-size", type=int, default=1)
     parser.add_argument("--target-label", type=int, default=None)
     parser.add_argument("-to", "--timeout", type=int, default=1800)
@@ -21,7 +23,7 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--data-source", type=str, choices=["pt", "csv"], default="csv",
         help="'pt' uses a .pt file preprocessed by `data.prepare`, 'csv' uses a .csv file with images and labels.")
     parser.add_argument("--max-k", type=int, default=200, help="Maximum k to sample from.")
-    parser.add_argument("-rk", "--rep-each-k", type=int, default=100, help="Number of partial indices samples for each k.")
+    parser.add_argument("-rk", "--rep-each-k", type=int, default=200, help="Number of partial indices samples for each k.")
     parser.add_argument("-rl", "--rep-each-level", type=int, default=5000, help="Maximum number of combinations for each level.")
     parser.add_argument("-ps", "--pool-size", type=int, default=2000, help='The size of the batch pool')
 
@@ -30,7 +32,7 @@ def get4(args: argparse.Namespace) -> tuple[torch.nn.Module, SequentialAT, L0Bou
     if args.data_source == 'pt':
         images, labels = dataset_utils.load_xy_from_pt()
     elif args.data_source == 'csv':
-        images, labels = dataset_utils.load_xy_from_csv()
+        images, labels = dataset_utils.load_xy_from_csv(normalize=False)  # TODO: add option to normalize
     data_loader = build_loader(
         images,
         labels,

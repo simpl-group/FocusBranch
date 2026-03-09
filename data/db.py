@@ -21,6 +21,17 @@ def _insert_row(table_name, columns, values, db=DB_PATH, timeout=30, retries=4):
             else:
                 raise e
 
+def insert_mean_concretecheck_time(net: str, batch_size: int, eps: int, level: int, mean_time: float, db=DB_PATH):
+    columns = ["net", "batch_size", "eps", "level", "mean_time"]
+    values = [net, batch_size, eps, level, mean_time]
+    _insert_row("mean_concretecheck_time", columns, values, db=db)
+
+def get_mean_concretecheck_time(net: str, batch_size: int, eps: int, level: int, db=DB_PATH) -> float | None:
+    query = "SELECT mean_time FROM mean_concretecheck_time WHERE net = ? AND batch_size = ? AND eps = ? AND level = ?"
+    with sqlite3.connect(db) as c:
+        result = c.execute(query, (net, batch_size, eps, level)).fetchone()
+    return result[0] if result else None
+
 def insert_generator_speed(num_workers: int, num_pixels: int, generator_launch_time: float, skipping_iter_speed: float, normal_iter_speed: float, db=DB_PATH):
     columns = ["num_workers", "num_pixels", "generator_launch_time", "skipping_iter_speed", "normal_iter_speed"]
     values = [num_workers, num_pixels, generator_launch_time, skipping_iter_speed, normal_iter_speed]
@@ -214,20 +225,35 @@ milp_should_skip = _make_should_skip("milp")
 lirpa_should_skip = _make_should_skip("lirpa")
 coverd_should_skip = _make_should_skip("coverd")
 
-def ours_config_consistent(net: str, eps: int, img: int, batch_size: int, gpu_num: int, timeout:int, rk: int, rl: int, db=DB_PATH) -> bool:
+def ours_config_consistent(net: str, epsilon: int, img: int, gpu_num: int, milp_num: int, timeout:int, rep_each_k: int, rep_each_level: int, concretecheck_batch: int, supercheck_batch: int, pool_size: int, db=DB_PATH) -> tuple[bool, str]:
     query = "SELECT * FROM ours_config WHERE net = ? AND eps = ?"
     with sqlite3.connect(db) as c:
         c.row_factory = sqlite3.Row
-        result = c.execute(query, (net, eps)).fetchone()
+        result = c.execute(query, (net, epsilon)).fetchone()
     if not result:
-        return False
+        return False, "No config found for net={net}, eps={eps} in ours_config table"
     config = dict(result)
-    return (config['num_img'] > img and
-            config['batch_size'] == batch_size and
-            config['gpu_num'] == gpu_num and
-            config['time_limit_seconds'] == timeout and
-            config['rk'] == rk and
-            config['rl'] == rl)
+    # report inconsistent args:
+    inconsistent_args = []
+    if config['num_img'] <= img:
+        inconsistent_args.append(f"maximum img_idx \r\t\t\t(config: {config['num_img']} <= {img})")
+    if config['milp_num'] != milp_num:
+        inconsistent_args.append(f"--milp_num \r\t\t\t(config: {config['milp_num']} != {milp_num})")
+    if config['gpu_num'] != gpu_num:
+        inconsistent_args.append(f"--gpu_num \r\t\t\t(config: {config['gpu_num']} != {gpu_num})")
+    if config['time_limit_seconds'] != timeout:
+        inconsistent_args.append(f"--timeout \r\t\t\t(config: {config['time_limit_seconds']} != {timeout})")
+    if config['rep_each_k'] != rep_each_k:
+        inconsistent_args.append(f"--rep_each_k \r\t\t\t(config: {config['rep_each_k']} != {rep_each_k})")
+    if config['rep_each_level'] != rep_each_level:
+        inconsistent_args.append(f"--rep_each_level \r\t\t\t(config: {config['rep_each_level']} != {rep_each_level})")
+    if config['concretecheck_batch'] != 0 and config['concretecheck_batch'] != concretecheck_batch:
+        inconsistent_args.append(f"--concretecheck_batch \r\t\t\t(config: {config['concretecheck_batch']} != {concretecheck_batch})")
+    if config['supercheck_batch'] != 0 and config['supercheck_batch'] != supercheck_batch:
+        inconsistent_args.append(f"--supercheck_batch \r\t\t\t(config: {config['supercheck_batch']} != {supercheck_batch})")
+    if config['pool_size'] != 0 and config['pool_size'] != pool_size:
+        inconsistent_args.append(f"--pool_size \r\t\t\t(config: {config['pool_size']} != {pool_size})")
+    return len(inconsistent_args) == 0, "\n".join(inconsistent_args)
 
 def milp_config_consistent(net: str, eps: int, img: int, timeout:int, db=DB_PATH) -> bool:
     query = "SELECT * FROM milp_config WHERE net = ? AND eps = ?"
