@@ -253,3 +253,7 @@ test*.py
 *.xlsx
 *.sh
 *.db
+*.log
+*.err
+*.out
+*.tar

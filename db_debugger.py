@@ -17,7 +17,7 @@ if __name__ == '__main__':
             can_be_fixed = False
             with sqlite3.connect(db_path) as c:
                 adv_result = c.execute(f"SELECT found_adv, total_duration FROM ours WHERE net = ? AND img = ? AND eps = ?", (args.net, i, e)).fetchone()
-            adv_min_eps = sigma0_min_eps(net=args.net, img=i)
+            adv_min_eps = sigma0_min_eps(net=args.net, img=i, db=db_path)
             if adv_min_eps is not None and adv_min_eps <= e:
                 can_be_fixed = True
                 if adv_result:
@@ -28,7 +28,7 @@ if __name__ == '__main__':
                             insert_ours(net=args.net, img=i, eps=adv_min_eps, found_adv=True, use_cvd=-1, db=db_path)
                     elif adv_result[1] > 0: # both found an adversarial example, but ours took much longer time
                         print(f"Ours found adv for image {i:>2}, eps {e} with duration {adv_result[1]:>8.3f} s, while sigma0 also found with eps {adv_min_eps}")
-                        print("    This should not happen, unless sigma0's result is not recorded in the database.")
+                        print("    This happened because sigma0 has newly found an adversarial example with smaller eps and stored in the database.")
                         if args.force_store:
                             print(f"Updating the record for image {i:>2}, eps {e} with the known adversarial example.")
                             insert_ours(net=args.net, img=i, eps=adv_min_eps, found_adv=True, use_cvd=-1, db=db_path)
