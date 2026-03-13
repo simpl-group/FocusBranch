@@ -231,7 +231,7 @@ def ours_config_consistent(net: str, epsilon: int, img: int, gpu_num: int, milp_
         c.row_factory = sqlite3.Row
         result = c.execute(query, (net, epsilon)).fetchone()
     if not result:
-        return False, "No config found for net={net}, eps={eps} in ours_config table"
+        return False, f"No config found for net={net}, eps={epsilon} in ours_config table"
     config = dict(result)
     # report inconsistent args:
     inconsistent_args = []
