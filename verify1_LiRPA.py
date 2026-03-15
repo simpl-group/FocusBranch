@@ -12,7 +12,8 @@ import argparse
 from tqdm import tqdm
 from auto_LiRPA import BoundedModule, BoundedTensor
 from auto_LiRPA.perturbations import PerturbationL0Norm
-from auto_LiRPA.utils import stop_criterion_min
+def stop_criterion_min_ge0(): # from auto_LiRPA.utils import stop_criterion_min
+    return lambda x: (x.min(1, keepdim=True).values >= 0)
 import torch
 
 filterwarnings("ignore", category=DeprecationWarning)
@@ -50,13 +51,13 @@ if __name__ == "__main__":
     )
     img_shape = (1, *dataset_utils.image_shape)
     if need_normalization:
-        mean = torch.as_tensor(dataset_utils.mean, device=images.device, dtype=images.dtype).view(1, -1, 1, 1)
-        std = torch.as_tensor(dataset_utils.std, device=images.device, dtype=images.dtype).view(1, -1, 1, 1)
+        mean = torch.as_tensor(dataset_utils.mean, device=DEVICE, dtype=images.dtype).view(1, -1, 1, 1)
+        std = torch.as_tensor(dataset_utils.std, device=DEVICE, dtype=images.dtype).view(1, -1, 1, 1)
         img_LB = ((0.0 - mean) / std).expand(*img_shape)
         img_UB = ((1.0 - mean) / std).expand(*img_shape)
     else:
-        img_LB = torch.zeros(img_shape)
-        img_UB = torch.ones(img_shape)
+        img_LB = torch.zeros(img_shape).to(DEVICE)
+        img_UB = torch.ones(img_shape).to(DEVICE)
     total_time = 0.
     num_verified = 0
     net.cpu()
@@ -74,8 +75,14 @@ if __name__ == "__main__":
                 else:
                     marginal_tail = make_marginals_tail(pred_labels.item())
                 lirpa_model = BoundedModule(net+marginal_tail, torch.empty_like(images)).to(DEVICE)
-                lirpa_model.set_bound_opts({'optimize_bound_args':{
-                    'iteration': args.max_iteration, "stop_criterion_func": stop_criterion_min()}})
+                lirpa_model.set_bound_opts({
+                    'optimize_bound_args':{
+                        'iteration': args.max_iteration,
+                        'stop_criterion_func': stop_criterion_min_ge0(),
+                        'early_stop_patience': args.max_iteration,
+                        }
+                    }
+                )
                 bounded_images = BoundedTensor(images, PerturbationL0Norm(eps=args.epsilon, x_L=img_LB, x_U=img_UB))
 
                 success = False
@@ -84,8 +91,7 @@ if __name__ == "__main__":
                 try:
                     signal.alarm(args.timeout)
                     t0 = perf_counter()
-                    lb, _ = lirpa_model.compute_bounds(
-                        x=(bounded_images,), bound_upper=False, method=args.method)
+                    lb, _ = lirpa_model.compute_bounds(x=(bounded_images,), bound_upper=False, method=args.method)
                     signal.alarm(0)
                     if (lb >= 0).all():
                         success = True
@@ -98,7 +104,7 @@ if __name__ == "__main__":
                 total_time += elapsed_time
 
                 if args.demo:
-                    print(f"Lower bounds: {lb[0].tolist()}")
+                    if 'lb' in locals(): print(f"Lower bounds: {lb[0].tolist()}")
                     print(f"Verified safe: {success}, Time: {elapsed_time:.2f}s, result NOT stored")
                     break
 
