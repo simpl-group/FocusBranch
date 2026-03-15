@@ -1,7 +1,7 @@
 import warnings
 from utils import timeout_handler, TimeoutException, DEVICE, TQDM_BAR_FORMAT
 from utils.shared import add_shared_arguments
-from models import get_network_and_dataset_utils
+from models import get_network_and_dataset_utils, MODEL_SPECS
 from models.networks import make_marginal_tail, make_marginals_tail
 from data.prepare import build_loader
 from data.db import insert_lirpa, lirpa_should_skip, lirpa_config_consistent
@@ -34,18 +34,29 @@ if __name__ == "__main__":
         if not args.force_store and not args.demo:
             exit(1)
 
-    net, dataset_utils = get_network_and_dataset_utils(args.net, device=DEVICE)
+    net, dataset_utils = get_network_and_dataset_utils(args.net, device=DEVICE, add_affine_normalization=False)
+    need_normalization = MODEL_SPECS[args.net].need_normalization
     if args.data_source == 'pt':
-        images, labels = dataset_utils.load_xy_from_pt()
+        images, labels = dataset_utils.load_xy_from_pt(normalize=need_normalization)
     elif args.data_source == 'csv':
-        images, labels = dataset_utils.load_xy_from_csv()
+        images, labels = dataset_utils.load_xy_from_csv(normalize=need_normalization)
     data_loader = build_loader(
         images,
         labels,
         batch_size=1,
         target_label=args.target_label,
-        num_batches=args.start_idx+args.test_batches
+        start_idx=args.start_idx,
+        num_batches=args.test_batches
     )
+    img_shape = (1, *dataset_utils.image_shape)
+    if need_normalization:
+        mean = torch.as_tensor(dataset_utils.mean, device=images.device, dtype=images.dtype).view(1, -1, 1, 1)
+        std = torch.as_tensor(dataset_utils.std, device=images.device, dtype=images.dtype).view(1, -1, 1, 1)
+        img_LB = ((0.0 - mean) / std).expand(*img_shape)
+        img_UB = ((1.0 - mean) / std).expand(*img_shape)
+    else:
+        img_LB = torch.zeros(img_shape)
+        img_UB = torch.ones(img_shape)
     total_time = 0.
     num_verified = 0
     net.cpu()
@@ -65,7 +76,7 @@ if __name__ == "__main__":
                 lirpa_model = BoundedModule(net+marginal_tail, torch.empty_like(images)).to(DEVICE)
                 lirpa_model.set_bound_opts({'optimize_bound_args':{
                     'iteration': args.max_iteration, "stop_criterion_func": stop_criterion_min()}})
-                bounded_images = BoundedTensor(images, PerturbationL0Norm(eps=args.epsilon))
+                bounded_images = BoundedTensor(images, PerturbationL0Norm(eps=args.epsilon, x_L=img_LB, x_U=img_UB))
 
                 success = False
                 elapsed_time = 0.
