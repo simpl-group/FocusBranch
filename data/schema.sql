@@ -132,7 +132,6 @@ CREATE TABLE IF NOT EXISTS lirpa (
     cc INTEGER DEFAULT 1,
     eps INTEGER,
     verified INTEGER DEFAULT 0,
-    timed_out INTEGER DEFAULT 0,
     total_duration REAL DEFAULT 0,
     skip INTEGER DEFAULT 0,
     PRIMARY KEY (net, img, eps)

@@ -65,9 +65,9 @@ def sigma0_min_eps(net: str, img: int, db=DB_PATH) -> int | None:
         result = c.execute(query, (net, img)).fetchone()
     return result[0] if result else None
 
-def insert_lirpa(net: str, img: int, eps: int, cc=True, verified=False, timed_out=False, total_duration=0.0, db=DB_PATH):
-    columns = ["net", "img", "eps", "cc", "verified", "timed_out", "total_duration", "skip"]
-    values = [net, img, eps, int(cc), int(verified), int(timed_out), total_duration, 1]
+def insert_lirpa(net: str, img: int, eps: int, cc=True, verified=False, total_duration=0.0, db=DB_PATH):
+    columns = ["net", "img", "eps", "cc", "verified", "total_duration", "skip"]
+    values = [net, img, eps, int(cc), int(verified), total_duration, 1]
     _insert_row("lirpa", columns, values, db=db)
     if not verified:
         with sqlite3.connect(db) as conn:
@@ -75,7 +75,7 @@ def insert_lirpa(net: str, img: int, eps: int, cc=True, verified=False, timed_ou
         if result and result[0] is not None:
             max_eps = result[0]
             for higher_eps in range(eps + 1, max_eps + 1):
-                values = [net, img, higher_eps, int(cc), 0, int(timed_out), 0.0, 1]
+                values = [net, img, higher_eps, int(cc), 0, 0.0, 1]
                 _insert_row("lirpa", columns, values, db=db)
 
 def insert_milp(net: str, img: int, eps: int, cc=True, verified=False, timed_out=False, found_adv=False, total_duration=0.0, db=DB_PATH):
