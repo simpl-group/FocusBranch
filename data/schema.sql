@@ -266,6 +266,22 @@ INSERT OR REPLACE INTO ours_config
 ('bcv7', 6, 4, 5, 1800, 200, 500, 100, 0, 400, 800);
 
 INSERT OR REPLACE INTO lirpa_config (net, eps, method, time_limit_seconds, max_iteration, num_img) VALUES
+('bfc1', 1, 'CROWN-Optimized', 1800, 1000, 100),
+('bfc1', 2, 'CROWN-Optimized', 1800, 1000, 100),
+('bfc1', 3, 'CROWN-Optimized', 1800, 1000, 100),
+('bfc1', 4, 'CROWN-Optimized', 1800, 1000, 100),
+('bfc1', 5, 'CROWN-Optimized', 1800, 1000, 100),
+('bfc1', 6, 'CROWN-Optimized', 1800, 1000, 100),
+('bfc1', 7, 'CROWN-Optimized', 1800, 1000, 100),
+('bfc1', 8, 'CROWN-Optimized', 1800, 1000, 100),
+('bafc1', 1, 'CROWN-Optimized', 1800, 1000, 100),
+('bafc1', 2, 'CROWN-Optimized', 1800, 1000, 100),
+('bafc1', 3, 'CROWN-Optimized', 1800, 1000, 100),
+('bafc1', 4, 'CROWN-Optimized', 1800, 1000, 100),
+('bafc1', 5, 'CROWN-Optimized', 1800, 1000, 100),
+('bafc1', 6, 'CROWN-Optimized', 1800, 1000, 100),
+('bafc1', 7, 'CROWN-Optimized', 1800, 1000, 100),
+('bafc1', 8, 'CROWN-Optimized', 1800, 1000, 100),
 ('afc1', 1, 'CROWN-Optimized', 1800, 1000, 100),
 ('afc1', 2, 'CROWN-Optimized', 1800, 1000, 100),
 ('afc1', 3, 'CROWN-Optimized', 1800, 1000, 100),
