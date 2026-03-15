@@ -10,6 +10,6 @@ scipy==1.15.2
 pandas==2.2.3
 galois==0.4.6
 auto_LiRPA @ git+https://github.com/Verified-Intelligence/auto_LiRPA.git@ca767f1d8c0a6b125a292ba165adb2319bbaf615
-visdom>=0.1.8
+visdom==0.1.8
 adv_lib @ git+https://github.com/jeromerony/adversarial-library.git@b14f81a3e1c414a573b969b402c99e65bfe2ca33
 openpyxl
