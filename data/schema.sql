@@ -88,11 +88,70 @@ CREATE TABLE IF NOT EXISTS ours_detail (
     PRIMARY KEY (net, img, eps)
 );
 
-CREATE VIEW IF NOT EXISTS ours_all AS
+DROP VIEW IF EXISTS ours_all;
+CREATE VIEW ours_all AS
 SELECT o.*, od.true_label, od.chosen_geometry, od.choosing_strategy_duration, od.planning_duration, od.iterating_covering_duration, od.summed_duration, od.handle_unk_combs_duration, od.waiting_milp_duration, od.proved_with_milp, od.waiting_for_milp, od.end_level, od.adversarial_pixel_values, od.adversarial_label
 FROM ours o
 LEFT JOIN ours_detail od
 ON o.net = od.net AND o.img = od.img AND o.eps = od.eps;
+
+DROP VIEW IF EXISTS ours_digest;
+CREATE VIEW ours_digest AS
+  WITH RECURSIVE nums(i) AS (
+    SELECT 1
+    UNION ALL
+    SELECT i + 1 FROM nums WHERE i < 8
+  ),
+  sigma0_stats AS (
+    SELECT
+      net,
+      i,
+      SUM(min_eps <= i) AS Adv_sigma0
+    FROM sigma0
+    CROSS JOIN nums
+    GROUP BY net, i
+  )
+  SELECT
+    ours.net,
+    eps,
+    SUM(cc = 1) AS "CC",
+    Adv_sigma0,
+    SUM(found_adv = 1 AND ours.total_duration = 0) AS "Adv_known",
+    SUM(found_adv = 1 AND ours.total_duration > 0) AS "Adv_ours",
+    SUM(cc = 1) - SUM(found_adv = 1) AS "NAdv",
+    SUM(verified = 1) AS "R",
+    SUM(timed_out = 1) AS "TO",
+    ROUND((SUM(verified=1) + SUM(found_adv = 1 AND ours.total_duration > 0)) * 1.0 / (SUM(cc = 1) - SUM(found_adv = 1 AND ours.total_duration = 0)), 3) AS "NTO/NAdv",
+    ROUND(SUM(verified=1) * 1.0 / (SUM(cc = 1) - SUM(found_adv = 1)), 3) AS "R/NAdv",
+    ROUND(AVG(CASE WHEN verified = 1 THEN ours.total_duration END), 4) AS "T_avg",
+    ROUND(MAX(CASE WHEN verified = 1 THEN ours.total_duration END), 4) AS "T_max",
+    SUM(verified = 1 AND starting_level < eps) AS "Ls<e",
+    SUM(verified = 1 AND starting_level = eps) AS "Ls=e",
+    SUM(verified = 1 AND use_cvd = 0) AS "CCSaP",
+    SUM(verified = 1 AND use_cvd = 1) AS "SCSaP",
+    SUM(verified = 1 AND use_cvd = 1 AND starting_level = eps) AS "SC@Ls=e",
+    SUM(verified = 1 AND use_cvd = 1 AND starting_level < eps) AS "SC@Ls<e"
+  FROM sigma0_stats
+  JOIN ours ON (ours.eps = sigma0_stats.i AND ours.net = sigma0_stats.net)
+  GROUP BY ours.net, eps
+  HAVING MAX(ours.total_duration) > 0
+  ORDER BY
+    CASE ours.net
+      WHEN 'bfc1' THEN 1
+      WHEN 'bafc1' THEN 2
+      WHEN 'afc1' THEN 3
+      WHEN 'afc2' THEN 4
+      WHEN 'afc3' THEN 5
+      WHEN 'fc4' THEN 6
+      WHEN 'bcv1' THEN 7
+      WHEN 'bcv2' THEN 8
+      WHEN 'bcv3' THEN 9
+      WHEN 'bcv6' THEN 10
+      WHEN 'bcv7' THEN 11
+      WHEN 'bcv5' THEN 12
+      WHEN 'bcv4' THEN 13
+      ELSE 100
+    END, eps;
 
 CREATE TABLE IF NOT EXISTS candidate_strategies (
     net TEXT,
