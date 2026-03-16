@@ -381,8 +381,9 @@ class LZeroRobustnessAnalyzer:
             for gpu_worker in self.__gpu_workers:
                 if gpu_worker.poll():
                     message = gpu_worker.recv()
-                    if isinstance(message, str) and message == 'adversarial-example-suspect':
-                        self.milp_job_queue.put(gpu_worker.recv())
+                    if isinstance(message, str) and message == 'adversarial-example-suspects':
+                        for suspect in gpu_worker.recv().tolist():
+                            self.milp_job_queue.put(suspect)
                     elif isinstance(message, str) and message == 'unknown-combs':
                         unk_combs_lst.append(gpu_worker.recv())
                     elif isinstance(message, str) and message == 'done':

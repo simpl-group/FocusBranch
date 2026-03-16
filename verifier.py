@@ -399,21 +399,21 @@ class Verifier:
         self.batch_pool[num_indices].clear()
         safes = self.check_supersets(supersets=supersets)
         self.conn.send((num_indices, supersets.shape[0], safes.sum().item(), perf_counter() - start))
-        if num_indices == self.__level:  # concrete combs, cannot refine
-            if self.__level == self.eps:
-                for suspect in supersets[~safes].tolist():
-                    self.conn.send('adversarial-example-suspect')
-                    self.conn.send(suspect)
-            else:
-                self.conn.send('unknown-combs')
-                self.conn.send(supersets[~safes].numpy())
-            return
         if not safes.all():  # need to refine
-            refined_supersets = []
-            for unk_superset in supersets[~safes].tolist():
-                refined_supersets.extend(get_refinement_subsets(unk_superset, self.refinement_coverings[num_indices]))
-            for refined_superset in refined_supersets:
-                self.__handle_superset(refined_superset)
+            if num_indices == self.__level:  # concrete combs, cannot refine
+                unk_combs = supersets[~safes]
+                if self.__level == self.eps:
+                        self.conn.send('adversarial-example-suspects')
+                        self.conn.send(unk_combs.numpy())
+                else:
+                    self.conn.send('unknown-combs')
+                    self.conn.send(unk_combs.numpy())
+            else:
+                refined_supersets = []
+                for unk_superset in supersets[~safes].tolist():
+                    refined_supersets.extend(get_refinement_subsets(unk_superset, self.refinement_coverings[num_indices]))
+                for refined_superset in refined_supersets:
+                    self.__handle_superset(refined_superset)
 
     def __handle_superset(self, superset: list[int]):
         if self.stop_event.is_set(): return
