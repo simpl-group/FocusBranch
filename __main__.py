@@ -46,8 +46,8 @@ if __name__ == '__main__':
         warnings.warn(f"Requested {args.gpu_num} GPU workers but only {len(available_gpus)} GPU are available.")
 
     export_results = args.output != None
+    ilogname = f"{args.output if args.output else ''}{args.net}e{args.epsilon}g{args.gpu_num}b{args.supercheck_batch}p{args.pool_size}"
     args.output = f"{args.output if args.output else ''}{args.net}e{args.epsilon}s{args.start_idx}_n{args.test_batches}g{args.gpu_num}m{args.milp_num}cb{args.concretecheck_batch}sb{args.supercheck_batch}ps{args.pool_size}"
-    ilogname = f"{args.net}e{args.epsilon}g{args.gpu_num}b{args.supercheck_batch}p{args.pool_size}"
     args.output = args.output + ".json"
     args.pool_size = min(max(args.pool_size, args.supercheck_batch), args.supercheck_batch * 10)
 
