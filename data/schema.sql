@@ -112,31 +112,32 @@ CREATE VIEW ours_digest AS
     GROUP BY net, i
   )
   SELECT
-    ours.net,
+    oa.net,
     eps,
     SUM(cc = 1) AS "CC",
     Adv_sigma0,
-    SUM(found_adv = 1 AND ours.total_duration = 0) AS "Adv_known",
-    SUM(found_adv = 1 AND ours.total_duration > 0) AS "Adv_ours",
+    SUM(found_adv = 1 AND oa.total_duration = 0) AS "Adv_known",
+    SUM(found_adv = 1 AND oa.total_duration > 0) AS "Adv_ours",
     SUM(cc = 1) - SUM(found_adv = 1) AS "NAdv",
     SUM(verified = 1) AS "R",
     SUM(timed_out = 1) AS "TO",
-    ROUND((SUM(verified=1) + SUM(found_adv = 1 AND ours.total_duration > 0)) * 1.0 / (SUM(cc = 1) - SUM(found_adv = 1 AND ours.total_duration = 0)), 3) AS "NTO/NAdv",
+    ROUND((SUM(verified=1) + SUM(found_adv = 1 AND oa.total_duration > 0)) * 1.0 / (SUM(cc = 1) - SUM(found_adv = 1 AND oa.total_duration = 0)), 3) AS "NTO/NAdv",
     ROUND(SUM(verified=1) * 1.0 / (SUM(cc = 1) - SUM(found_adv = 1)), 3) AS "R/NAdv",
-    ROUND(AVG(CASE WHEN verified = 1 THEN ours.total_duration END), 4) AS "T_avg",
-    ROUND(MAX(CASE WHEN verified = 1 THEN ours.total_duration END), 4) AS "T_max",
+    ROUND(AVG(CASE WHEN verified = 1 THEN oa.total_duration END), 4) AS "T_avg",
+    ROUND(MAX(CASE WHEN verified = 1 THEN oa.total_duration END), 4) AS "T_max",
     SUM(verified = 1 AND starting_level < eps) AS "Ls<e",
+    SUM(verified = 1 AND starting_level < eps AND end_level > starting_level) AS "SaP",
     SUM(verified = 1 AND starting_level = eps) AS "Ls=e",
     SUM(verified = 1 AND use_cvd = 0) AS "CCSaP",
     SUM(verified = 1 AND use_cvd = 1) AS "SCSaP",
     SUM(verified = 1 AND use_cvd = 1 AND starting_level = eps) AS "SC@Ls=e",
     SUM(verified = 1 AND use_cvd = 1 AND starting_level < eps) AS "SC@Ls<e"
   FROM sigma0_stats
-  JOIN ours ON (ours.eps = sigma0_stats.i AND ours.net = sigma0_stats.net)
-  GROUP BY ours.net, eps
-  HAVING MAX(ours.total_duration) > 0
+  JOIN ours_all oa ON (oa.eps = sigma0_stats.i AND oa.net = sigma0_stats.net)
+  GROUP BY oa.net, oa.eps
+  HAVING MAX(oa.total_duration) > 0
   ORDER BY
-    CASE ours.net
+    CASE oa.net
       WHEN 'bfc1' THEN 1
       WHEN 'bafc1' THEN 2
       WHEN 'afc1' THEN 3
