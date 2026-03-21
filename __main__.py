@@ -73,7 +73,7 @@ if __name__ == '__main__':
             ], env=my_env)
 
         for worker_id in range(args.milp_num):
-            launch_gurobi_worker(netname=args.net, port=cpu_listener.address[1])
+            launch_gurobi_worker(netname=args.net, port=int(cpu_listener.address[1]))
 
         print("Waiting for cpu workers")
         cpu_workers = [cpu_listener.accept() for _ in range(args.milp_num)]

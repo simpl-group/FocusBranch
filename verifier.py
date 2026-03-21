@@ -333,7 +333,7 @@ class Verifier:
         for k in range(level, self.max_k + 1):
             k_sized_supersets = batched_randsample(self.num_pixels, k, rep_each_k)
             batched_supercheck_start = perf_counter()
-            sampling_successes.append(self.check_supersets(k_sized_supersets).sum().item())
+            sampling_successes.append(int(self.check_supersets(k_sized_supersets).sum().item()))
             sampling_time.append(perf_counter() - batched_supercheck_start)
             sampling_counts.append(k_sized_supersets.shape[0])
             if sampling_successes[-1] == 0:
@@ -449,7 +449,7 @@ class Verifier:
         with Listener(('localhost', 0)) as blocks_listener:
             self.blocks_generator_process = launch_covering_generator(
                 q=geometry.q, m=geometry.m, t=geometry.t,
-                port=blocks_listener.address[1],
+                port=int(blocks_listener.address[1]),
                 chosen_indices=chosen_indices,
                 num_workers=num_workers,
                 worker_id=worker_id
