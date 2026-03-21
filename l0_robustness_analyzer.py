@@ -1,7 +1,8 @@
 # Reference: https://github.com/YuvShap/CoVerD/blob/main/tf_verify/calzone_robustness_analyzer.py
 from utils import TQDM_BAR_FORMAT
-from data import load_covering_sizes
+from data import load_covering_sizes, Strategy
 from coverd_finite_geometries import get_possible_geometries, Geometry
+from covering_generator import CVD_MIN_T, CVD_MAX_T
 from covering_generator.estimator import estimate_generator_speed, estimate_extra_time
 from split_and_prune import estimate_SaP_speed, estimate_SaP_time, prepare4pruning, prune
 from bimm import combs2bitmasks, bitmasks2combs, superset_sum
@@ -13,7 +14,6 @@ import time
 import random
 import sys
 from itertools import chain
-from enum import Enum, auto
 from collections import defaultdict
 from multiprocessing.connection import Connection
 import torch
@@ -21,18 +21,6 @@ import numpy as np
 from scipy.signal import savgol_filter
 from scipy.stats import norm
 from tqdm import tqdm
-
-CVD_MIN_T = 3
-CVD_MAX_T = 6
-
-class Strategy(Enum):
-    CheSaP = auto()
-    CCSaP  = auto()
-    SCSaP  = auto()
-    CoVerD = auto()
-
-    def __str__(self) -> str:
-        return self.name
 
 class LZeroRobustnessAnalyzer:
     def __init__(self, verifier: Verifier, gpu_workers: list[Connection], cpu_workers: list[Connection], plan_only: bool, strategy: Strategy, until_timedout: bool, force_reestimate: bool):
@@ -77,12 +65,15 @@ class LZeroRobustnessAnalyzer:
             sc, ss = gpu_worker.recv()
             sample_counts = [a + b for a, b in zip(sample_counts, sc)]
             sample_successes = [a + b for a, b in zip(sample_successes, ss)]
-        concrete_safe_rate = [s / c if c > 0 else 0.0 for s, c in zip(sample_successes, sample_counts)]
-        if all(sample_successes[i] != math.comb(self.__v, i) * self.__num_gpu_workers for i in range(self.__e + 1)):
+        concrete_safe_rate = [s / c for s, c in zip(sample_successes, sample_counts)]
+        if self.__strategy.require_supercheck()\
+            or self.__strategy == Strategy.CheSaP and all(sample_successes[i] != math.comb(self.__v, i) * self.__num_gpu_workers for i in range(self.__e + 1)):
+            print(f'Sampling super-nodes on level', end='', flush=True)
             # Sample super-nodes at levels with high concrete safe rate
-            for l in range(self.__e + 1):
-                if CVD_MIN_T <= l <= CVD_MAX_T and (concrete_safe_rate[l] > 0.99 or l == self.__e):
-                    print(f'Sampling super-node on level {l}')
+            sample_all_k_end_level = min(self.__e, CVD_MAX_T)
+            for l in range(CVD_MIN_T, sample_all_k_end_level + 1):
+                if self.__strategy != Strategy.CoVerD and concrete_safe_rate[l] > 0.99 or l == sample_all_k_end_level:
+                    print(f' {l}', end='\n' if l == sample_all_k_end_level else '', flush=True)
                     for gpu_worker in self.__gpu_workers:
                         gpu_worker.send(('sample-all-k', l))
                     self.__level = l
@@ -92,8 +83,8 @@ class LZeroRobustnessAnalyzer:
         first_any_safe_level = 0
         # TODO: Add logging for estimated CC&SaP time
         for l in range(self.__e + 1):
-            if concrete_safe_rate[l] == 0.0:
-                first_any_safe_level += 1  # not to start on this level
+            if concrete_safe_rate[l] == 0.0: # not to start on this level
+                first_any_safe_level = min(first_any_safe_level+1, self.__e)
                 continue
             if l < 2:  # avoid estimating SaP time for level 0 and 1
                 estimated_nodes_this_level = math.comb(self.__v, l)
@@ -121,14 +112,15 @@ class LZeroRobustnessAnalyzer:
 
         choosing_strategy_start = time.time()
         for l in range(first_any_safe_level, self.__e + 1):
-            if sample_successes[l] == math.comb(self.__v, l) * self.__num_gpu_workers:
+            if sample_successes[l] == math.comb(self.__v, l) * self.__num_gpu_workers and not self.__strategy.require_supercheck():  # all sampled nodes are safe, skip this level
                 candidate_strategies.append((estimated_CC_time_per_l[l], 'skip', l))
                 break
             tail_CC_time = sum(estimated_CC_time_per_l[l + 1:])
             tail_SaP_time = sum(estimated_SaP_time_per_l[l:])
             if tail_SaP_time > 1.0: tail_SaP_time /= self.__num_gpu_workers
-            CCSaP_time = (self.mean_concretecheck_time[l] * math.comb(self.__v, l) + tail_CC_time) / self.__num_gpu_workers + tail_SaP_time
-            candidate_strategies.append((CCSaP_time, 'CCSaP', l))
+            if not self.__strategy.require_supercheck():
+                CCSaP_time = (self.mean_concretecheck_time[l] * math.comb(self.__v, l) + tail_CC_time) / self.__num_gpu_workers + tail_SaP_time
+                candidate_strategies.append((CCSaP_time, 'CCSaP', l))
             if l in super_success_rate:
                 self.__level = l
                 fraction_robusts[l] = self.__compute_fraction_robust(super_success_rate[l])
@@ -141,12 +133,6 @@ class LZeroRobustnessAnalyzer:
         choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
         planning_duration = round(time.time() - self.analyzer_start_time, 3)
         candidate_strategies = sorted(map(lambda s: (round(s[0] + planning_duration, 3), s[1], s[2]), candidate_strategies), key=lambda s: s[0])
-        if self.__strategy == Strategy.CCSaP:
-            candidate_strategies = list(filter(lambda s: s[1] == 'CCSaP', candidate_strategies))
-        elif self.__strategy == Strategy.SCSaP:
-            candidate_strategies = list(filter(lambda s: s[1] == 'SCSaP', candidate_strategies))
-        elif self.__strategy == Strategy.CoVerD:
-            candidate_strategies = list(filter(lambda s: s[1] == 'SCSaP' and s[2] == self.__e, candidate_strategies))
         best_strategy = candidate_strategies[0]
         candidate_strategies = list(filter(lambda s: s[0] <= self.__timeout * 10, candidate_strategies))  # filter out noise strategies
         if len(candidate_strategies) == 0: candidate_strategies.append(best_strategy)  # at least have one strategy to show, even if it's an outlier

@@ -1,5 +1,6 @@
 from models import MODEL_SPECS, get_network_and_dataset_utils
 from data.prepare import build_loader
+from data import Strategy
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from verifier import Verifier
 from utils import DEVICE
@@ -26,6 +27,7 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-rk", "--rep-each-k", type=int, default=200, help="Number of partial indices samples for each k.")
     parser.add_argument("-rl", "--rep-each-level", type=int, default=5000, help="Maximum number of combinations for each level.")
     parser.add_argument("-ps", "--pool-size", type=int, default=2000, help='The size of the batch pool')
+    parser.add_argument("--strategy", type=lambda s: Strategy[s], choices=list(Strategy), default=Strategy.CheSaP, help="the strategy to use for verification")
 
 def get4(args: argparse.Namespace) -> tuple[torch.nn.Module, SequentialAT, L0BoundedInput, torch.utils.data.DataLoader]:
     net, dataset_utils = get_network_and_dataset_utils(args.net, device=DEVICE)

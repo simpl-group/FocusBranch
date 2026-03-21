@@ -3,7 +3,7 @@ import sys
 import os
 import argparse
 import warnings
-from l0_robustness_analyzer import LZeroRobustnessAnalyzer, Strategy
+from l0_robustness_analyzer import LZeroRobustnessAnalyzer
 from multiprocessing.connection import Listener
 from subprocess import Popen
 import json
@@ -26,10 +26,10 @@ if __name__ == '__main__':
     parser.add_argument('--base_seed', type=int, default=42, help='the base seed')
     parser.add_argument("--detail", action="store_true", help="Output detailed superset statistics for each image in a separate excel file.")
     parser.add_argument("--plan_only", action="store_true", help="Only run the planning stage without actual verification.")
-    parser.add_argument("--strategy", type=lambda s: Strategy[s], choices=list(Strategy), default=Strategy.CheSaP, help="the strategy to use for verification")
     parser.add_argument("--until-timedout", "-ut", action="store_true", help="Continue running until timeout is reached, even if the estimated verification time is larger than twice the timeout.")
     parser.add_argument("--force-reestimate", action="store_true", help="Force re-estimation of generator and SaP speed even if existing estimates are found in the database.")
     args = parser.parse_args()
+    args.strategy.assert_strategy_applicable(args.epsilon)
     config_params = signature(ours_config_consistent).parameters.keys()
     config_kwargs = {name: getattr(args, name) for name in config_params if hasattr(args, name)}
     consistent, warning_msg = ours_config_consistent(img=args.start_idx+args.test_batches-1, **config_kwargs)
@@ -58,6 +58,7 @@ if __name__ == '__main__':
             my_env["CUDA_VISIBLE_DEVICES"] = str(available_gpus[worker_id % len(available_gpus)])
             Popen([
                 sys.executable, verifier_file,
+                "--strategy", args.strategy.name,
                 "--worker_id", str(worker_id),
                 "--num-workers", str(args.gpu_num),
                 "--port", str(gpu_listener.address[1]),

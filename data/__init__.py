@@ -1,5 +1,6 @@
 # -*- coding:utf-8 -*-
 
+from covering_generator import CVD_MIN_T, CVD_MAX_T
 from pathlib import Path
 from enum import Enum, auto
 from dataclasses import dataclass
@@ -10,6 +11,23 @@ import torch
 import csv
 import numpy as np
 
+class Strategy(Enum):
+    CheSaP = auto()
+    CCSaP  = auto()
+    SCSaP  = auto()
+    CoVerD = auto()
+
+    def __str__(self) -> str:
+        return self.name
+
+    def require_supercheck(self) -> bool:
+        return self in {Strategy.SCSaP, Strategy.CoVerD}
+
+    def assert_strategy_applicable(self, epsilon: int):
+        if self == Strategy.SCSaP:
+            assert epsilon >= CVD_MIN_T, f"Strategy {self} inapplicable for epsilon {epsilon}. Covering generator requires epsilon >= {CVD_MIN_T}."
+        elif self == Strategy.CoVerD:
+            assert CVD_MIN_T <= epsilon <= CVD_MAX_T, f"Strategy {self} inapplicable for epsilon {epsilon}. Covering generator requires {CVD_MIN_T} <= epsilon <= {CVD_MAX_T}."
 
 class DatasetName(Enum):
     MNIST   = auto()

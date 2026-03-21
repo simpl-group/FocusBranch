@@ -4,6 +4,8 @@ import numpy as np
 import galois
 from .gray_code import reduced_row_echelon_form_gray_code
 
+CVD_MIN_T = 3
+CVD_MAX_T = 6
 
 class CoveringConstructor:
     def __init__(self, q, m, t, chosen_indices):

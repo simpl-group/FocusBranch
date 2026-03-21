@@ -1,8 +1,8 @@
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from split_and_prune import split_and_prune, prepare4pruning, prune
 from bimm import combs2bitmasks
-from covering_generator import launch_covering_generator
-from data import load_covering
+from covering_generator import launch_covering_generator, CVD_MIN_T
+from data import load_covering, Strategy
 from data.db import insert_mean_concretecheck_time, get_mean_concretecheck_time
 from utils import DEVICE, TQDM_BAR_FORMAT, TimeoutException
 from coverd_finite_geometries import Geometry
@@ -61,14 +61,15 @@ class Verifier:
         torch_net: torch.nn.Module,
         seqAT: SequentialAT,
         bounded_x0: L0BoundedInput,
-        concretecheck_batch: int|None=None,
-        supercheck_batch: int|None=None,
+        concretecheck_batch: int=200,
+        supercheck_batch: int=200,
         targeted: bool=False,
         max_k: int=200,
         rep_each_k: int=50,
         rep_each_level: int=5000,
         pool_size: int=2000,
         timeout: int=0,
+        strategy: Strategy=Strategy.CheSaP,
         demo: bool=False
     ) -> None:
         self.torch_net = torch_net.cpu()
@@ -86,6 +87,7 @@ class Verifier:
         self.timeout = timeout
         self.demo = demo
         self.pool_size = pool_size
+        self.strategy = strategy
 
     def __check_current_batch(self) -> torch.Tensor:
         """
@@ -273,15 +275,25 @@ class Verifier:
 
     def concrete_sample_all_levels(self) -> tuple[list[int], list[int]]:
         assert self.bounded_x0.level is None, "bounded_x0.level must be None since we are using self.bounded_x0.selecting"
-        sample_counts, sample_successes = [0] * (self.eps + 1), [0] * (self.eps + 1)
-        for level in range(self.eps + 1):
+        sample_counts = [min(self.rep_each_level, math.comb(self.num_pixels, l)) for l in range(0, self.eps + 1)]
+        sample_successes = [0] * (self.eps + 1)
+        if not self.strategy.require_supercheck():
+            start_level = 0
+        elif self.strategy == Strategy.SCSaP:
+            start_level = CVD_MIN_T
+        elif self.strategy == Strategy.CoVerD:
+            return sample_counts, sample_successes
+        for level in range(start_level, self.eps + 1):
             combs_to_check = selected_indices_sample(self.num_pixels, level, self.rep_each_level) if level > 0 else torch.empty((1, 0), dtype=torch.int64)
             sample_counts[level] = combs_to_check.shape[0]
             for i in range(0, combs_to_check.shape[0], self.concretecheck_batch):
                 combs_to_check_batch = combs_to_check[i:i + self.concretecheck_batch].to(self.device)
                 with self.bounded_x0.selecting(combs_to_check_batch):
                     sample_successes[level] += int(self.__check_current_batch().sum().item())
-            if sample_successes[level] == math.comb(self.num_pixels, level): break  # All nodes are safe, no need to go deeper
+            if sample_successes[level] == math.comb(self.num_pixels, level):  # All nodes are safe, no need to go deeper
+                # fake the rest
+                sample_successes[level+1:] = sample_counts[level+1:]
+                break
         return sample_counts, sample_successes
 
     def estimate_mean_concretecheck_time(self, netname: str, sample_size_coeff: int=10, force_reestimate: bool=False) -> list[float]:
