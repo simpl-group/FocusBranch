@@ -7,7 +7,6 @@ from data import DB_PATH
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Sample-wise (local) L0 robustness verification for neural networks', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     add_shared_arguments(parser)
-    parser.add_argument("--database", "-db", metavar="FILE", help="Path to SQLite database file")
     parser.add_argument("--unskip-higher-timed-out", action="store_true", help="Unskip higher eps if a lower eps is timed out")
     args = parser.parse_args()
     db_path = args.database or DB_PATH
