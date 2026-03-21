@@ -12,7 +12,8 @@ def set_database(db_path: str):
     assert db_path, f"Database file {db_path} not specified."
     __db = Path(db_path)
 
-def _insert_row(table_name, columns, values, db=__db, timeout=30, retries=4):
+def _insert_row(table_name, columns, values, db: str="", timeout=30, retries=4):
+    if not db: db = __db
     placeholders = ", ".join(["?"] * len(columns))
     col_list = ", ".join(columns)
     query = f"INSERT OR REPLACE INTO {table_name} ({col_list}) VALUES ({placeholders})"
@@ -29,51 +30,60 @@ def _insert_row(table_name, columns, values, db=__db, timeout=30, retries=4):
             else:
                 raise e
 
-def insert_mean_concretecheck_time(net: str, batch_size: int, eps: int, level: int, mean_time: float, db=__db):
+def insert_mean_concretecheck_time(net: str, batch_size: int, eps: int, level: int, mean_time: float, db: str=""):
+    if not db: db = __db
     columns = ["net", "batch_size", "eps", "level", "mean_time"]
     values = [net, batch_size, eps, level, mean_time]
     _insert_row("mean_concretecheck_time", columns, values, db=db)
 
-def get_mean_concretecheck_time(net: str, batch_size: int, eps: int, level: int, db=__db) -> float | None:
+def get_mean_concretecheck_time(net: str, batch_size: int, eps: int, level: int, db: str="") -> float | None:
+    if not db: db = __db
     query = "SELECT mean_time FROM mean_concretecheck_time WHERE net = ? AND batch_size = ? AND eps = ? AND level = ?"
     with sqlite3.connect(db) as c:
         result = c.execute(query, (net, batch_size, eps, level)).fetchone()
     return result[0] if result else None
 
-def insert_generator_speed(num_workers: int, num_pixels: int, generator_launch_time: float, skipping_iter_speed: float, normal_iter_speed: float, db=__db):
+def insert_generator_speed(num_workers: int, num_pixels: int, generator_launch_time: float, skipping_iter_speed: float, normal_iter_speed: float, db: str=""):
+    if not db: db = __db
     columns = ["num_workers", "num_pixels", "generator_launch_time", "skipping_iter_speed", "normal_iter_speed"]
     values = [num_workers, num_pixels, generator_launch_time, skipping_iter_speed, normal_iter_speed]
     _insert_row("generator_speed", columns, values, db=db)
 
-def get_generator_speed(num_workers: int, num_pixels: int, db=__db) -> tuple[float, float, float] | None:
+def get_generator_speed(num_workers: int, num_pixels: int, db: str="") -> tuple[float, float, float] | None:
+    if not db: db = __db
     query = "SELECT generator_launch_time, skipping_iter_speed, normal_iter_speed FROM generator_speed WHERE num_workers = ? AND num_pixels = ?"
     with sqlite3.connect(db) as c:
         result = c.execute(query, (num_workers, num_pixels)).fetchone()
     return result if result else None
 
-def insert_SaP_speed(chunk_size: int, num_indices: int, level: int, splitting_speed: float, pruning_speed: float, db=__db):
+def insert_SaP_speed(chunk_size: int, num_indices: int, level: int, splitting_speed: float, pruning_speed: float, db: str=""):
+    if not db: db = __db
     columns = ["chunk_size", "num_indices", "level", "splitting_speed", "pruning_speed"]
     values = [chunk_size, num_indices, level, splitting_speed, pruning_speed]
     _insert_row("SaP_speed", columns, values, db=db)
 
-def get_SaP_speed(chunk_size: int, num_indices: int, level: int, db=__db) -> tuple[float, float] | None:
+def get_SaP_speed(chunk_size: int, num_indices: int, level: int, db: str="") -> tuple[float, float] | None:
+    if not db: db = __db
     query = "SELECT splitting_speed, pruning_speed FROM SaP_speed WHERE chunk_size = ? AND num_indices = ? AND level = ?"
     with sqlite3.connect(db) as c:
         result = c.execute(query, (chunk_size, num_indices, level)).fetchone()
     return result if result else None
 
-def insert_sigma0(net: str, img: int, min_eps: int, true_label=-1, adversarial_label=-1, total_duration=0.0, seed=0, db=__db):
+def insert_sigma0(net: str, img: int, min_eps: int, true_label=-1, adversarial_label=-1, total_duration=0.0, seed=0, db: str=""):
+    if not db: db = __db
     columns = ["net", "img", "min_eps", "true_label", "adversarial_label", "total_duration", "seed"]
     values = [net, img, min_eps, true_label, adversarial_label, total_duration, seed]
     _insert_row("sigma0", columns, values, db=db)
 
-def sigma0_min_eps(net: str, img: int, db=__db) -> int | None:
+def sigma0_min_eps(net: str, img: int, db: str="") -> int | None:
+    if not db: db = __db
     query = "SELECT min_eps FROM sigma0 WHERE net = ? AND img = ?"
     with sqlite3.connect(db) as c:
         result = c.execute(query, (net, img)).fetchone()
     return result[0] if result else None
 
-def insert_lirpa(net: str, img: int, eps: int, cc=True, verified=False, total_duration=0.0, db=__db):
+def insert_lirpa(net: str, img: int, eps: int, cc=True, verified=False, total_duration=0.0, db: str=""):
+    if not db: db = __db
     columns = ["net", "img", "eps", "cc", "verified", "total_duration", "skip"]
     values = [net, img, eps, int(cc), int(verified), total_duration, 1]
     _insert_row("lirpa", columns, values, db=db)
@@ -86,7 +96,8 @@ def insert_lirpa(net: str, img: int, eps: int, cc=True, verified=False, total_du
                 values = [net, img, higher_eps, int(cc), 0, 0.0, 1]
                 _insert_row("lirpa", columns, values, db=db)
 
-def insert_milp(net: str, img: int, eps: int, cc=True, verified=False, timed_out=False, found_adv=False, total_duration=0.0, db=__db):
+def insert_milp(net: str, img: int, eps: int, cc=True, verified=False, timed_out=False, found_adv=False, total_duration=0.0, db: str=""):
+    if not db: db = __db
     columns = ["net", "img", "eps", "cc", "verified", "timed_out", "found_adv", "total_duration", "skip"]
     values = [net, img, eps, int(cc), int(verified), int(timed_out), int(found_adv), total_duration, 1]
     _insert_row("milp", columns, values, db=db)
@@ -99,7 +110,8 @@ def insert_milp(net: str, img: int, eps: int, cc=True, verified=False, timed_out
                 values = [net, img, higher_eps, int(cc), 0, int(timed_out), int(found_adv), 0.0, 1]
                 _insert_row("milp", columns, values, db=db)
 
-def insert_coverd(net: str, img: int, eps: int, cc=True, verified=False, timed_out=False, found_adv=False, estimated_time=0.0, total_duration=0.0, planning_duration=0.0, db=__db):
+def insert_coverd(net: str, img: int, eps: int, cc=True, verified=False, timed_out=False, found_adv=False, estimated_time=0.0, total_duration=0.0, planning_duration=0.0, db: str=""):
+    if not db: db = __db
     columns = ["net", "img", "eps", "cc", "verified", "timed_out", "found_adv", "estimated_time", "total_duration", "planning_duration", "skip"]
     values = [net, img, eps, int(cc), int(verified), int(timed_out), int(found_adv), estimated_time, total_duration, planning_duration, 1]
     _insert_row("coverd", columns, values, db=db)
@@ -112,7 +124,8 @@ def insert_coverd(net: str, img: int, eps: int, cc=True, verified=False, timed_o
                 values = [net, img, higher_eps, int(cc), 0, int(timed_out), int(found_adv), 0.0, 0.0, 0.0, 1]
                 _insert_row("coverd", columns, values, db=db)
 
-def insert_ours(net: str, img: int, eps: int, cc=True, estimated_time=0.0, use_cvd=False, starting_level=-1, skip=True, verified=False, timed_out=False, found_adv=False, total_duration=0.0, db=__db):
+def insert_ours(net: str, img: int, eps: int, cc=True, estimated_time=0.0, use_cvd=False, starting_level=-1, skip=True, verified=False, timed_out=False, found_adv=False, total_duration=0.0, db: str=""):
+    if not db: db = __db
     """skip: equivalent to actually ran"""
     if not skip:  # plan_only
         with sqlite3.connect(db) as conn:
@@ -132,22 +145,26 @@ def insert_ours(net: str, img: int, eps: int, cc=True, estimated_time=0.0, use_c
             values = [net, img, higher_eps, int(cc), 0, -1, -1, 1, 0, int(timed_out), int(found_adv), 0.0]
             _insert_row("ours", columns, values, db=db)
 
-def _insert_ours_detail(net: str, img: int, eps: int, true_label=-1, chosen_geometry="", choosing_strategy_duration=0.0, planning_duration=0.0, iterating_covering_duration=0.0, summed_duration=0.0, handle_unk_combs_duration=0.0, waiting_milp_duration=0.0, proved_with_milp=0, waiting_for_milp=0, end_level=0, adversarial_pixel_values="", adversarial_label=-1, db=__db):
+def _insert_ours_detail(net: str, img: int, eps: int, true_label=-1, chosen_geometry="", choosing_strategy_duration=0.0, planning_duration=0.0, iterating_covering_duration=0.0, summed_duration=0.0, handle_unk_combs_duration=0.0, waiting_milp_duration=0.0, proved_with_milp=0, waiting_for_milp=0, end_level=0, adversarial_pixel_values="", adversarial_label=-1, db: str=""):
+    if not db: db = __db
     columns = ["net", "img", "eps", "true_label", "chosen_geometry", "choosing_strategy_duration", "planning_duration", "iterating_covering_duration", "summed_duration", "handle_unk_combs_duration", "waiting_milp_duration", "proved_with_milp", "waiting_for_milp", "end_level", "adversarial_pixel_values", "adversarial_label"]
     values = [net, img, eps, true_label, chosen_geometry, choosing_strategy_duration, planning_duration, iterating_covering_duration, summed_duration, handle_unk_combs_duration, waiting_milp_duration, proved_with_milp, waiting_for_milp, end_level, adversarial_pixel_values, adversarial_label]
     _insert_row("ours_detail", columns, values, db=db)
 
-def insert_strategies(net: str, img: int, eps: int, use_cvd=False, starting_level=-1, estimated_time=0.0, geometry="", db=__db):
+def insert_strategies(net: str, img: int, eps: int, use_cvd=False, starting_level=-1, estimated_time=0.0, geometry="", db: str=""):
+    if not db: db = __db
     columns = ["net", "img", "eps", "use_cvd", "starting_level", "estimated_time", "geometry"]
     values = [net, img, eps, int(use_cvd), starting_level, estimated_time, geometry]
     _insert_row("candidate_strategies", columns, values, db=db)
 
-def insert_geometries(net: str, img: int, eps: int, geometry="", estimated_time=0.0, num_blocks=0, mean_size=0.0, db=__db):
+def insert_geometries(net: str, img: int, eps: int, geometry="", estimated_time=0.0, num_blocks=0, mean_size=0.0, db: str=""):
+    if not db: db = __db
     columns = ["net", "img", "eps", "geometry", "estimated_time", "num_blocks", "mean_size"]
     values = [net, img, eps, geometry, estimated_time, num_blocks, mean_size]
     _insert_row("candidate_geometries", columns, values, db=db)
 
-def store_ours_result(net: str, eps: int, img: int, result: dict, skip=True, db=__db):
+def store_ours_result(net: str, eps: int, img: int, result: dict, skip=True, db: str=""):
+    if not db: db = __db
     """Store image analysis result into database tables."""
     summary = result.get('analysis_summary', {})
     if not summary:
@@ -221,7 +238,8 @@ def store_ours_result(net: str, eps: int, img: int, result: dict, skip=True, db=
 
 def _make_should_skip(table: str):
     """Factory function to create should_skip checkers for different tables."""
-    def should_skip(net: str, img: int, eps: int, db=__db) -> bool:
+    def should_skip(net: str, img: int, eps: int, db: str="") -> bool:
+        if not db: db = __db
         query = f"SELECT skip FROM {table} WHERE net = ? AND img = ? AND eps = ?"
         with sqlite3.connect(db) as c:
             result = c.execute(query, (net, img, eps)).fetchone()
@@ -233,7 +251,8 @@ milp_should_skip = _make_should_skip("milp")
 lirpa_should_skip = _make_should_skip("lirpa")
 coverd_should_skip = _make_should_skip("coverd")
 
-def ours_config_consistent(net: str, epsilon: int, img: int, gpu_num: int, milp_num: int, timeout:int, rep_each_k: int, rep_each_level: int, concretecheck_batch: int, supercheck_batch: int, pool_size: int, db=__db) -> tuple[bool, str]:
+def ours_config_consistent(net: str, epsilon: int, img: int, gpu_num: int, milp_num: int, timeout:int, rep_each_k: int, rep_each_level: int, concretecheck_batch: int, supercheck_batch: int, pool_size: int, db: str="") -> tuple[bool, str]:
+    if not db: db = __db
     query = "SELECT * FROM ours_config WHERE net = ? AND eps = ?"
     with sqlite3.connect(db) as c:
         c.row_factory = sqlite3.Row
@@ -263,7 +282,8 @@ def ours_config_consistent(net: str, epsilon: int, img: int, gpu_num: int, milp_
         inconsistent_args.append(f"--pool_size \r\t\t\t(config: {config['pool_size']} != {pool_size})")
     return len(inconsistent_args) == 0, "\n".join(inconsistent_args)
 
-def milp_config_consistent(net: str, eps: int, img: int, timeout:int, db=__db) -> bool:
+def milp_config_consistent(net: str, eps: int, img: int, timeout:int, db: str="") -> bool:
+    if not db: db = __db
     query = "SELECT * FROM milp_config WHERE net = ? AND eps = ?"
     with sqlite3.connect(db) as c:
         c.row_factory = sqlite3.Row
@@ -274,7 +294,8 @@ def milp_config_consistent(net: str, eps: int, img: int, timeout:int, db=__db) -
     return (config['num_img'] > img and
             config['time_limit_seconds'] == timeout)
 
-def lirpa_config_consistent(net: str, eps: int, img: int, method: str, timeout:int, max_iteration:int, db=__db) -> bool:
+def lirpa_config_consistent(net: str, eps: int, img: int, method: str, timeout:int, max_iteration:int, db: str="") -> bool:
+    if not db: db = __db
     query = "SELECT * FROM lirpa_config WHERE net = ? AND eps = ?"
     with sqlite3.connect(db) as c:
         c.row_factory = sqlite3.Row
@@ -287,7 +308,8 @@ def lirpa_config_consistent(net: str, eps: int, img: int, method: str, timeout:i
             config['time_limit_seconds'] == timeout and
             config['max_iteration'] == max_iteration)
 
-def coverd_config_consistent(net: str, eps: int, img: int, gpu_num: int, timeout:int, db=__db) -> bool:
+def coverd_config_consistent(net: str, eps: int, img: int, gpu_num: int, timeout:int, db: str="") -> bool:
+    if not db: db = __db
     query = "SELECT * FROM coverd_config WHERE net = ? AND eps = ?"
     with sqlite3.connect(db) as c:
         c.row_factory = sqlite3.Row

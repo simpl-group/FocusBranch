@@ -29,6 +29,7 @@ if __name__ == '__main__':
     parser.add_argument("--until-timedout", "-ut", action="store_true", help="Continue running until timeout is reached, even if the estimated verification time is larger than twice the timeout.")
     parser.add_argument("--force-reestimate", action="store_true", help="Force re-estimation of generator and SaP speed even if existing estimates are found in the database.")
     args = parser.parse_args()
+    set_database(args.database)
     args.strategy.assert_strategy_applicable(args.epsilon)
     config_params = signature(ours_config_consistent).parameters.keys()
     config_kwargs = {name: getattr(args, name) for name in config_params if hasattr(args, name)}
@@ -44,7 +45,6 @@ if __name__ == '__main__':
         available_gpus = list(range(device_count()))
     if len(available_gpus) < args.gpu_num:
         warnings.warn(f"Requested {args.gpu_num} GPU workers but only {len(available_gpus)} GPU are available.")
-    set_database(args.database)
 
     export_results = args.output != None
     ilogname = f"{args.output if args.output else ''}{args.net}e{args.epsilon}g{args.gpu_num}b{args.supercheck_batch}p{args.pool_size}"
