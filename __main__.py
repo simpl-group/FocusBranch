@@ -14,7 +14,7 @@ from inspect import signature
 from torch.cuda import device_count
 import pandas as pd
 from utils.shared import add_shared_arguments, get2
-from data.db import store_ours_result, ours_should_skip, ours_config_consistent, sigma0_min_eps, insert_ours
+from data.db import set_database, store_ours_result, ours_should_skip, ours_config_consistent, sigma0_min_eps, insert_ours
 from solver_check import launch_gurobi_worker
 from verifier import __file__ as verifier_file
 
@@ -44,6 +44,7 @@ if __name__ == '__main__':
         available_gpus = list(range(device_count()))
     if len(available_gpus) < args.gpu_num:
         warnings.warn(f"Requested {args.gpu_num} GPU workers but only {len(available_gpus)} GPU are available.")
+    set_database(args.database)
 
     export_results = args.output != None
     ilogname = f"{args.output if args.output else ''}{args.net}e{args.epsilon}g{args.gpu_num}b{args.supercheck_batch}p{args.pool_size}"
