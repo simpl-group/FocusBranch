@@ -39,9 +39,6 @@ class DatasetName(Enum):
 
 BASE_DIR = Path(__file__).parent
 
-DB_PATH = Path(BASE_DIR) / "data.db"
-DB_SCHEMA_PATH = Path(BASE_DIR) / "schema.sql"
-
 @dataclass(frozen=True)
 class DatasetUtils:
     csv_file: Path

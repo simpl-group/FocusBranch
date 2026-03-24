@@ -1,6 +1,7 @@
 from models import MODEL_SPECS, get_network_and_dataset_utils
 from data.prepare import build_loader
-from data import Strategy, DB_PATH
+from data import Strategy
+from data.db import DB_PATH
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from verifier import Verifier
 from utils import DEVICE

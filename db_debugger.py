@@ -2,7 +2,7 @@ import argparse
 from utils.shared import add_shared_arguments
 from data.db import sigma0_min_eps, insert_ours
 import sqlite3
-from data import DB_PATH
+from data.db import DB_PATH
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Sample-wise (local) L0 robustness verification for neural networks', formatter_class=argparse.ArgumentDefaultsHelpFormatter)

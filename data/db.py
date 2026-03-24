@@ -3,14 +3,16 @@ import sqlite3
 import subprocess
 import time
 from pathlib import Path
-from data import DB_PATH
 
-__db: Path = DB_PATH
+DB_PATH: Path = Path(__file__).parent / "data.db"
+__db: str = DB_PATH.as_posix()
 
-def set_database(db_path: str):
+def set_database(db_path: str) -> bool:
+    if not db_path: return False
     global __db
     assert db_path, f"Database file {db_path} not specified."
-    __db = Path(db_path)
+    __db = Path(db_path).as_posix()
+    return True
 
 def _insert_row(table_name, columns, values, db: str="", timeout=30, retries=4):
     if not db: db = __db
@@ -338,9 +340,8 @@ def main():
     set_database(args.database)
 
     if args.init:
-        from data import DB_SCHEMA_PATH
         with sqlite3.connect(__db) as c:
-            c.executescript(open(DB_SCHEMA_PATH).read())
+            c.executescript(open(Path(__file__).parent / "schema.sql").read())
         return None
 
     if args.drop:
