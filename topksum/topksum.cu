@@ -4,6 +4,13 @@
 #define MAX_THREADS_PER_BLOCK 256
 #define WARPS_PER_BLOCK 8
 
+static constexpr int BIT_FLOOR[33] = {
+    0, 0, 1, 2, 2, 4, 4, 4, 4,
+    8, 8, 8, 8, 8, 8, 8, 8,
+    16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16
+};
+
 template <typename scalar_t>
 __global__ void wipe_selected_kernel(
     scalar_t* __restrict__ W,
@@ -62,7 +69,8 @@ __global__ void selected_top_k_sum_warped_kernel(
     const int num_rows,
     const int nv,
     const int rows_per_batch,
-    const int num_selected
+    const int num_selected,
+    const int initial_offset
 ) {
     const int row = (blockDim.x * blockIdx.x + threadIdx.x) >> 5;
     if (row >= num_rows) return;
@@ -80,7 +88,7 @@ __global__ void selected_top_k_sum_warped_kernel(
         x_row[col]     = static_cast<scalar_t>(0); // mark as used
     }
     #pragma unroll
-    for (int offset = (num_selected+1)>>1; offset; offset >>= 1)
+    for (int offset = initial_offset; offset; offset >>= 1)
         sum += __shfl_down_sync(mask, sum, offset);
 
     scalar_t local[K] = {static_cast<scalar_t>(0)};
@@ -143,7 +151,8 @@ void selected_top_k_sum_warped_cuda(
                 num_rows,
                 nv,
                 rows_per_batch,
-                num_selected
+                num_selected,
+                BIT_FLOOR[num_selected]
             );
         })
     );
@@ -381,7 +390,8 @@ __global__ void selected_bottom_k_sum_warped_kernel(
     const int num_rows,
     const int nv,
     const int rows_per_batch,
-    const int num_selected
+    const int num_selected,
+    const int initial_offset
 ) {
     const int row = (blockDim.x * blockIdx.x + threadIdx.x) >> 5;
     if (row >= num_rows) return;
@@ -399,7 +409,7 @@ __global__ void selected_bottom_k_sum_warped_kernel(
         x_row[col]     = static_cast<scalar_t>(0); // mark as used
     }
     #pragma unroll
-    for (int offset = (num_selected+1)>>1; offset; offset >>= 1)
+    for (int offset = initial_offset; offset; offset >>= 1)
         sum += __shfl_down_sync(mask, sum, offset);
 
     scalar_t local[K] = {static_cast<scalar_t>(0)};
@@ -462,7 +472,8 @@ void selected_bottom_k_sum_warped_cuda(
                 num_rows,
                 nv,
                 rows_per_batch,
-                num_selected
+                num_selected,
+                BIT_FLOOR[num_selected]
             );
         })
     );
