@@ -51,8 +51,8 @@ class LZeroRobustnessAnalyzer:
         for cpu_worker in self.__cpu_workers:
             cpu_worker.send((image, label))
 
-    def timed_out(self) -> bool:
-        return time.time() - self.analyzer_start_time > self.__timeout
+    def timed_out(self, estimated_more: float=0.0) -> bool:
+        return time.time() - self.analyzer_start_time + estimated_more > self.__timeout
 
     def analyze(self):
         assert self.mean_concretecheck_time is not None, "mean_concretecheck_time should have been set by now."
@@ -230,18 +230,22 @@ class LZeroRobustnessAnalyzer:
             }
         else: assert False, f'Unknown best strategy: {best_strategy}'
 
-        handle_unk_combs_start = time.time()
-        self.__handle_unk_combs(unk_combs, deduplicate=best_strategy[1] == 'SCSaP')
-        self.unk_combs_settled.set()
-        handle_unk_combs_duration = round(time.time() - handle_unk_combs_start, 3)
-        if handle_unk_combs_duration > 0.01:
-            print(f'Handling unk_combs duration: {handle_unk_combs_duration} s.')
-            results['handle_unk_combs_duration'] = handle_unk_combs_duration
+        if self.timed_out():
+            results['timed_out'] = True
+            self.unk_combs_settled.set()
+        else:
+            handle_unk_combs_start = time.time()
+            results['timed_out'] = self.__handle_unk_combs(unk_combs, deduplicate=best_strategy[1] == 'SCSaP')
+            self.unk_combs_settled.set()
+            handle_unk_combs_duration = round(time.time() - handle_unk_combs_start, 3)
+            if handle_unk_combs_duration > 0.01:
+                print(f'Handling unk_combs duration: {handle_unk_combs_duration} s.')
+                results['handle_unk_combs_duration'] = handle_unk_combs_duration
 
         waiting_milp_start = time.time()
         cpu_handler_thread.join()
         waiting_milp_duration = round(time.time() - waiting_milp_start, 3)
-        results['timed_out'] = self.timed_out()
+        if not results['timed_out']: results['timed_out'] = self.timed_out()
         results['running_time'] = round(time.time() - self.analyzer_start_time, 3)
         if self.milp_job_queue.unfinished_tasks > 0:
             print(f'MILP jobs unfinished: {self.milp_job_queue.unfinished_tasks}, finished: {len(self.innocent_suspects)}')
@@ -396,17 +400,21 @@ class LZeroRobustnessAnalyzer:
         print(f"num_finished: {num_finished}, total_covering_size: {total_covering_size}, remaining: {total_covering_size - num_finished}")
         return np.vstack(unk_combs_lst) if len(unk_combs_lst) > 0 else np.empty((0, self.__v), dtype=int)
 
-    def __handle_unk_combs(self, unk_combs: np.ndarray, deduplicate: bool = False):
-        if unk_combs.shape[0] == 0 or self.timed_out(): return
+    def __handle_unk_combs(self, unk_combs: np.ndarray, deduplicate: bool = False) -> bool:  # return True if we should terminate early due to timeout
+        if unk_combs.shape[0] == 0: return self.timed_out()  # no need to handle
         unk_combs_tensor: torch.Tensor = torch.from_numpy(unk_combs)
         if deduplicate:
             print(f"Level {self.__level} Before deduplication, unk_combs size: {unk_combs.shape[0]}", end="; ")
             unk_combs_tensor = torch.unique(unk_combs_tensor.cuda(), dim=0).cpu()
             print(f'After deduplication, unk_combs size: {unk_combs_tensor.shape[0]}')
-        while unk_combs_tensor.shape[0] > 0 and self.__level < self.__e and not self.timed_out():
+        while unk_combs_tensor.shape[0] > 0 and self.__level < self.__e:
+            estimated_SaP_time = self.estimate_SaP_time(unk_combs_tensor.shape[0], self.__level)
+            if self.timed_out(estimated_more=estimated_SaP_time/self.__num_gpu_workers):
+                print(f'Level {self.__level} estimated SaP time: {estimated_SaP_time:3f} s, which is too long, terminating early.')
+                return True
             new_level_start_time = time.time()
-            if self.__level > 1 and self.estimate_SaP_time(unk_combs_tensor.shape[0], self.__level) > 1.0:
-                print(f'Level {self.__level} estimated SaP time: {self.estimate_SaP_time(unk_combs_tensor.shape[0], self.__level):3f} s. Sharing SaP workload across all GPU workers...')
+            if self.__level > 1 and estimated_SaP_time > 1.0:
+                print(f'Level {self.__level} estimated SaP time: {estimated_SaP_time:3f} s. Sharing SaP workload across all GPU workers...')
                 for i, gpu_worker in enumerate(self.__gpu_workers):
                     gpu_worker.send(('SaP&CC', unk_combs_tensor.numpy()))
                 num_new_combs_per_worker = [0] * self.__num_gpu_workers
@@ -415,34 +423,38 @@ class LZeroRobustnessAnalyzer:
                 concretecheck_start_time = time.time()
                 SaP_duration = round(concretecheck_start_time - new_level_start_time, 3)
                 self.__level += 1
-                num_pruned = sum(num_new_combs_per_worker)
-                print(f'Current level: {self.__level}, SaP duration: {SaP_duration}s, num_pruned: {num_pruned}, each worker got: {num_new_combs_per_worker}')
+                num_after_prune = sum(num_new_combs_per_worker)
+                print(f'Current level: {self.__level}, SaP duration: {SaP_duration}s, Total After Pruning: {num_after_prune}, each worker got: {num_new_combs_per_worker}')
             else:
                 new_combs_tensor, reference_bitmasks, target_s_cnt = prepare4pruning(unk_combs_tensor, self.__v)
-                if new_combs_tensor.shape[0] == 0: return
+                if new_combs_tensor.shape[0] == 0: return self.timed_out()
                 pruned_combs = prune(new_combs_tensor, reference_bitmasks, target_s_cnt, self.__level).numpy()
-                if pruned_combs.shape[0] == 0: return
+                if pruned_combs.shape[0] == 0: return self.timed_out()
                 concretecheck_start_time = time.time()
                 SaP_duration = round(concretecheck_start_time - new_level_start_time, 3)
                 self.__level += 1
-                num_pruned = pruned_combs.shape[0]
-                print(f'Current level: {self.__level}, SaP duration: {SaP_duration}s, num_pruned: {num_pruned}')
+                num_after_prune = pruned_combs.shape[0]
+                print(f'Current level: {self.__level}, SaP duration: {SaP_duration}s, Total After Pruning: {num_after_prune}')
                 for i, gpu_worker in enumerate(self.__gpu_workers):
                     num_each = pruned_combs.shape[0] // self.__num_gpu_workers
                     if i == self.__num_gpu_workers - 1:
                         gpu_worker.send(('CC', pruned_combs[i * num_each :]))
                     else:
                         gpu_worker.send(('CC', pruned_combs[i * num_each : (i + 1) * num_each]))
+            if self.timed_out(estimated_more=(num_after_prune / self.__num_gpu_workers) * self.mean_concretecheck_time[self.__level]):
+                print(f'Level {self.__level} estimated concrete check time: {(num_after_prune / self.__num_gpu_workers) * self.mean_concretecheck_time[self.__level]:.2f} s, which is too long, terminating early.')
+                return True
             unk_combs_lst: list[np.ndarray] = []
             for gpu_worker in self.__gpu_workers:
                 unk_combs_lst.append(gpu_worker.recv())  # wait for gpu workers to finish
             unk_combs_tensor = torch.from_numpy(np.vstack(unk_combs_lst))
-            print(f'Level {self.__level} finished, unk_combs/all: {unk_combs_tensor.shape[0]}/{num_pruned}'
+            print(f'Level {self.__level} finished, unk_combs/all: {unk_combs_tensor.shape[0]}/{num_after_prune}'
                 f' using {round(time.time() - new_level_start_time, 3)} s, checking duration: {round(time.time() - concretecheck_start_time, 3)} s')
         if self.__level == self.__e and unk_combs_tensor.shape[0] > 0:
             print(f'Checked deepest level {self.__e}, remaining unk_combs size: {unk_combs_tensor.shape[0]}')
             for combs in unk_combs_tensor.tolist():
                 self.milp_job_queue.put(combs)
+        return self.timed_out()
 
     def __print_progress(self, pbar: tqdm, total_covering_size: int, num_finished: int, last_print_time: float) -> float:
         current = time.time()
