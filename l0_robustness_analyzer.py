@@ -69,7 +69,7 @@ class LZeroRobustnessAnalyzer:
         concrete_safe_rate = [s / c for s, c in zip(sample_successes, sample_counts)]
         print(f'Sampled concrete safe rates: {concrete_safe_rate}')
         if self.__strategy.require_supercheck()\
-            or self.__strategy == Strategy.CheSaP and all(sample_successes[i] != math.comb(self.__v, i) * self.__num_gpu_workers for i in range(self.__e + 1)):
+            or self.__strategy == Strategy.CheSaP and all(sample_successes[i] < math.comb(self.__v, i) for i in range(self.__e + 1)):
             print(f'Sampling super-nodes on level', end='', flush=True)
             # Sample super-nodes at levels with high concrete safe rate
             sample_all_k_end_level = min(self.__e, CVD_MAX_T)
@@ -114,7 +114,7 @@ class LZeroRobustnessAnalyzer:
 
         choosing_strategy_start = time.time()
         for l in range(first_any_safe_level, self.__e + 1):
-            if sample_successes[l] == math.comb(self.__v, l) * self.__num_gpu_workers and not self.__strategy.require_supercheck():  # all sampled nodes are safe, skip this level
+            if sample_successes[l] == math.comb(self.__v, l) and not self.__strategy.require_supercheck():  # all sampled nodes are safe, skip this level
                 candidate_strategies.append((estimated_CC_time_per_l[l], 'skip', l))
                 break
             tail_CC_time = sum(estimated_CC_time_per_l[l + 1:])
