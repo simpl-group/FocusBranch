@@ -418,12 +418,12 @@ class LZeroRobustnessAnalyzer:
             unk_combs_tensor = torch.unique(unk_combs_tensor.cuda(), dim=0).cpu()
             print(f'After deduplication, unk_combs size: {unk_combs_tensor.shape[0]}')
         while unk_combs_tensor.shape[0] > 0 and self.__level < self.__e:
-            estimated_SaP_time = self.estimate_SaP_time(unk_combs_tensor.shape[0], self.__level)
+            estimated_SaP_time = self.estimate_SaP_time(unk_combs_tensor.shape[0], self.__level) if self.__level >= 2 else 0.0
             if self.timed_out(estimated_more=estimated_SaP_time/self.__num_gpu_workers):
                 print(f'Level {self.__level} estimated SaP time: {estimated_SaP_time:3f} s, which is too long, terminating early.')
                 return True
             new_level_start_time = time.time()
-            if self.__level > 1 and estimated_SaP_time > 1.0:
+            if estimated_SaP_time > 1.0:  # local split, parallel prune
                 print(f'Level {self.__level} estimated SaP time: {estimated_SaP_time:3f} s. Sharing SaP workload across all GPU workers...')
                 for i, gpu_worker in enumerate(self.__gpu_workers):
                     gpu_worker.send(('SaP&CC', unk_combs_tensor.numpy()))
@@ -435,7 +435,7 @@ class LZeroRobustnessAnalyzer:
                 self.__level += 1
                 num_after_prune = sum(num_new_combs_per_worker)
                 print(f'Current level: {self.__level}, SaP duration: {SaP_duration}s, Total After Pruning: {num_after_prune}, each worker got: {num_new_combs_per_worker}')
-            else:
+            else:    # local split and prune
                 new_combs_tensor, reference_bitmasks, target_s_cnt = prepare4pruning(unk_combs_tensor, self.__v)
                 if new_combs_tensor.shape[0] == 0: return self.timed_out()
                 pruned_combs = prune(new_combs_tensor, reference_bitmasks, target_s_cnt, self.__level).numpy()
