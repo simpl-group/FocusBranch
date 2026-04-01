@@ -22,6 +22,8 @@ from scipy.signal import savgol_filter
 from scipy.stats import norm
 from tqdm import tqdm
 
+SR_THRES_TO_SAMPLE_SUPER = [0., 0., 0.7, 0.97, 0.9998,0.99999,0.999999,0.9999999,0.99999999,0.999999999]  # if the concrete safe rate is higher than this threshold, we will sample super-nodes on this level. The thresholds are determined by experiments and can be tuned.
+
 class LZeroRobustnessAnalyzer:
     def __init__(self, verifier: Verifier, gpu_workers: list[Connection], cpu_workers: list[Connection], plan_only: bool, strategy: Strategy, until_timedout: bool, force_reestimate: bool):
         self.verifier = verifier
@@ -66,13 +68,14 @@ class LZeroRobustnessAnalyzer:
             sample_counts = [a + b for a, b in zip(sample_counts, sc)]
             sample_successes = [a + b for a, b in zip(sample_successes, ss)]
         concrete_safe_rate = [s / c for s, c in zip(sample_successes, sample_counts)]
+        print(f'Sampled concrete safe rates: {concrete_safe_rate}')
         if self.__strategy.require_supercheck()\
             or self.__strategy == Strategy.CheSaP and all(sample_successes[i] != math.comb(self.__v, i) * self.__num_gpu_workers for i in range(self.__e + 1)):
             print(f'Sampling super-nodes on level', end='', flush=True)
             # Sample super-nodes at levels with high concrete safe rate
             sample_all_k_end_level = min(self.__e, CVD_MAX_T)
             for l in range(CVD_MIN_T, sample_all_k_end_level + 1):
-                if self.__strategy != Strategy.CoVerD and concrete_safe_rate[l] > 0.99 or l == sample_all_k_end_level:
+                if self.__strategy != Strategy.CoVerD and concrete_safe_rate[l] > SR_THRES_TO_SAMPLE_SUPER[l] or l == sample_all_k_end_level:
                     print(f' {l}', end='\n' if l == sample_all_k_end_level else '', flush=True)
                     for gpu_worker in self.__gpu_workers:
                         gpu_worker.send(('sample-all-k', l))
