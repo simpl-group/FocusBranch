@@ -92,7 +92,7 @@ class LZeroRobustnessAnalyzer:
                 estimated_nodes_this_level = math.ceil(math.comb(self.__v, l) * (1 - concrete_safe_rate[l - 1]) ** 2)
                 # print(f"Estimated concretes  on level {l}: {estimated_nodes_this_level} with concrete safe rate {concrete_safe_rate[l]:.4f}")
                 if l < self.__e:
-                    estimated_unk_nodes_this_level = estimated_nodes_this_level * (1 - concrete_safe_rate[l])
+                    estimated_unk_nodes_this_level = math.comb(self.__v, l) * (1 - concrete_safe_rate[l])
                     estimated_SaP_time_per_l[l] = self.estimate_SaP_time(estimated_unk_nodes_this_level, l)
                     # print(f"Estimated unknowns   on level {l}: {estimated_unk_nodes_this_level:.2f}")
                     # print(f"Estimated SaP   time on level {l}: {estimated_SaP_time_per_l[l]:.2f} seconds")
