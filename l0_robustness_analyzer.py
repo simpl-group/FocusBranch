@@ -18,7 +18,6 @@ from collections import defaultdict
 from multiprocessing.connection import Connection
 import torch
 import numpy as np
-from scipy.signal import savgol_filter
 from scipy.stats import norm
 from tqdm import tqdm
 
@@ -281,10 +280,16 @@ class LZeroRobustnessAnalyzer:
             sampling_successes_vector += np.array(sampling_successes)
             sampling_time_vector += np.array(sampling_time)
 
-        success_ratio_vector = sampling_successes_vector / sampling_counts_vector
+        sr_vector = sampling_successes_vector / sampling_counts_vector
         mean_time_vector = sampling_time_vector / sampling_counts_vector
+        mean_time_vector[0] = mean_time_vector[1]
 
-        sr_vector = savgol_filter(success_ratio_vector, 15, 2).clip(0, 1)
+        # lower entry should be strictly greater than higher entry, otherwise the fraction robust estimation will be inaccurate.
+        # Enforce a monotone decrease by interpolation to decrease the lower entry
+        # sr[i-1] > sr[i] should hold for accurate estimation of fraction robust. If not, we can interpolate between sr[i-1] and sr[i+1] to get a new sr[i], which should be smaller than sr[i+1]
+        for i in range(1, len(sr_vector) - 1):
+            if sr_vector[i] >= sr_vector[i - 1]:
+                sr_vector[i] = min((sr_vector[i - 1] + sr_vector[i + 1]) / 2, sr_vector[i - 1])
 
         return {k + self.__level:v for k, v in enumerate(sr_vector)}, {k + self.__level:v for k, v in enumerate(mean_time_vector)}
 
