@@ -26,19 +26,25 @@ def batched_randsample(upper_bound: int, sample_size: int, batch_size: int) -> t
     return rand_combs.sort().values.cpu()
 
 @lru_cache(maxsize=None)
-def selected_indices_sample(k: int, num_select: int, repetitions: int) -> torch.Tensor:
+def selected_indices_sample(k: int, num_select: int, repetitions: int, num_workers: int=1, worker_id: int=0) -> torch.Tensor:
     """
     Generate a tensor of shape (repetitions, num_select) with random indices from 0 to k-1.
     The indices are sorted in ascending order.
 
-    Sample plan A: for comb(k, num_select) >= (repetitions*100). use torch.randperm(k)[:num_select] for each row
-    Sample plan B: for (repetitions) < comb(k, num_select) <  (repetitions*100). get all combinations and then use randperm to select a batch of combinations
+    Sample plan A: for comb(k, num_select) >= (repetitions*num_workers*10000). use torch.randperm(k)[:num_select] for each row
+    Sample plan B: for (repetitions) < comb(k, num_select) <  (repetitions*10000). get all combinations and then use randperm to select a batch of combinations
     Sample plan C: for comb(k, num_select) < (repetitions), use torch.combinations(torch.arange(k), num_select) to generate all combinations
     """
-    if math.comb(k, num_select) > repetitions * 100:  # If k is too large, we use the plan A
+    if math.comb(k, num_select) > repetitions * num_workers * 10000:  # If k is too large, we use the plan A
         return batched_randsample(k, num_select, repetitions)
     else:  # If k is small enough, we use the plan B
         all_combs = torch.combinations(torch.arange(k, device=DEVICE), num_select)
+        # Distribute the combinations among workers
+        partition_size = all_combs.shape[0] // num_workers
+        if worker_id < num_workers - 1:
+            all_combs = all_combs[worker_id * partition_size : (worker_id + 1) * partition_size]
+        else:
+            all_combs = all_combs[worker_id * partition_size :]
         if len(all_combs) > repetitions:
             choices = torch.randperm(len(all_combs), device=DEVICE)[:repetitions]
             return all_combs[choices].cpu()
@@ -273,7 +279,7 @@ class Verifier:
             print(f"Safe: {success}")
         return success
 
-    def concrete_sample_all_levels(self) -> tuple[list[int], list[int]]:
+    def concrete_sample_all_levels(self, num_workers: int, worker_id: int) -> tuple[list[int], list[int]]:
         assert self.bounded_x0.level is None, "bounded_x0.level must be None since we are using self.bounded_x0.selecting"
         sample_counts = [min(self.rep_each_level, math.comb(self.num_pixels, l)) for l in range(0, self.eps + 1)]
         sample_successes = [0] * (self.eps + 1)
@@ -284,7 +290,7 @@ class Verifier:
         elif self.strategy == Strategy.CoVerD:
             return sample_counts, sample_successes
         for level in range(start_level, self.eps + 1):
-            combs_to_check = selected_indices_sample(self.num_pixels, level, self.rep_each_level) if level > 0 else torch.empty((1, 0), dtype=torch.int64)
+            combs_to_check = selected_indices_sample(self.num_pixels, level, self.rep_each_level, num_workers=num_workers, worker_id=worker_id) if level > 0 else torch.empty((1, 0), dtype=torch.int64)
             sample_counts[level] = combs_to_check.shape[0]
             for i in range(0, combs_to_check.shape[0], self.concretecheck_batch):
                 combs_to_check_batch = combs_to_check[i:i + self.concretecheck_batch].to(self.device)
@@ -499,7 +505,7 @@ class Verifier:
                 torch_img = torch.tensor(image, dtype=torch.float32).reshape(1, -1, 1)
                 self.adapt_target_images(images=torch_img, true_labels=torch.tensor([label], dtype=torch.int64), check_first=False)
 
-                self.conn.send(self.concrete_sample_all_levels())
+                self.conn.send(self.concrete_sample_all_levels(num_workers, worker_id))
                 message = self.conn.recv()
                 while message[0] == 'sample-all-k':
                     l = int(message[1])
