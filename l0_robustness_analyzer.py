@@ -158,7 +158,9 @@ class LZeroRobustnessAnalyzer:
             results['candidate_geometries'] = candidate_geometries
 
         # to be deleted later if needed
-        if best_strategy[1] == 'CCSaP' and best_strategy[2] >= 4 or best_strategy[0] > self.__timeout * 1.3 and not self.__until_timedout:
+        if best_strategy[1] == 'CCSaP' and best_strategy[2] >= 4 or \
+            best_strategy[0] > self.__timeout * 1.3 and best_strategy[2] == self.__e and not self.__until_timedout or \
+            best_strategy[0] > self.__timeout * 2.0 and best_strategy[2]  < self.__e and not self.__until_timedout:  # SaP estimation might be inaccurate
             results['timed_out'] = True
             print(f'{best_strategy[1]} at level {best_strategy[2]} estimated to take too long, skipping this image.')
 
