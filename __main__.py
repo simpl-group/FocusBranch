@@ -76,11 +76,14 @@ if __name__ == '__main__':
         for worker_id in range(args.milp_num):
             launch_gurobi_worker(netname=args.net, port=int(cpu_listener.address[1]))
 
-        print("Waiting for cpu workers")
+        print("Waiting for cpu workers ... ", end='', flush=True)
         cpu_workers = [cpu_listener.accept() for _ in range(args.milp_num)]
+        print("Done.")
 
-        print("Waiting for gpu workers")
+        print("Waiting for gpu workers ... ", end='', flush=True)
         gpu_workers = [gpu_listener.accept() for _ in range(args.gpu_num)]
+        gpu_workers.sort(key=lambda w: w.recv())
+        print("Done.")
 
     verifier, data_loader = get2(args)
     analyzer = LZeroRobustnessAnalyzer(

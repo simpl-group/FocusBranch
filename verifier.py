@@ -497,6 +497,7 @@ class Verifier:
 
     def work_as_worker(self, port: int, num_workers: int=1, worker_id: int=0):
         with Client(('localhost', port)) as self.conn:
+            self.conn.send(worker_id)
             # Every iteration of this loop is one image
             message = self.conn.recv()
             while not isinstance(message, str) or message != 'terminate':
