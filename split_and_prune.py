@@ -63,7 +63,7 @@ def split_and_prune(
 
     return torch.cat(pruned_new_combs_list, dim=0)  # on CPU
 
-def prepare4pruning(unk_combs: torch.Tensor, num_indices: int) -> tuple[torch.Tensor, torch.Tensor, int]:
+def canonical_split(unk_combs: torch.Tensor, num_indices: int) -> torch.Tensor:
     num_unk, level = unk_combs.shape
     last_item = unk_combs[:, -1] if level > 0 else torch.tensor([-1], dtype=torch.int64)
     num_children = num_indices - last_item - 1
@@ -79,6 +79,11 @@ def prepare4pruning(unk_combs: torch.Tensor, num_indices: int) -> tuple[torch.Te
     new_combs = torch.empty((total_children, level + 1), dtype=torch.int64)
     new_combs[:, :level] = unk_combs[prefix_idx]
     new_combs[:, level] = last_item[prefix_idx] + arange_within + 1
+    return new_combs
+
+def prepare4pruning(unk_combs: torch.Tensor, num_indices: int) -> tuple[torch.Tensor, torch.Tensor, int]:
+    num_unk, level = unk_combs.shape
+    new_combs = canonical_split(unk_combs, num_indices)
 
     bitmask_length = (num_indices + 63) // 64
     reference_bitmasks = combs2bitmasks(unk_combs.to(DEVICE), bitmask_length)

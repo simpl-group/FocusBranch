@@ -176,6 +176,18 @@ class Verifier:
         if self.demo: print(f"Sample Time: {perf_counter() - start:2.2}s, Sampled Nodes: {sampled_nodes}, Speed: {nodes_per_second:.2f} nodes/s, Estimated nodes: {estimated_total_nodes}\nEstimated verification time: {estimated_verification_time:.2f}s, First any safe level: {first_any_safe_level}")
         return estimated_verification_time, first_any_safe_level
 
+    def __get_min_lb_ls_from(self, concrete_combs: torch.Tensor):
+        lb_l_min_values_lst: list[torch.Tensor] = [torch.empty((0), dtype=torch.float32)]
+        for i in range(0, concrete_combs.shape[0], self.concretecheck_batch):
+            combs_batch = concrete_combs[i:i + self.concretecheck_batch].to(self.device)
+            with self.bounded_x0.selecting(combs_batch):
+                self.seqAT.update_activation_rp(bounded_in=self.bounded_x0)
+                lb_l = self.bounded_x0.compute_lbound(self.seqAT.tail.backsubstitution_lrp()).squeeze(2).cpu()
+                # somthing TODO with true label, this is just a quick patch
+                lb_l[lb_l == 0] += 1000
+                lb_l_min_values_lst.append(lb_l.min(dim=1).values)
+        return torch.cat(lb_l_min_values_lst, dim=0)
+
     def adapt_target_images(self, images: torch.Tensor, true_labels: torch.Tensor, target_label: int | None=None, check_first=True) -> None:
         """
         Adapt the input image and true label for the verification process. Will first check if the image matches the true label if check_first is True.
@@ -281,25 +293,24 @@ class Verifier:
 
     def concrete_sample_all_levels(self, num_workers: int, worker_id: int) -> tuple[list[int], list[int]]:
         assert self.bounded_x0.level is None, "bounded_x0.level must be None since we are using self.bounded_x0.selecting"
-        sample_counts = [min(self.rep_each_level, math.comb(self.num_pixels, l)) for l in range(0, self.eps + 1)]
-        sample_successes = [0] * (self.eps + 1)
+        sample_counts, sample_successes = [0] * (self.eps + 1), [0] * (self.eps + 1)
         if not self.strategy.require_supercheck():
-            start_level = 0
+            start_level = 2
         elif self.strategy == Strategy.SCSaP:
             start_level = CVD_MIN_T
-        elif self.strategy == Strategy.CoVerD:
-            return sample_counts, sample_successes
+        else: assert False, f"Unsupported strategy {self.strategy}"
         for level in range(start_level, self.eps + 1):
-            combs_to_check = selected_indices_sample(self.num_pixels, level, self.rep_each_level, num_workers=num_workers, worker_id=worker_id) if level > 0 else torch.empty((1, 0), dtype=torch.int64)
+            combs_to_check = selected_indices_sample(self.num_pixels, level, self.rep_each_level, num_workers=num_workers, worker_id=worker_id)
             sample_counts[level] = combs_to_check.shape[0]
             for i in range(0, combs_to_check.shape[0], self.concretecheck_batch):
                 combs_to_check_batch = combs_to_check[i:i + self.concretecheck_batch].to(self.device)
                 with self.bounded_x0.selecting(combs_to_check_batch):
                     sample_successes[level] += int(self.__check_current_batch().sum().item())
-            if sample_successes[level] == math.comb(self.num_pixels, level):  # All nodes are safe, no need to go deeper
+            if sample_successes[level] == sample_counts[level]:
                 # fake the rest
-                sample_successes[level+1:] = sample_counts[level+1:]
-                break
+                sample_counts[level+1:self.eps + 1] = [min(self.rep_each_level, math.comb(self.num_pixels, l)) for l in range(level + 1, self.eps + 1)]
+                sample_successes[level+1:self.eps + 1] = sample_counts[level+1:self.eps + 1]
+                break  # All nodes are safe, no need to go deeper
         return sample_counts, sample_successes
 
     def estimate_mean_concretecheck_time(self, netname: str, sample_size_coeff: int=10, force_reestimate: bool=False) -> list[float]:
@@ -505,8 +516,17 @@ class Verifier:
                 torch.manual_seed(seed)
                 torch_img = torch.tensor(image, dtype=torch.float32).reshape(1, -1, 1)
                 self.adapt_target_images(images=torch_img, true_labels=torch.tensor([label], dtype=torch.int64), check_first=False)
-
-                self.conn.send(self.concrete_sample_all_levels(num_workers, worker_id))
+                if not self.strategy == Strategy.CoVerD:
+                    if worker_id == 0:
+                        self.conn.send(1. if bool(self.__check_current_batch().item()) else -1.)
+                    message = self.conn.recv()
+                    while message[0] == 'CC':
+                        combs2check = torch.from_numpy(message[1])
+                        self.conn.send(self.__get_min_lb_ls_from(combs2check).numpy())
+                        message = self.conn.recv()
+                    assert message[0] == 'finished probing', f"Expected 'finished probing' message, but got {message}"
+                    if message[1] > 1:
+                        self.conn.send(self.concrete_sample_all_levels(num_workers, worker_id))
                 message = self.conn.recv()
                 while message[0] == 'sample-all-k':
                     l = int(message[1])
@@ -517,14 +537,17 @@ class Verifier:
                     continue
                 if message[0] == 'CCSaP':
                     self.__level = int(message[1])
-                    all_concrete_combs = torch.combinations(torch.arange(self.num_pixels), self.__level)
-                    num2check_each = all_concrete_combs.shape[0] // num_workers
-                    if worker_id == num_workers - 1:
-                        concrete_combs = all_concrete_combs[worker_id * num2check_each:]
+                    if self.__level == 1:
+                        prove_thread = threading.Thread(target=lambda: None, daemon=True)
                     else:
-                        concrete_combs = all_concrete_combs[worker_id * num2check_each: (worker_id + 1) * num2check_each]
-                    del all_concrete_combs
-                    prove_thread = threading.Thread(target=self.__prove_concrete_combs, args=(concrete_combs,), daemon=True)
+                        all_concrete_combs = torch.combinations(torch.arange(self.num_pixels), self.__level)
+                        num2check_each = all_concrete_combs.shape[0] // num_workers
+                        if worker_id == num_workers - 1:
+                            concrete_combs = all_concrete_combs[worker_id * num2check_each:]
+                        else:
+                            concrete_combs = all_concrete_combs[worker_id * num2check_each: (worker_id + 1) * num2check_each]
+                        del all_concrete_combs
+                        prove_thread = threading.Thread(target=self.__prove_concrete_combs, args=(concrete_combs,), daemon=True)
                 elif message[0] == 'SCSaP':
                     _, geometry, chosen_indices, self.refinement_strategy = message
                     self.__level = geometry.t

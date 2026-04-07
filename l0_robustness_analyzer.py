@@ -4,7 +4,7 @@ from data import load_covering_sizes, Strategy
 from coverd_finite_geometries import get_possible_geometries, Geometry
 from covering_generator import CVD_MIN_T, CVD_MAX_T
 from covering_generator.estimator import estimate_generator_speed, estimate_extra_time
-from split_and_prune import estimate_SaP_speed, estimate_SaP_time, prepare4pruning, prune
+from split_and_prune import estimate_SaP_speed, estimate_SaP_time, prepare4pruning, prune, canonical_split
 from bimm import combs2bitmasks, bitmasks2combs, superset_sum
 from verifier import Verifier
 import threading
@@ -21,7 +21,10 @@ import numpy as np
 from scipy.stats import norm
 from tqdm import tqdm
 
-SR_THRES_TO_SAMPLE_SUPER = [0., 0., 0.7, 0.97, 0.9998,0.99999,0.999999,0.9999999,0.99999999,0.999999999]  # if the concrete safe rate is higher than this threshold, we will sample super-nodes on this level. The thresholds are determined by experiments and can be tuned.
+SR_THRES_TO_SAMPLE_SUPER = [0., 0., 0.7, 0.97, 0.9997,0.99999,0.999999,0.9999999,0.99999999,0.999999999]  # if the concrete safe rate is higher than this threshold, we will sample super-nodes on this level. The thresholds are determined by experiments and can be tuned.
+
+MAX_THICKNESS = 50
+MAX_MEAN_SIZE_NOT_ALL_SAFE = 15
 
 class LZeroRobustnessAnalyzer:
     def __init__(self, verifier: Verifier, gpu_workers: list[Connection], cpu_workers: list[Connection], plan_only: bool, strategy: Strategy, until_timedout: bool, force_reestimate: bool):
@@ -55,26 +58,73 @@ class LZeroRobustnessAnalyzer:
     def timed_out(self, estimated_more: float=0.0) -> bool:
         return time.time() - self.analyzer_start_time + estimated_more > self.__timeout
 
+    def __gpu_workers_send_all(self, message):
+        for gpu_worker in self.__gpu_workers:
+            gpu_worker.send(message)
+
+    def __probe(self) -> tuple[int, float, torch.Tensor]:
+        level = 0
+        unk_combs1 = torch.empty((0, 1), dtype=torch.int64)
+        min_lb_l = self.__gpu_workers[0].recv()  # get the result from the first gpu worker
+        combs2check = torch.arange(self.__v).reshape(-1, 1)
+        while min_lb_l < 0 or level == self.__e:
+            lb_l_min_values = torch.empty((combs2check.shape[0],), dtype=torch.float32)
+            level += 1
+            num_each = combs2check.shape[0] // self.__num_gpu_workers
+            for i, gpu_worker in enumerate(self.__gpu_workers):
+                if i == self.__num_gpu_workers - 1:
+                    gpu_worker.send(('CC', combs2check[i * num_each :].numpy()))
+                else:
+                    gpu_worker.send(('CC', combs2check[i * num_each : (i + 1) * num_each].numpy()))
+            for i, gpu_worker in enumerate(self.__gpu_workers):
+                if i == self.__num_gpu_workers - 1:
+                    lb_l_min_values[i * num_each :] = torch.from_numpy(gpu_worker.recv())
+                else:
+                    lb_l_min_values[i * num_each : (i + 1) * num_each] = torch.from_numpy(gpu_worker.recv())
+            if level == 1:
+                unk_combs1 = combs2check[lb_l_min_values < 0]
+            min_lb_l = lb_l_min_values.min().item()
+            # print(f"Level {level} min lb_l: {min_lb_l:.4f}, num combs: {combs2check.shape[0]}")
+            if min_lb_l >= 0 or level == self.__e: break
+            num_lt_0 = int(lb_l_min_values.lt(0).sum().item())
+            unk_combs = combs2check[lb_l_min_values.topk(min(MAX_THICKNESS, num_lt_0), largest=False, sorted=False).indices]
+            combs2check = canonical_split(unk_combs, self.__v)
+        if min_lb_l < 0: level += 1
+        return level, min_lb_l, unk_combs1
+
     def analyze(self):
         assert self.mean_concretecheck_time is not None, "mean_concretecheck_time should have been set by now."
         print('Planning stage started')
         self.analyzer_start_time = time.time()
-        super_success_rate, mean_supercheck_time = {}, {}
-        # Sample concrete nodes at all levels
         sample_counts, sample_successes = [0] * (self.__e + 1), [0] * (self.__e + 1)
-        for gpu_worker in self.__gpu_workers:
-            sc, ss = gpu_worker.recv()
-            sample_counts = [a + b for a, b in zip(sample_counts, sc)]
-            sample_successes = [a + b for a, b in zip(sample_successes, ss)]
-        concrete_safe_rate = [s / c for s, c in zip(sample_successes, sample_counts)]
+        super_success_rate, mean_supercheck_time = {}, {}
+        mean_size_limits = {l: self.__refinement_db_max_v for l in range(CVD_MIN_T, min(self.__e + 1, CVD_MAX_T + 1))}
+        if not self.__strategy == Strategy.CoVerD:
+            first_all_safe_level, min_lb_l, unk_combs1 = self.__probe()
+            print(f'Finished probing, first_all_safe_level: {first_all_safe_level}, min_lb_l: {min_lb_l:.4f}, took {round(time.time() - self.analyzer_start_time, 3)} s')
+            self.__gpu_workers_send_all(('finished probing', first_all_safe_level))
+            if first_all_safe_level <= 1:
+                sample_counts = [math.comb(self.__v, l) for l in range(first_all_safe_level, self.__e + 1)]
+                sample_successes = sample_counts.copy()
+            else:
+                for l in mean_size_limits:
+                    if l < first_all_safe_level:
+                        mean_size_limits[l] = MAX_MEAN_SIZE_NOT_ALL_SAFE
+                sample_counts[:2] = [1, self.__v]
+                sample_successes[:2] = [0, 0 if self.__strategy.require_supercheck() else self.__v - unk_combs1.shape[0]]
+                for gpu_worker in self.__gpu_workers:
+                    sc, ss = gpu_worker.recv()
+                    sample_counts = [a + b for a, b in zip(sample_counts, sc)]
+                    sample_successes = [a + b for a, b in zip(sample_successes, ss)]
+        concrete_safe_rate = [s / c if c > 0 else 0. for s, c in zip(sample_successes, sample_counts)]
         print(f'Sampled concrete safe rates: {concrete_safe_rate}')
         if self.__strategy.require_supercheck()\
-            or self.__strategy == Strategy.CheSaP and all(sample_successes[i] < math.comb(self.__v, i) for i in range(self.__e + 1)):
+            or self.__strategy == Strategy.CheSaP and sum(concrete_safe_rate[:2]) == 0:  # if level 0 safe or any level 1 safe, go CCSaP directly
             print(f'Sampling super-nodes on level', end='', flush=True)
             # Sample super-nodes at levels with high concrete safe rate
             sample_all_k_end_level = min(self.__e, CVD_MAX_T)
             for l in range(CVD_MIN_T, sample_all_k_end_level + 1):
-                if self.__strategy != Strategy.CoVerD and concrete_safe_rate[l] > SR_THRES_TO_SAMPLE_SUPER[l] or l == sample_all_k_end_level:
+                if self.__strategy != Strategy.CoVerD and concrete_safe_rate[l] >= SR_THRES_TO_SAMPLE_SUPER[l] or l == sample_all_k_end_level:
                     print(f' {l}', end='\n' if l == sample_all_k_end_level else '', flush=True)
                     for gpu_worker in self.__gpu_workers:
                         gpu_worker.send(('sample-all-k', l))
@@ -127,7 +177,7 @@ class LZeroRobustnessAnalyzer:
                 self.__level = l
                 fraction_robusts[l] = self.__compute_fraction_robust(super_success_rate[l])
                 VTs[l], refinement_strategies[l] = self.__choose_strategy(fraction_robusts[l], mean_supercheck_time[l], super_success_rate[l])
-                chosen_geometries[l], geometries_data = self.__choose_geometry(VTs[l])
+                chosen_geometries[l], geometries_data = self.__choose_geometry(VTs[l], mean_size_limits[l])
                 chosen_geometries_info[l] = geometries_data[0]
                 candidate_geometries.extend(geometries_data)
                 SCSaP_time: float = (chosen_geometries_info[l]["estimated_summed_duration"] + tail_CC_time) / self.__num_gpu_workers + self.cvd_extra_time(chosen_geometries[l]) + tail_SaP_time
@@ -181,19 +231,27 @@ class LZeroRobustnessAnalyzer:
 
         if best_strategy[1] == 'CCSaP':
             self.__deduplicated = True  # SaP won't create duplicates
-            for gpu_worker in self.__gpu_workers:
-                gpu_worker.send(('CCSaP', self.__level))  # no geometry, no refinement strategy
+            self.__gpu_workers_send_all(('CCSaP', self.__level))  # no geometry, no refinement strategy
             current_level_start_time = time.time()
-            # collect all unknown combinations
-            unk_combs_lst: list[np.ndarray] = []
-            for gpu_worker in self.__gpu_workers:
-                unk_combs_lst.append(gpu_worker.recv())  # wait for gpu workers to finish
-            unk_combs = np.vstack(unk_combs_lst)
+            if self.__level == 1:
+                unk_combs = unk_combs1.numpy()
+            else:
+                unk_combs_lst: list[np.ndarray] = []
+                for gpu_worker in self.__gpu_workers:
+                    unk_combs_lst.append(gpu_worker.recv())  # wait for gpu workers to finish
+                unk_combs = np.vstack(unk_combs_lst)
             print(f'Level {self.__level} finished, unk_combs/all: {unk_combs.shape[0]}/{math.comb(self.__v, self.__level)}'
                 f' using {round(time.time() - current_level_start_time, 3)} s')
         elif best_strategy[1] == 'SCSaP':
             self.__deduplicated = self.__level < self.__e  # SaP won't be used on the last level, so we might have duplicates on the last level
             chosen_geometry, refinement_strategy = chosen_geometries[self.__level], refinement_strategies[self.__level]
+            mean_size = int(chosen_geometry.block_size() * self.__v / chosen_geometry.number_of_points()) + 1
+            step_to_level = 0
+            current_size = mean_size
+            while current_size > self.__level:
+                step_to_level += 1
+                current_size = refinement_strategy[current_size]
+            print(f"{step_to_level} steps to go from mean size {mean_size} to size {self.__level}")
             assert self.__level == min(refinement_strategy.keys()), f"Level mismatch: {self.__level} vs {min(refinement_strategy.keys())}"
             chosen_indices = random.sample(range(chosen_geometry.number_of_points()), self.__v)
             random.shuffle(chosen_indices)
@@ -329,7 +387,7 @@ class LZeroRobustnessAnalyzer:
             VT[v] = mean_time[v] + min_refine_time * (1 - success_rate[v])
         return VT, refinement_strategy
 
-    def __choose_geometry(self, VT: dict[int,float]) -> tuple[Geometry, list[dict[str, object]]]:
+    def __choose_geometry(self, VT: dict[int,float], mean_size_limit: int) -> tuple[Geometry, list[dict[str, object]]]:
         best_geometry: Geometry = None
         best_time = float('inf')
         geometries = []
@@ -341,6 +399,7 @@ class LZeroRobustnessAnalyzer:
 
             if (1 - norm.cdf(self.__refinement_db_max_v, pseudo_k, std_dev)) * total_number_of_blocks > 1e-2:
                 continue
+            if pseudo_k > mean_size_limit: continue
 
             cdf_before = norm.cdf(self.__level - 0.5, pseudo_k, std_dev)
             for block_size in range(self.__level, self.__refinement_db_max_v + 1):
