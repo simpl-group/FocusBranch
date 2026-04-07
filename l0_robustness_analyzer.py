@@ -234,12 +234,12 @@ class LZeroRobustnessAnalyzer:
             self.__gpu_workers_send_all(('CCSaP', self.__level))  # no geometry, no refinement strategy
             current_level_start_time = time.time()
             if self.__level == 1:
-                unk_combs = unk_combs1.numpy()
+                unk_combs = unk_combs1
             else:
                 unk_combs_lst: list[np.ndarray] = []
                 for gpu_worker in self.__gpu_workers:
                     unk_combs_lst.append(gpu_worker.recv())  # wait for gpu workers to finish
-                unk_combs = np.vstack(unk_combs_lst)
+                unk_combs = torch.from_numpy(np.vstack(unk_combs_lst))
             print(f'Level {self.__level} finished, unk_combs/all: {unk_combs.shape[0]}/{math.comb(self.__v, self.__level)}'
                 f' using {round(time.time() - current_level_start_time, 3)} s')
         elif best_strategy[1] == 'SCSaP':
@@ -467,17 +467,16 @@ class LZeroRobustnessAnalyzer:
                             size_statistics['successes'] += num_verified
         pbar.close()
         print(f"num_finished: {num_finished}, total_covering_size: {total_covering_size}, remaining: {total_covering_size - num_finished}")
-        return np.vstack(unk_combs_lst) if len(unk_combs_lst) > 0 else np.empty((0, self.__v), dtype=int)
+        return torch.from_numpy(np.vstack(unk_combs_lst)) if len(unk_combs_lst) > 0 else torch.empty((0, self.__v), dtype=torch.int64)
 
-    def __handle_unk_combs(self, unk_combs: np.ndarray, deduplicate: bool = False) -> bool:  # return True if we should terminate early due to timeout
+    def __handle_unk_combs(self, unk_combs: torch.Tensor, deduplicate: bool = False) -> bool:  # return True if we should terminate early due to timeout
         if unk_combs.shape[0] == 0: return self.timed_out()  # no need to handle
-        unk_combs_tensor: torch.Tensor = torch.from_numpy(unk_combs)
         if deduplicate:
             print(f"Level {self.__level} Before deduplication, unk_combs size: {unk_combs.shape[0]}", end="; ")
-            unk_combs_tensor = torch.unique(unk_combs_tensor.cuda(), dim=0).cpu()
-            print(f'After deduplication, unk_combs size: {unk_combs_tensor.shape[0]}')
-        while unk_combs_tensor.shape[0] > 0 and self.__level < self.__e:
-            estimated_SaP_time = self.estimate_SaP_time(unk_combs_tensor.shape[0], self.__level) if self.__level >= 2 else 0.0
+            unk_combs = torch.unique(unk_combs.cuda(), dim=0).cpu()
+            print(f'After deduplication, unk_combs size: {unk_combs.shape[0]}')
+        while unk_combs.shape[0] > 0 and self.__level < self.__e:
+            estimated_SaP_time = self.estimate_SaP_time(unk_combs.shape[0], self.__level) if self.__level >= 2 else 0.0
             if self.timed_out(estimated_more=estimated_SaP_time/self.__num_gpu_workers):
                 print(f'Level {self.__level} estimated SaP time: {estimated_SaP_time:3f} s, which is too long, terminating early.')
                 return True
@@ -485,7 +484,7 @@ class LZeroRobustnessAnalyzer:
             if estimated_SaP_time > 1.0:  # local split, parallel prune
                 print(f'Level {self.__level} estimated SaP time: {estimated_SaP_time:3f} s. Sharing SaP workload across all GPU workers...')
                 for i, gpu_worker in enumerate(self.__gpu_workers):
-                    gpu_worker.send(('SaP&CC', unk_combs_tensor.numpy()))
+                    gpu_worker.send(('SaP&CC', unk_combs.numpy()))
                 num_new_combs_per_worker = [0] * self.__num_gpu_workers
                 for i, gpu_worker in enumerate(self.__gpu_workers):
                     num_new_combs_per_worker[i] = gpu_worker.recv()
@@ -495,7 +494,7 @@ class LZeroRobustnessAnalyzer:
                 num_after_prune = sum(num_new_combs_per_worker)
                 print(f'Current level: {self.__level}, SaP duration: {SaP_duration}s, Total After Pruning: {num_after_prune}, each worker got: {num_new_combs_per_worker}')
             else:    # local split and prune
-                new_combs_tensor, reference_bitmasks, target_s_cnt = prepare4pruning(unk_combs_tensor, self.__v)
+                new_combs_tensor, reference_bitmasks, target_s_cnt = prepare4pruning(unk_combs, self.__v)
                 if new_combs_tensor.shape[0] == 0: return self.timed_out()
                 pruned_combs = prune(new_combs_tensor, reference_bitmasks, target_s_cnt, self.__level).numpy()
                 if pruned_combs.shape[0] == 0: return self.timed_out()
@@ -516,12 +515,12 @@ class LZeroRobustnessAnalyzer:
             unk_combs_lst: list[np.ndarray] = []
             for gpu_worker in self.__gpu_workers:
                 unk_combs_lst.append(gpu_worker.recv())  # wait for gpu workers to finish
-            unk_combs_tensor = torch.from_numpy(np.vstack(unk_combs_lst))
-            print(f'Level {self.__level} finished, unk_combs/all: {unk_combs_tensor.shape[0]}/{num_after_prune}'
+            unk_combs = torch.from_numpy(np.vstack(unk_combs_lst))
+            print(f'Level {self.__level} finished, unk_combs/all: {unk_combs.shape[0]}/{num_after_prune}'
                 f' using {round(time.time() - new_level_start_time, 3)} s, checking duration: {round(time.time() - concretecheck_start_time, 3)} s')
-        if self.__level == self.__e and unk_combs_tensor.shape[0] > 0:
-            print(f'Checked deepest level {self.__e}, remaining unk_combs size: {unk_combs_tensor.shape[0]}')
-            for combs in unk_combs_tensor.tolist():
+        if self.__level == self.__e and unk_combs.shape[0] > 0:
+            print(f'Checked deepest level {self.__e}, remaining unk_combs size: {unk_combs.shape[0]}')
+            for combs in unk_combs.tolist():
                 self.milp_job_queue.put(combs)
         return self.timed_out()
 
