@@ -104,7 +104,7 @@ class LZeroRobustnessAnalyzer:
             print(f'Finished probing, first_all_safe_level: {first_all_safe_level}, min_lb_l: {min_lb_l:.4f}, took {round(time.time() - self.analyzer_start_time, 3)} s')
             self.__gpu_workers_send_all(('finished probing', first_all_safe_level))
             if first_all_safe_level <= 1:
-                sample_counts = [math.comb(self.__v, l) for l in range(first_all_safe_level, self.__e + 1)]
+                sample_counts[first_all_safe_level:] = [math.comb(self.__v, l) for l in range(first_all_safe_level, self.__e + 1)]
                 sample_successes = sample_counts.copy()
             else:
                 for l in mean_size_limits:
@@ -425,7 +425,7 @@ class LZeroRobustnessAnalyzer:
         initial_covering_size: int,
         refinement_strategy: dict[int,int|None],
         refinement_sizes: dict[int,int]
-    ) -> np.ndarray:
+    ) -> torch.Tensor:
         num_finished = 0
         done_count = 0
         total_covering_size = initial_covering_size
