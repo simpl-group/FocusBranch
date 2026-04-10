@@ -160,7 +160,7 @@ if __name__ == '__main__':
             f"unsafe: {unsafe_images}/{tried_images}, ",
             f"time: {round(time.time() - start, 3)}; {0 if cum_time == 0 else cum_time / tried_images:.3f}; {cum_time:.3f}"
         )
-        print('*******************************************************')
+        print('*******************************************************', flush=True)
 
     for worker in itertools.chain(gpu_workers, cpu_workers):
         worker.send('terminate')
