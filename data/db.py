@@ -253,7 +253,7 @@ milp_should_skip = _make_should_skip("milp")
 lirpa_should_skip = _make_should_skip("lirpa")
 coverd_should_skip = _make_should_skip("coverd")
 
-def ours_config_consistent(net: str, epsilon: int, img: int, gpu_num: int, milp_num: int, timeout:int, rep_each_k: int, rep_each_level: int, concretecheck_batch: int, supercheck_batch: int, pool_size: int, db: str="") -> tuple[bool, str]:
+def ours_config_consistent(net: str, epsilon: int, img: int, gpu_num: int, milp_num: int, timeout:int, rep_each_k: int, rep_each_level: int, concretecheck_batch: int, supercheck_batch: int, pool_size: int, probe_thickness: int, db: str="") -> tuple[bool, str]:
     if not db: db = __db
     query = "SELECT * FROM ours_config WHERE net = ? AND eps = ?"
     with sqlite3.connect(db) as c:
@@ -276,6 +276,8 @@ def ours_config_consistent(net: str, epsilon: int, img: int, gpu_num: int, milp_
         inconsistent_args.append(f"--rep_each_k \r\t\t\t(config: {config['rep_each_k']} != {rep_each_k})")
     if config['rep_each_level'] != rep_each_level:
         inconsistent_args.append(f"--rep_each_level \r\t\t\t(config: {config['rep_each_level']} != {rep_each_level})")
+    if config['probe_thickness'] != probe_thickness:
+        inconsistent_args.append(f"--probe_thickness \r\t\t\t(config: {config['probe_thickness']} != {probe_thickness})")
     if config['concretecheck_batch'] != 0 and config['concretecheck_batch'] != concretecheck_batch:
         inconsistent_args.append(f"--concretecheck_batch \r\t\t\t(config: {config['concretecheck_batch']} != {concretecheck_batch})")
     if config['supercheck_batch'] != 0 and config['supercheck_batch'] != supercheck_batch:

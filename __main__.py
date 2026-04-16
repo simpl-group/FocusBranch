@@ -24,6 +24,7 @@ if __name__ == '__main__':
     parser.add_argument("--gpu_num", type=int, default=4, help="the number of GPUs used in the analysis")
     parser.add_argument("--milp_num", type=int, default=5, help="the number of MILP instances used in the analysis")
     parser.add_argument('--base_seed', type=int, default=42, help='the base seed')
+    parser.add_argument('--probe_thickness', type=int, default=50, help='Maximum number of least safe combinations to track.')
     parser.add_argument("--detail", action="store_true", help="Output detailed superset statistics for each image in a separate excel file.")
     parser.add_argument("--plan_only", action="store_true", help="Only run the planning stage without actual verification.")
     parser.add_argument("--until-timedout", "-ut", action="store_true", help="Continue running until timeout is reached, even if the estimated verification time is larger than twice the timeout.")
@@ -92,6 +93,7 @@ if __name__ == '__main__':
         cpu_workers=cpu_workers,
         plan_only=args.plan_only,
         strategy=args.strategy,
+        probe_thickness=args.probe_thickness,
         until_timedout=args.until_timedout,
         force_reestimate=args.force_reestimate
     )

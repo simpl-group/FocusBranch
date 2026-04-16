@@ -23,11 +23,10 @@ from tqdm import tqdm
 
 SR_THRES_TO_SAMPLE_SUPER = [0., 0., 0.7, 0.97, 0.9997,0.99999,0.999999,0.9999999,0.99999999,0.999999999]  # if the concrete safe rate is higher than this threshold, we will sample super-nodes on this level. The thresholds are determined by experiments and can be tuned.
 
-MAX_THICKNESS = 50
 MAX_MEAN_SIZE_NOT_ALL_SAFE = 15
 
 class LZeroRobustnessAnalyzer:
-    def __init__(self, verifier: Verifier, gpu_workers: list[Connection], cpu_workers: list[Connection], plan_only: bool, strategy: Strategy, until_timedout: bool, force_reestimate: bool):
+    def __init__(self, verifier: Verifier, gpu_workers: list[Connection], cpu_workers: list[Connection], plan_only: bool, strategy: Strategy, probe_thickness: int, until_timedout: bool, force_reestimate: bool):
         self.verifier = verifier
         self.__gpu_workers = gpu_workers
         self.__num_gpu_workers = len(gpu_workers)
@@ -35,6 +34,7 @@ class LZeroRobustnessAnalyzer:
         self.__num_cpu_workers = len(cpu_workers)
         self.__plan_only = plan_only
         self.__strategy = strategy
+        self.__probe_thickness = probe_thickness
         self.__until_timedout = until_timedout
         self.__e, self.__v, self.__timeout, self.__channel_size = verifier.eps, verifier.num_pixels, verifier.timeout, verifier.bounded_x0.channel_size
         self.__refinement_db_max_v = verifier.max_k
@@ -87,7 +87,7 @@ class LZeroRobustnessAnalyzer:
             # print(f"Level {level} min lb_l: {min_lb_l:.4f}, num combs: {combs2check.shape[0]}")
             if min_lb_l >= 0 or level == self.__e: break
             num_lt_0 = int(lb_l_min_values.lt(0).sum().item())
-            unk_combs = combs2check[lb_l_min_values.topk(min(MAX_THICKNESS, num_lt_0), largest=False, sorted=False).indices]
+            unk_combs = combs2check[lb_l_min_values.topk(min(self.__probe_thickness, num_lt_0), largest=False, sorted=False).indices]
             combs2check = canonical_split(unk_combs, self.__v)
         if min_lb_l < 0: level += 1
         return level, min_lb_l, unk_combs1
