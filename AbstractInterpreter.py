@@ -55,6 +55,7 @@ class L0BoundedInput(BoundedInput):
         self.selected_idx: torch.Tensor = torch.empty((self.batch_size, 0), dtype=torch.long).to(self.device)
         """indices pre-selected before the ranking to compute the sum which is then added to the diff"""
         self.channel_size = channel_size
+        self.channel_offsets = (torch.arange(channel_size, device=self.device) * num_pixels).reshape(1, -1, 1)  # shape (1, channel_size, 1)
         self.num_pixels = int(self.num_features / channel_size)
         assert self.num_pixels == num_pixels, f"num_pixels should be {num_pixels}, but got {self.num_pixels}"
         self.partial_indices: torch.Tensor | None = None
@@ -93,11 +94,9 @@ class L0BoundedInput(BoundedInput):
                 f"and at most {self.x.shape[1]}, but got {partial_indices.shape[-1]}."
             if partial_indices.device != self.device:
                 partial_indices = partial_indices.to(self.device)
-            if self.channel_size > 1:
-                partial_indices = partial_indices * self.channel_size
             if partial_indices.ndim == 1:
                 if self.channel_size > 1:
-                    partial_indices = partial_indices.repeat_interleave(self.channel_size) + torch.arange(self.channel_size, device=self.device).repeat(partial_indices.numel())
+                    partial_indices = (partial_indices.unsqueeze(0) + self.channel_offsets.squeeze(0)).reshape(-1)
                 self.U_X = self.__U_X[:, :, partial_indices]
                 self.L_X = self.__L_X[:, :, partial_indices]
             elif partial_indices.ndim == 2:  # (batch_size, num_partial_pixels): batched partial
@@ -106,7 +105,7 @@ class L0BoundedInput(BoundedInput):
                     self.__update_batch_size(partial_batch_size)
                 partial_indices = partial_indices.unsqueeze(1)  # (batch_size, 1, num_partial_pixels)
                 if self.channel_size > 1:
-                    partial_indices = partial_indices.repeat_interleave(self.channel_size, dim=2) + torch.arange(self.channel_size, device=self.device).repeat(partial_indices.shape[0], 1, partial_indices.shape[2])
+                    partial_indices = (partial_indices + self.channel_offsets).reshape(partial_batch_size, 1, -1)
                 self.U_X = self.__U_X.expand(self.batch_size, 1, -1).gather(dim=2, index=partial_indices)
                 self.L_X = self.__L_X.expand(self.batch_size, 1, -1).gather(dim=2, index=partial_indices)
             else: assert False  # should not happen, partial_indices should be 1D or 2D tensor

@@ -163,11 +163,12 @@ def gurobi_complete_check(seqAT: SequentialAT, bounded_x0: L0BoundedInput,
     return False, False, False
 
 class GurobiWorker:
-    def __init__(self, seqAT: SequentialAT, channel_size: int):
+    def __init__(self, seqAT: SequentialAT, channel_size: int, num_pixels: int):
         self.__seqAT = seqAT
         self.__ub = 1. # (1. - self.__means) / self.__stds
         self.__lb = 0. # (0. - self.__means) / self.__stds
         self.__channel_size = channel_size
+        self.__num_pixels = num_pixels
         self.__model_lock = threading.Lock()
         self.__current_model = None
 
@@ -272,7 +273,7 @@ class GurobiWorker:
         indices = []
         for pixel in pixel_indices:
             for i in range(self.__channel_size):
-                indices.append(pixel * self.__channel_size + i)
+                indices.append(pixel + i * self.__num_pixels)
         return indices
 
 def launch_gurobi_worker(netname: str, port: int) -> Process:
@@ -280,7 +281,7 @@ def launch_gurobi_worker(netname: str, port: int) -> Process:
         net, dataset_utils = get_network_and_dataset_utils(netname, device="cpu")
         x_ = torch.zeros(1, *dataset_utils.image_shape).to("cpu")
         seqAT = SequentialAT.from_sequential(net, x_)
-        gurobi_worker = GurobiWorker(seqAT=seqAT, channel_size=dataset_utils.channel_size)
+        gurobi_worker = GurobiWorker(seqAT=seqAT, channel_size=dataset_utils.channel_size, num_pixels=dataset_utils.num_pixels)
         gurobi_worker.work(port=port)
     process = Process(target=init_worker, daemon=True)
     process.start()

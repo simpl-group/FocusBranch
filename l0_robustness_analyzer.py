@@ -606,7 +606,7 @@ class LZeroRobustnessAnalyzer:
                             indices = []
                             for pixel in pixel_indices:
                                 for i in range(self.__channel_size):
-                                    indices.append(pixel * self.__channel_size + i)
+                                    indices.append(pixel + i * self.__v)
                             pixel_indices = indices
                         delta_dict = dict((i, adversarial_example[i]) for i in pixel_indices)
                         print(f'\nAdversarial example found, changing label to "{adversarial_label}" while perturbing pixels: {delta_dict}')
