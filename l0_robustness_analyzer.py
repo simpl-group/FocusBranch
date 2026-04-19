@@ -467,7 +467,7 @@ class LZeroRobustnessAnalyzer:
                             size_statistics['successes'] += num_verified
         pbar.close()
         print(f"num_finished: {num_finished}, total_covering_size: {total_covering_size}, remaining: {total_covering_size - num_finished}")
-        return torch.from_numpy(np.vstack(unk_combs_lst)) if len(unk_combs_lst) > 0 else torch.empty((0, self.__v), dtype=torch.int64)
+        return torch.from_numpy(np.vstack(unk_combs_lst)) if len(unk_combs_lst) > 0 else torch.empty((0, self.__level), dtype=torch.int64)
 
     def __handle_unk_combs(self, unk_combs: torch.Tensor, deduplicate: bool = False) -> bool:  # return True if we should terminate early due to timeout
         if unk_combs.shape[0] == 0: return self.timed_out()  # no need to handle
