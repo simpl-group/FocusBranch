@@ -567,6 +567,9 @@ class LZeroRobustnessAnalyzer:
             return int(jobs_each_worker.argmin())
         pbar = None
         while not self.unk_combs_settled.is_set() or self.milp_job_queue.unfinished_tasks > 0:
+            if time.time() - analyzer_start_time >= self.__timeout:
+                if pbar is not None: pbar.close()
+                return
             if pbar is None and self.unk_combs_settled.is_set():
                 if not self.__deduplicated:
                     self.__deduplicate_milp_jobs()
@@ -584,9 +587,6 @@ class LZeroRobustnessAnalyzer:
                         jobs_each_worker[first_avail_worker_id] += 1
                 except queue.Empty:
                     ...
-            if time.time() - analyzer_start_time >= self.__timeout:
-                if pbar is not None: pbar.close()
-                return
 
             for i, cpu_worker in enumerate(self.__cpu_workers):
                 if cpu_worker.poll():
