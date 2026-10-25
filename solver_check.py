@@ -3,12 +3,11 @@ from utils import timeout_handler, TQDM_BAR_FORMAT
 from utils.shared import get4, add_shared_arguments
 from models import get_network_and_dataset_utils
 from data.db import insert_milp, milp_should_skip, milp_config_consistent, sigma0_min_eps
+import os
 import argparse
-import signal
 import warnings
 import threading
 import queue
-from multiprocessing import Process
 from multiprocessing.connection import Client
 from time import perf_counter
 import gurobipy as gp
@@ -17,9 +16,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-env = gp.Env(params={"OutputFlag": 0, "SolutionLimit": 1})
-
-
+# deprecated
 def gurobi_check_unsat(
     x0: np.ndarray,
     coefficients: np.ndarray,
@@ -162,30 +159,46 @@ def gurobi_complete_check(seqAT: SequentialAT, bounded_x0: L0BoundedInput,
         warnings.warn(f"Solver status: {model.Status}")
     return False, False, False
 
-class GurobiWorker:
-    def __init__(self, seqAT: SequentialAT, channel_size: int, num_pixels: int):
-        self.__seqAT = seqAT
+class MILPWorker:
+    def __init__(self, net: torch.nn.Sequential, x_: torch.Tensor, milp_solver: str="gurobi"):
+        _, self.__channel_size, __H, __W = x_.shape
         self.__ub = 1. # (1. - self.__means) / self.__stds
         self.__lb = 0. # (0. - self.__means) / self.__stds
-        self.__channel_size = channel_size
-        self.__num_pixels = num_pixels
-        self.__model_lock = threading.Lock()
-        self.__current_model = None
+        self.__num_pixels = __H * __W
+        if milp_solver == "gurobi":
+            self.milp = self.milp_gurobi
+            self.__seqAT = SequentialAT.from_sequential(net, x_)
+            self.__model_lock = threading.Lock()
+            self.__current_model = None
+            self.__env = gp.Env(params={"OutputFlag": 0, "SolutionLimit": 1})
+        elif milp_solver == "abcrown":
+            from abcrown import ABCrownSolver, IOConstraints, input_vars, output_vars
+            import contextlib, logging
+            logging.getLogger("auto_LiRPA").setLevel(logging.WARNING)
+            self.milp = self.milp_abcrown
+            self.__net = net
+            self.__img_shape = (self.__channel_size, __H, __W)
+        else:
+            assert False
 
     def work(self, port: int):
-        with Client(('localhost', port)) as self.conn:
-            # Every iteration of this loop is one image
-            message = self.conn.recv()
-            while message != 'terminate':
-                image, label = message
-                self.__handle_image(image, label)
+        try:
+            with Client(('localhost', port)) as self.conn:
+                # Every iteration of this loop is one image
                 message = self.conn.recv()
+                while message != 'terminate':
+                    image, label = message
+                    self.__handle_image(image, label)
+                    message = self.conn.recv()
+        except (EOFError, ConnectionError):
+            os._exit(1)  # parent is gone: exit immediately, don't tear down Gurobi under a running solve
 
     def __handle_image(self, image, label):
         job_queue = queue.Queue()
         stop_event = threading.Event()
 
         def terminate_current_model():
+            if self.milp == self.milp_abcrown: return # TODO
             with self.__model_lock:
                 if self.__current_model is not None:
                     self.__current_model.terminate()
@@ -196,7 +209,7 @@ class GurobiWorker:
                     pixel_indices = job_queue.get(timeout=0.1)
                 except queue.Empty:
                     continue
-                verified, adv_image, adv_label = self.milp_gurobi(image, label, pixel_indices)
+                verified, adv_image, adv_label = self.milp(image, label, self.update_indices_if_needed(pixel_indices))
                 self.conn.send((pixel_indices, verified, adv_image, adv_label))
                 job_queue.task_done()
 
@@ -212,10 +225,40 @@ class GurobiWorker:
         worker_thread.join()
         self.conn.send('stopped')
 
-    def milp_gurobi(self, image: np.ndarray, label: int, pixel_indices: list[int]):
-        pixel_indices = self.update_indices_if_needed(pixel_indices)
+    def milp_abcrown(self, image: np.ndarray, label: int, pixel_indices: list[int]):
+        # marginal_tail = make_marginals_tail(label)
+        torch_image = torch.from_numpy(image).float()#
+        upper_bound = torch_image.clone()
+        lower_bound = torch_image.clone()
+        for pixel in pixel_indices:
+            lower_bound[pixel] = self.__lb
+            upper_bound[pixel] = self.__ub
+        lower_bound = lower_bound.reshape(1, *self.__img_shape)
+        upper_bound = upper_bound.reshape(1, *self.__img_shape)
+        x = input_vars((1, *self.__img_shape))
+        y = output_vars((1, 10))
+        output_constraint = None
+        for i in list(range(10)):
+            if i == label: continue
+            if output_constraint is None:
+                output_constraint = (y[0, label] > y[0, i])
+            else:
+                output_constraint &= (y[0, label] > y[0, i])
 
-        # initialize
+        with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+            result = ABCrownSolver(self.__net, x, y).verify(
+                constraints=IOConstraints(
+                    input_vars=x,
+                    output_vars=y,
+                    input_constraint=(x >= lower_bound) & (x <= upper_bound),
+                    output_constraint=output_constraint,
+                )
+            )
+        if result.success:
+            return True, None, None
+        raise NotImplementedError(f"ABCrown solver returned status {result.status} and success {result.success}.")
+
+    def milp_gurobi(self, image: np.ndarray, label: int, pixel_indices: list[int]):
         torch_image = torch.from_numpy(image).float().reshape(1, -1, 1)
         bounds = Bounds(l=torch_image.clone(), u=torch_image.clone())
         for pixel in pixel_indices:
@@ -225,7 +268,7 @@ class GurobiWorker:
         self.__seqAT.tail.make_marginals(true_labels=torch.Tensor([label]).long(), device="cpu")
 
         # constraint
-        model = gp.Model("check_unsat", env=env)
+        model = gp.Model("check_unsat", env=self.__env)
         with self.__model_lock:
             self.__current_model = model
         img = model.addMVar(image.shape, vtype=GRB.CONTINUOUS, name="x")
@@ -267,7 +310,7 @@ class GurobiWorker:
             return False, None, None
         raise NotImplementedError(f"Unknown state: {model.Status}.")
 
-    def update_indices_if_needed(self, pixel_indices):
+    def update_indices_if_needed(self, pixel_indices: list[int]) -> list[int]:
         if self.__channel_size == 1:
             return pixel_indices
         indices = []
@@ -276,31 +319,26 @@ class GurobiWorker:
                 indices.append(pixel + i * self.__num_pixels)
         return indices
 
-def launch_gurobi_worker(netname: str, port: int) -> Process:
-    def init_worker():
-        net, dataset_utils = get_network_and_dataset_utils(netname, device="cpu")
-        x_ = torch.zeros(1, *dataset_utils.image_shape).to("cpu")
-        seqAT = SequentialAT.from_sequential(net, x_)
-        gurobi_worker = GurobiWorker(seqAT=seqAT, channel_size=dataset_utils.channel_size, num_pixels=dataset_utils.num_pixels)
-        gurobi_worker.work(port=port)
-    process = Process(target=init_worker, daemon=True)
-    process.start()
-    return process
 
 if __name__ == "__main__":
-    import sys
-    signal.signal(signal.SIGALRM, timeout_handler)
-    parser = argparse.ArgumentParser(
-        description="Complete verification of L0 robustness using Gurobi."
-    )
+    parser = argparse.ArgumentParser(description="Complete verification of L0 robustness using Gurobi.")
     add_shared_arguments(parser)
+    parser.add_argument("--port", type=int, default=-1)
     args = parser.parse_args()
+    if args.port != -1:
+        net, dataset_utils = get_network_and_dataset_utils(args.net, device="cpu")
+        x_ = torch.zeros(1, *dataset_utils.image_shape).to("cpu")
+        MILPWorker(net=net, x_=x_, milp_solver=args.solver).work(port=args.port)
+        exit(0)
+
     if not milp_config_consistent(net=args.net, img=args.start_idx+args.test_batches-1, eps=args.epsilon, timeout=args.timeout):
         warnings.warn(f"Configuration inconsistent: net={args.net}, img={args.start_idx+args.test_batches-1}, eps={args.epsilon}, timeout={args.timeout}.")
         if not args.force_store and not args.demo:
             exit(1)
 
-    env.setParam("TimeLimit", args.timeout)
+    import sys, signal
+    signal.signal(signal.SIGALRM, timeout_handler)
+    env = gp.Env(params={"OutputFlag": 0, "SolutionLimit": 1, "TimeLimit": args.timeout})
 
     if args.demo:
         args.test_batches = 1

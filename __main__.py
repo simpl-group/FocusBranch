@@ -15,7 +15,7 @@ from torch.cuda import device_count
 import pandas as pd
 from utils.shared import add_shared_arguments, get2
 from data.db import set_database, store_ours_result, ours_should_skip, ours_config_consistent, sigma0_min_eps, insert_ours
-from solver_check import launch_gurobi_worker
+from solver_check import __file__ as solver_file
 from verifier import __file__ as verifier_file
 
 if __name__ == '__main__':
@@ -75,7 +75,14 @@ if __name__ == '__main__':
             ], env=my_env)
 
         for worker_id in range(args.milp_num):
-            launch_gurobi_worker(netname=args.net, port=int(cpu_listener.address[1]))
+            my_env = os.environ.copy()
+            my_env["CUDA_VISIBLE_DEVICES"] = str(available_gpus[worker_id % len(available_gpus)])
+            Popen([
+                sys.executable, solver_file,
+                "--solver", args.solver,
+                "--port", str(cpu_listener.address[1]),
+                "--net",  args.net,
+            ], env=my_env)
 
         print("Waiting for cpu workers ... ", end='', flush=True)
         cpu_workers = [cpu_listener.accept() for _ in range(args.milp_num)]

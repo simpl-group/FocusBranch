@@ -30,6 +30,7 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-ps", "--pool-size", type=int, default=2000, help='The size of the batch pool')
     parser.add_argument("--strategy", type=lambda s: Strategy[s], choices=list(Strategy), default=Strategy.CheSaP, help="the strategy to use for verification")
     parser.add_argument("--database", "-db", type=str, default=DB_PATH, help="Path to the SQLite database file to use for storing results. If not specified, the default database will be used.")
+    parser.add_argument("--solver", type=str, choices=["gurobi", "abcrown"], default="gurobi", help="The solver to use for optimization.")
 
 def get4(args: argparse.Namespace) -> tuple[torch.nn.Module, SequentialAT, L0BoundedInput, torch.utils.data.DataLoader]:
     net, dataset_utils = get_network_and_dataset_utils(args.net, device=DEVICE)
