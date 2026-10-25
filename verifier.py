@@ -75,7 +75,7 @@ class Verifier:
         rep_each_level: int=5000,
         pool_size: int=2000,
         timeout: int=0,
-        strategy: Strategy=Strategy.CheSaP,
+        strategy: Strategy=Strategy.FocusBranch,
         demo: bool=False
     ) -> None:
         self.torch_net = torch_net.cpu()
@@ -175,6 +175,35 @@ class Verifier:
         estimated_verification_time = estimated_total_nodes / nodes_per_second
         if self.demo: print(f"Sample Time: {perf_counter() - start:2.2}s, Sampled Nodes: {sampled_nodes}, Speed: {nodes_per_second:.2f} nodes/s, Estimated nodes: {estimated_total_nodes}\nEstimated verification time: {estimated_verification_time:.2f}s, First any safe level: {first_any_safe_level}")
         return estimated_verification_time, first_any_safe_level
+
+    def probeps(self, start_level: int=1) -> int:
+        combs_to_check = torch.arange(self.num_pixels).reshape(-1, 1)
+        start = perf_counter()
+        for level in range(start_level, self.eps + 1):
+            sample_nodes_this_level = combs_to_check.shape[0]
+            num_safe_nodes = 0
+            all_lb_l_list = []
+            for i in range(0, sample_nodes_this_level, self.concretecheck_batch):
+                combs_to_check_batch = combs_to_check[i:i + self.concretecheck_batch].to(self.device)
+                with self.bounded_x0.selecting(combs_to_check_batch):
+                    self.seqAT.update_activation_rp(bounded_in=self.bounded_x0)
+                    lb_l = self.bounded_x0.compute_lbound(self.seqAT.tail.backsubstitution_lrp()).squeeze(2).cpu()
+                    all_lb_l_list.append(lb_l)
+                    num_safe_nodes += int(lb_l.ge(0).all(dim=1).sum().item())
+            all_lb_l = torch.cat(all_lb_l_list, dim=0)
+            # add 1000 to all_lb_l that are == 0
+            all_lb_l[all_lb_l == 0] += 1000
+            lb_l_min_values = all_lb_l.min(dim=1).values
+            num_lt_0 = int(lb_l_min_values.lt(0).sum().item())
+            print(f"Level {level} min: {lb_l_min_values.min().item():.2f}\t(safe:unk)/all: ({num_safe_nodes}:{num_lt_0})/{sample_nodes_this_level}, using {perf_counter() - start:.2f}s")
+            start = perf_counter()
+            least_indices = combs_to_check[lb_l_min_values.topk(min(5, num_lt_0), largest=False, sorted=False).indices]
+            if num_safe_nodes == sample_nodes_this_level:
+                return 0
+            if level == self.eps:
+                return num_lt_0
+            combs_to_check, _, _ = prepare4pruning(least_indices, self.num_pixels)
+        assert False, "Should never reach here"
 
     def __get_min_lb_ls_from(self, concrete_combs: torch.Tensor):
         lb_l_min_values_lst: list[torch.Tensor] = [torch.empty((0), dtype=torch.float32)]
@@ -296,7 +325,7 @@ class Verifier:
         sample_counts, sample_successes = [0] * (self.eps + 1), [0] * (self.eps + 1)
         if not self.strategy.require_supercheck():
             start_level = 2
-        elif self.strategy == Strategy.SCSaP:
+        elif self.strategy == Strategy.ForceCVD:
             start_level = CVD_MIN_T
         else: assert False, f"Unsupported strategy {self.strategy}"
         for level in range(start_level, self.eps + 1):
@@ -516,7 +545,7 @@ class Verifier:
                 torch.manual_seed(seed)
                 torch_img = torch.tensor(image, dtype=torch.float32).reshape(1, -1, 1)
                 self.adapt_target_images(images=torch_img, true_labels=torch.tensor([label], dtype=torch.int64), check_first=False)
-                if not self.strategy == Strategy.CoVerD:
+                if not self.strategy == Strategy.toptCoVerD:
                     if worker_id == 0:
                         self.conn.send(1. if bool(self.__check_current_batch().item()) else -1.)
                     message = self.conn.recv()

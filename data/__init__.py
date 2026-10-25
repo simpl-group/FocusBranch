@@ -12,22 +12,27 @@ import csv
 import numpy as np
 
 class Strategy(Enum):
-    CheSaP = auto()
-    CCSaP  = auto()
-    SCSaP  = auto()
-    CoVerD = auto()
+    FocusBranch = auto()
+    ConcreteOnly  = auto()
+    ForceCVD  = auto()
+    toptCoVerD = auto()
 
     def __str__(self) -> str:
-        return self.name
+        if self is Strategy.toptCoVerD: return "w/o policy 2"
+        if self is Strategy.ConcreteOnly: return "w/o policy 1"
+        if self is Strategy.ForceCVD: return "force CVD"
+        if self is Strategy.FocusBranch: return "FocusBranch"
 
     def require_supercheck(self) -> bool:
-        return self in {Strategy.SCSaP, Strategy.CoVerD}
+        return self in {Strategy.ForceCVD, Strategy.toptCoVerD}
 
     def assert_strategy_applicable(self, epsilon: int):
-        if self == Strategy.SCSaP:
+        if self == Strategy.ForceCVD:
             assert epsilon >= CVD_MIN_T, f"Strategy {self} inapplicable for epsilon {epsilon}. Covering generator requires epsilon >= {CVD_MIN_T}."
-        elif self == Strategy.CoVerD:
+        elif self == Strategy.toptCoVerD:
             assert CVD_MIN_T <= epsilon <= CVD_MAX_T, f"Strategy {self} inapplicable for epsilon {epsilon}. Covering generator requires {CVD_MIN_T} <= epsilon <= {CVD_MAX_T}."
+        else:
+            assert epsilon >= 1, f"Strategy {self} inapplicable for epsilon {epsilon}. It requires epsilon >= 1."
 
 class DatasetName(Enum):
     MNIST   = auto()

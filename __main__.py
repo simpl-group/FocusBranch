@@ -21,14 +21,14 @@ from verifier import __file__ as verifier_file
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Sample-wise (local) L0 robustness verification for neural networks', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     add_shared_arguments(parser)
-    parser.add_argument("--gpu_num", type=int, default=4, help="the number of GPUs used in the analysis")
-    parser.add_argument("--milp_num", type=int, default=5, help="the number of MILP instances used in the analysis")
-    parser.add_argument('--base_seed', type=int, default=42, help='the base seed')
-    parser.add_argument('--probe_thickness', type=int, default=50, help='Maximum number of least safe combinations to track.')
+    parser.add_argument("-g", "--num-gpus", "--gpu_num", dest="gpu_num", type=int, default=4, help="The number of GPU workers. Normally, it should not exceed the number of GPUs on your machine.")
+    parser.add_argument("-m", "--num-milps", "--milp_num", dest="milp_num", type=int, default=5, help="The number of MILP instances.")
+    parser.add_argument("--base-seed", "--base_seed", type=int, default=42, help="The base seed.")
+    parser.add_argument("--probe-thickness", "--probe_thickness", type=int, default=50, help="Maximum number of least safe combinations to track.")
     parser.add_argument("--detail", action="store_true", help="Output detailed superset statistics for each image in a separate excel file.")
-    parser.add_argument("--plan_only", action="store_true", help="Only run the planning stage without actual verification.")
+    parser.add_argument("--plan-only", "--plan_only", action="store_true", help="Only run the planning stage without actual verification.")
     parser.add_argument("--until-timedout", "-ut", action="store_true", help="Continue running until timeout is reached, even if the estimated verification time is larger than twice the timeout.")
-    parser.add_argument("--force-reestimate", action="store_true", help="Force re-estimation of generator and SaP speed even if existing estimates are found in the database.")
+    parser.add_argument("--force-reestimate", action="store_true", help="Force a re-estimation of covering generator speed and SaP (concrete branching & pruning) speed even if existing estimates are found in the database.")
     args = parser.parse_args()
     set_database(args.database)
     args.strategy.assert_strategy_applicable(args.epsilon)
@@ -167,7 +167,7 @@ if __name__ == '__main__':
             f"correct:  {tried_images}/{1 + i - args.start_idx}, "
             f"verified: {verified_images}/{tried_images}, "
             f"unsafe: {unsafe_images}/{tried_images}, ",
-            f"time: {round(time.time() - start, 3)}; {0 if cum_time == 0 else cum_time / tried_images:.3f}; {cum_time:.3f}"
+            f"time: {round(time.time() - start, 3)}({image_results['running_time']}); {0 if cum_time == 0 else cum_time / tried_images:.3f}; {cum_time:.3f}"
         )
         print('*******************************************************', flush=True)
 

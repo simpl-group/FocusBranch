@@ -99,7 +99,7 @@ class LZeroRobustnessAnalyzer:
         sample_counts, sample_successes = [0] * (self.__e + 1), [0] * (self.__e + 1)
         super_success_rate, mean_supercheck_time = {}, {}
         mean_size_limits = {l: self.__refinement_db_max_v for l in range(CVD_MIN_T, min(self.__e + 1, CVD_MAX_T + 1))}
-        if not self.__strategy == Strategy.CoVerD:
+        if not self.__strategy == Strategy.toptCoVerD:
             first_all_safe_level, min_lb_l, unk_combs1 = self.__probe()
             print(f'Finished probing, first_all_safe_level: {first_all_safe_level}, min_lb_l: {min_lb_l:.4f}, took {round(time.time() - self.analyzer_start_time, 3)} s')
             self.__gpu_workers_send_all(('finished probing', first_all_safe_level))
@@ -119,12 +119,12 @@ class LZeroRobustnessAnalyzer:
         concrete_safe_rate = [s / c if c > 0 else 0. for s, c in zip(sample_successes, sample_counts)]
         print(f'Sampled concrete safe rates: {concrete_safe_rate}')
         if self.__strategy.require_supercheck()\
-            or self.__strategy == Strategy.CheSaP and sum(concrete_safe_rate[:2]) == 0:  # if level 0 safe or any level 1 safe, go CCSaP directly
+            or self.__strategy == Strategy.FocusBranch and sum(concrete_safe_rate[:2]) == 0:  # if level 0 safe or any level 1 safe, go CCSaP directly
             print(f'Sampling super-nodes on level', end='', flush=True)
             # Sample super-nodes at levels with high concrete safe rate
             sample_all_k_end_level = min(self.__e, CVD_MAX_T)
             for l in range(CVD_MIN_T, sample_all_k_end_level + 1):
-                if self.__strategy != Strategy.CoVerD and concrete_safe_rate[l] >= SR_THRES_TO_SAMPLE_SUPER[l] or l == sample_all_k_end_level:
+                if self.__strategy != Strategy.toptCoVerD and concrete_safe_rate[l] >= SR_THRES_TO_SAMPLE_SUPER[l] or l == sample_all_k_end_level:
                     print(f' {l}', end='\n' if l == sample_all_k_end_level else '', flush=True)
                     for gpu_worker in self.__gpu_workers:
                         gpu_worker.send(('sample-all-k', l))
