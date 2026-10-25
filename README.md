@@ -2,9 +2,11 @@
 
 Official code repo for **FocusBranch: Combinatorial Branch-and-Bound for $\ell_0$ Neural Network Robustness Verification**, accepted at NeurIPS 2026. [[OpenReview](https://openreview.net/forum?id=VoRt2Q8ngL)] [[arXiv](#) (coming soon)]
 
-<img src="fig_node_branching.svg" alt="Node branching" width="900">
+<img src="fig_node_branching.svg#gh-light-mode-only" alt="Node branching" width="900">
+<img src="fig_node_branching_dark.svg#gh-dark-mode-only" alt="Node branching" width="900">
 
-<img src="fig_node_bound.svg" alt="Node bound" width="900">
+<img src="fig_node_bound.svg#gh-light-mode-only" alt="Node bound" width="900">
+<img src="fig_node_bound_dark.svg#gh-dark-mode-only" alt="Node bound" width="900">
 
 ## Prerequisites
 
