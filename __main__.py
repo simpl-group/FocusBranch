@@ -6,6 +6,7 @@ import warnings
 from verifier import Verifier
 from multiprocessing.connection import Listener
 from subprocess import Popen
+import threading
 import json
 import itertools
 import time
@@ -17,6 +18,22 @@ from utils.shared import add_shared_arguments, get2
 from data.db import set_database, store_ours_result, ours_should_skip, ours_config_consistent, sigma0_min_eps, insert_ours
 from solver_check import __file__ as solver_file
 from gpu_worker import __file__ as gpu_worker_file
+
+
+def accept_workers(listener: Listener, processes: list[Popen], kind: str, all_processes: list[Popen]) -> list:
+    """One connection per worker process, in order of arrival. A worker that exits before every worker has connected
+    (e.g. it cannot reach the solver's license server) stops the run with an error instead of a wait that never ends."""
+    connections: list = []
+    accepting = threading.Thread(target=lambda: connections.extend(listener.accept() for _ in processes), daemon=True)
+    accepting.start()
+    while accepting.is_alive():
+        accepting.join(0.5)
+        exited = [p for p in processes if p.poll() is not None]
+        if exited and accepting.is_alive():
+            for p in all_processes:
+                if p.poll() is None: p.kill()
+            sys.exit(f"\nA {kind} worker exited with code {exited[0].returncode} before every {kind} worker had connected, see its error above.")
+    return connections
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Sample-wise (local) L0 robustness verification for neural networks', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -55,10 +72,11 @@ if __name__ == '__main__':
 
     address = ('localhost', 0)
     with Listener(address) as gpu_listener, Listener(address) as cpu_listener:
+        gpu_processes, cpu_processes = [], []
         for worker_id in range(args.gpu_num):
             my_env = os.environ.copy()
             my_env["CUDA_VISIBLE_DEVICES"] = str(available_gpus[worker_id % len(available_gpus)])
-            Popen([
+            gpu_processes.append(Popen([
                 sys.executable, gpu_worker_file,
                 "--strategy", args.strategy.name,
                 "--worker_id", str(worker_id),
@@ -72,24 +90,24 @@ if __name__ == '__main__':
                 "--max-k", str(args.max_k),
                 "--rep-each-k", str(args.rep_each_k),
                 "--rep-each-level", str(args.rep_each_level)
-            ], env=my_env)
+            ], env=my_env))
 
         for worker_id in range(args.milp_num):
             my_env = os.environ.copy()
             my_env["CUDA_VISIBLE_DEVICES"] = str(available_gpus[worker_id % len(available_gpus)])
-            Popen([
+            cpu_processes.append(Popen([
                 sys.executable, solver_file,
                 "--solver", args.solver,
                 "--port", str(cpu_listener.address[1]),
                 "--net",  args.net,
-            ], env=my_env)
+            ], env=my_env))
 
         print("Waiting for cpu workers ... ", end='', flush=True)
-        cpu_workers = [cpu_listener.accept() for _ in range(args.milp_num)]
+        cpu_workers = accept_workers(cpu_listener, cpu_processes, "MILP", gpu_processes + cpu_processes)
         print("Done.")
 
         print("Waiting for gpu workers ... ", end='', flush=True)
-        gpu_workers = [gpu_listener.accept() for _ in range(args.gpu_num)]
+        gpu_workers = accept_workers(gpu_listener, gpu_processes, "GPU", gpu_processes + cpu_processes)
         gpu_workers.sort(key=lambda w: w.recv())
         print("Done.")
 
