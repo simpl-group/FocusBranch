@@ -3,6 +3,7 @@ import torch.nn as nn
 from typing_extensions import Self
 import warnings
 from contextlib import contextmanager
+from abc import ABC, abstractmethod
 from typing import NamedTuple
 from l0bound import selected_top_k_sum, selected_bottom_k_sum, top_top_sum, bottom_bottom_sum
 
@@ -31,7 +32,7 @@ class Bounds(NamedTuple):
     l: torch.Tensor
     u: torch.Tensor
 
-class BoundedInput:
+class BoundedInput(ABC):
     def __init__(self, x: torch.Tensor, eps, pixel_value_range: tuple[float, float]=(0., 1.)):
         self.x = x
         self.device = x.device
@@ -40,11 +41,13 @@ class BoundedInput:
         self.batch_size, self.num_features, _ = x.shape
         self.batch_indices = torch.arange(self.batch_size).unsqueeze(1)
 
+    @abstractmethod
     def compute_ubound(self, rp: RelationalPolyhedra) -> torch.Tensor:
-        raise NotImplementedError
+        """Upper bound of the affine function `rp` over the input region."""
 
+    @abstractmethod
     def compute_lbound(self, rp: RelationalPolyhedra) -> torch.Tensor:
-        raise NotImplementedError
+        """Lower bound of the affine function `rp` over the input region."""
 
     def compute_bounds(self, lrp: RelationalPolyhedra, urp: RelationalPolyhedra) -> Bounds:
         return Bounds(self.compute_lbound(lrp), self.compute_ubound(urp))
@@ -246,9 +249,13 @@ class LinfBoundedInput(BoundedInput):
     def compute_lbound(self, rp: RelationalPolyhedra) -> torch.Tensor:
         return rp.posW() @ self.bounds.l + rp.negW() @ self.bounds.u + rp.b
 
-class AbstractTransformer:
+class AbstractTransformer(ABC):
     def __init__(self):
         self.parent: Self | None = None
+
+    @abstractmethod
+    def backward(self, rp: RelationalPolyhedra, *args, **kwargs) -> None:
+        """Back-substitute an affine bound `rp` on this transformer's output into one on its input, in place."""
 
     def backsubstitution(self) -> tuple[RelationalPolyhedra, RelationalPolyhedra]:
         assert isinstance(self, AffineAT)
@@ -256,17 +263,8 @@ class AbstractTransformer:
         prev = self.parent
 
         while prev is not None:
-            if isinstance(prev, ActivationAT):
-                lrp.b = lrp.posW() @ prev.lrp.b + lrp.negW() @ prev.urp.b + lrp.b
-                urp.b = urp.posW() @ prev.urp.b + urp.negW() @ prev.lrp.b + urp.b
-                lrp.W = lrp.posW() * prev.lrp.W + lrp.negW() * prev.urp.W
-                urp.W = urp.posW() * prev.urp.W + urp.negW() * prev.lrp.W
-            elif isinstance(prev, AffineAT):
-                lrp.b = lrp.W @ prev.rp.b + lrp.b
-                urp.b = urp.W @ prev.rp.b + urp.b
-                lrp.W = lrp.W @ prev.rp.W
-                urp.W = urp.W @ prev.rp.W
-            else: raise NotImplementedError(f"Transform for {prev} is unclear")
+            prev.backward(lrp, upper=False)
+            prev.backward(urp, upper=True)
             prev = prev.parent
 
         return lrp, urp
@@ -277,13 +275,7 @@ class AbstractTransformer:
         prev = self.parent
 
         while prev is not None:
-            if isinstance(prev, ActivationAT):
-                lrp.b = lrp.posW() @ prev.lrp.b + lrp.negW() @ prev.urp.b + lrp.b
-                lrp.W = lrp.posW() * prev.lrp.W + lrp.negW() * prev.urp.W
-            elif isinstance(prev, AffineAT):
-                lrp.b = lrp.W @ prev.rp.b + lrp.b
-                lrp.W = lrp.W @ prev.rp.W
-            else: raise NotImplementedError(f"Transform for {prev} is unclear")
+            prev.backward(lrp, upper=False)
             prev = prev.parent
 
         return lrp
@@ -294,6 +286,11 @@ class AffineAT(AbstractTransformer):
         self.W = weight
         self.b = bias
         self.rp = RelationalPolyhedra(self.W, self.b)
+
+    def backward(self, rp: RelationalPolyhedra, *args, **kwargs) -> None:
+        """Back-substitute an affine bound through this affine layer, in place; lower and upper bounds pass the same way."""
+        rp.b = rp.W @ self.rp.b + rp.b
+        rp.W = rp.W @ self.rp.W
 
     @classmethod
     def from_linear(cls, layer: nn.Linear) -> Self:
@@ -343,6 +340,12 @@ class ActivationAT(AbstractTransformer):
         super().__init__()
         self.lrp: RelationalPolyhedra = None
         self.urp: RelationalPolyhedra = None
+
+    def backward(self, rp: RelationalPolyhedra, *, upper: bool, **kwargs) -> None:
+        """Back-substitute a lower (upper=False) or upper (upper=True) affine bound through this activation's relaxation, in place."""
+        same, other = (self.urp, self.lrp) if upper else (self.lrp, self.urp)
+        rp.b = rp.posW() @ same.b + rp.negW() @ other.b + rp.b
+        rp.W = rp.posW() * same.W + rp.negW() * other.W
 
     @staticmethod
     def compute_rp(bounds: Bounds) -> tuple[RelationalPolyhedra, RelationalPolyhedra]:
