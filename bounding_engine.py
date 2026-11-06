@@ -1,12 +1,9 @@
 from AbstractInterpreter import L0BoundedInput, SequentialAT
-from split_and_prune import split_and_prune, prepare4pruning, prune
+from split_and_prune import split_and_prune, prepare4pruning
 from bimm import combs2bitmasks
-from covering_generator import launch_covering_generator, CVD_MIN_T
-from data import load_covering, Strategy
+from data import Strategy
 from data.db import insert_mean_concretecheck_time, get_mean_concretecheck_time
 from utils import DEVICE, TQDM_BAR_FORMAT, TimeoutException
-from coverd_finite_geometries import Geometry
-from multiprocessing.connection import Client, Listener
 from time import perf_counter
 from functools import lru_cache
 import threading
@@ -52,18 +49,7 @@ def selected_indices_sample(k: int, num_select: int, repetitions: int, num_worke
         else:
             return all_combs.cpu()
 
-def get_refinement_subsets(indices_set: list[int], covering: list[list[int]]) -> list[list[int]]:
-    return [[indices_set[i] for i in cover] for cover in covering]
-
-def load_refinement_coverings(refinement_strategy: dict[int, int|None]) -> dict[int, list[list[int]]]:
-    level = min(refinement_strategy.keys())
-    refinement_coverings: dict[int, list[list[int]]] = {}
-    for v, k in refinement_strategy.items():
-        if k is None: continue  # different strategy
-        refinement_coverings[v] = load_covering(v, k, level)
-    return refinement_coverings
-
-class Verifier:
+class BoundingEngine:
     def __init__(self,
         torch_net: torch.nn.Module,
         seqAT: SequentialAT,
@@ -341,25 +327,6 @@ class Verifier:
             print(f"Safe: {success}")
         return success
 
-    def concrete_sample_all_levels(self, num_workers: int, worker_id: int) -> tuple[list[int], list[int]]:
-        assert self.bounded_x0.level is None, "bounded_x0.level must be None since we are using self.bounded_x0.selecting"
-        sample_counts, sample_successes = [0] * (self.eps + 1), [0] * (self.eps + 1)
-        if not self.strategy.require_supercheck():
-            start_level = 2
-        elif self.strategy == Strategy.ForceCVD:
-            start_level = CVD_MIN_T
-        else: assert False, f"Unsupported strategy {self.strategy}"
-        for level in range(start_level, self.eps + 1):
-            focus_sets = selected_indices_sample(self.num_pixels, level, self.rep_each_level, num_workers=num_workers, worker_id=worker_id)
-            sample_counts[level] = focus_sets.shape[0]
-            sample_successes[level] = int(self.bound_nodes(focus_sets).sum().item())
-            if sample_successes[level] == sample_counts[level]:
-                # fake the rest
-                sample_counts[level+1:self.eps + 1] = [min(self.rep_each_level, math.comb(self.num_pixels, l)) for l in range(level + 1, self.eps + 1)]
-                sample_successes[level+1:self.eps + 1] = sample_counts[level+1:self.eps + 1]
-                break  # All nodes are safe, no need to go deeper
-        return sample_counts, sample_successes
-
     def estimate_mean_boundconcrete_time(self, netname: str, sample_size_coeff: int=10, force_reestimate: bool=False) -> list[float]:
         mean_boundconcrete_time = [0.0] * (self.eps + 1)
         start_level = 0
@@ -386,21 +353,6 @@ class Verifier:
         self.seqAT.remove_activation_rp()
         torch.cuda.empty_cache()
         return mean_boundconcrete_time
-
-    def super_sample_all_k(self, level: int) -> tuple[list[int], list[int], list[float]]:
-        sampling_counts, sampling_successes , sampling_time = [], [], []
-        rep_each_k = self.rep_each_k
-        for k in range(level, self.max_k + 1):
-            k_sized_supersets = batched_randsample(self.num_pixels, k, rep_each_k)
-            batched_supercheck_start = perf_counter()
-            sampling_successes.append(int(self.bound_supernodes(k_sized_supersets, level).sum().item()))
-            sampling_time.append(perf_counter() - batched_supercheck_start)
-            sampling_counts.append(k_sized_supersets.shape[0])
-            if sampling_successes[-1] == 0:
-                rep_each_k = max(1, self.rep_each_k // 20)  # if no safe supersets, use smaller batch size to sample more
-            else:
-                self.max_sizes_to_batch[level] = k
-        return sampling_counts, sampling_successes, sampling_time
 
     def check_partial(self, partial_indices: torch.Tensor, start_level: int=0, end_level: int=0) -> tuple[bool, torch.Tensor|None]:
         """
@@ -455,168 +407,3 @@ class Verifier:
         """
         assert supersets.ndim == 2, "supersets must be of shape (num_supersets, num_indices)"
         return self.bound_nodes(supersets, level, self.supercheck_batch).cpu()
-
-    def __handle_supernodes(self, num_indices: int):
-        if self.stop_event.is_set(): return
-        start = perf_counter()
-        supersets = torch.tensor(self.batch_pool[num_indices])
-        self.batch_pool[num_indices].clear()
-        safes = self.bound_supernodes(supersets, self.__level)
-        self.conn.send((num_indices, supersets.shape[0], safes.sum().item(), perf_counter() - start))
-        if not safes.all():  # need to refine
-            if num_indices == self.__level:  # concrete combs, cannot refine
-                unk_combs = supersets[~safes]
-                if self.__level == self.eps:
-                        self.conn.send('adversarial-example-suspects')
-                        self.conn.send(unk_combs.numpy())
-                else:
-                    self.conn.send('unknown-combs')
-                    self.conn.send(unk_combs.numpy())
-            else:
-                refined_supersets = []
-                for unk_superset in supersets[~safes].tolist():
-                    refined_supersets.extend(get_refinement_subsets(unk_superset, self.refinement_coverings[num_indices]))
-                for refined_superset in refined_supersets:
-                    self.__handle_supernode(refined_superset)
-
-    def __handle_supernode(self, superset: list[int]):
-        if self.stop_event.is_set(): return
-        num_indices = len(superset)
-        # message: (num_indices, runs, successes, duration)
-        if num_indices < self.__level:
-            self.conn.send((num_indices, 1, 1, 0.))
-        elif num_indices <= self.max_size_to_batch:  # batched SuperCheck
-            self.batch_pool[num_indices].append(superset)
-            if len(self.batch_pool[num_indices]) == self.pool_size:
-                self.__handle_supernodes(num_indices)
-        else:  # no need to do SuperCheck (default to not safe), just refine
-            self.conn.send((num_indices, 1, 0, 0.))
-            for refined_superset in get_refinement_subsets(superset, self.refinement_coverings[num_indices]):
-                self.__handle_supernode(refined_superset)
-
-    def __prove_geometry(self, geometry: Geometry, chosen_indices: list[int], num_workers: int, worker_id: int):
-        num_of_blocks = math.floor(geometry.number_of_blocks() / num_workers)
-        if worker_id < geometry.number_of_blocks() % num_workers:
-            num_of_blocks += 1
-        with Listener(('localhost', 0)) as blocks_listener:
-            self.blocks_generator_process = launch_covering_generator(
-                q=geometry.q, m=geometry.m, t=geometry.t,
-                port=int(blocks_listener.address[1]),
-                chosen_indices=chosen_indices,
-                num_workers=num_workers,
-                worker_id=worker_id
-            )
-            with blocks_listener.accept() as blocks_conn:
-                for _ in range(num_of_blocks):
-                    if self.stop_event.is_set(): return
-                    superset = blocks_conn.recv()  # assert superset is sorted and of type list[int]
-                    self.__handle_supernode(superset)
-                assert blocks_conn.recv() == 'done'
-                blocks_conn.send('done')
-
-        # handle remaining supersets in the pool in descending order according to the key (num_indices). The batch_pool is created in this order
-        for num_indices in self.batch_pool:
-            if len(self.batch_pool[num_indices]) > 0:
-                self.__handle_supernodes(num_indices)
-        self.conn.send('done')
-
-    def __safe_prove_geometry(self, *args, **kwargs):
-        try:
-            self.__prove_geometry(*args, **kwargs)
-        except EOFError:
-            pass  # self.blocks_generator_process terminated early
-
-    def __prove_concrete_combs(self, concrete_combs: torch.Tensor):
-        # send the unknown combinations to the main process
-        self.conn.send(self.unknown_concrete(concrete_combs, self.stop_event))
-
-    def work_as_worker(self, port: int, num_workers: int=1, worker_id: int=0):
-        with Client(('localhost', port)) as self.conn:
-            self.conn.send(worker_id)
-            # Every iteration of this loop is one image
-            message = self.conn.recv()
-            while not isinstance(message, str) or message != 'terminate':
-                seed, image, label = message
-                torch.manual_seed(seed)
-                torch_img = torch.tensor(image, dtype=torch.float32).reshape(1, -1, 1)
-                self.adapt_target_images(images=torch_img, true_label=label, check_first=False)
-                if not self.strategy == Strategy.toptCoVerD:
-                    if worker_id == 0:
-                        self.conn.send(1. if bool(self.bound_nodes(torch.empty((1, 0), dtype=torch.int64)).item()) else -1.)
-                    message = self.conn.recv()
-                    while message[0] == 'CC':
-                        combs2check = torch.from_numpy(message[1])
-                        self.conn.send(self.min_margin_lbs(combs2check).numpy())
-                        message = self.conn.recv()
-                    assert message[0] == 'finished probing', f"Expected 'finished probing' message, but got {message}"
-                    if message[1] > 1:
-                        self.conn.send(self.concrete_sample_all_levels(num_workers, worker_id))
-                message = self.conn.recv()
-                while message[0] == 'sample-all-k':
-                    l = int(message[1])
-                    self.conn.send(self.super_sample_all_k(l))
-                    message = self.conn.recv()
-                if message[0] == 'skip':
-                    message = self.conn.recv()
-                    continue
-                if message[0] == 'CCSaP':
-                    self.__level = int(message[1])
-                    if self.__level == 1:
-                        prove_thread = threading.Thread(target=lambda: None, daemon=True)
-                    else:
-                        all_concrete_combs = torch.combinations(torch.arange(self.num_pixels), self.__level)
-                        num2check_each = all_concrete_combs.shape[0] // num_workers
-                        if worker_id == num_workers - 1:
-                            concrete_combs = all_concrete_combs[worker_id * num2check_each:]
-                        else:
-                            concrete_combs = all_concrete_combs[worker_id * num2check_each: (worker_id + 1) * num2check_each]
-                        del all_concrete_combs
-                        prove_thread = threading.Thread(target=self.__prove_concrete_combs, args=(concrete_combs,), daemon=True)
-                elif message[0] == 'SCSaP':
-                    _, geometry, chosen_indices, self.refinement_strategy = message
-                    self.__level = geometry.t
-                    # if no sampled super node was safe at this level, only concrete nodes are worth bounding in batches
-                    self.max_size_to_batch = self.max_sizes_to_batch.get(self.__level, self.__level)
-                    self.batch_pool: dict[int, list[list[int]]] = {k: [] for k in list(range(self.__level, self.max_size_to_batch + 1))[::-1]}
-                    self.refinement_coverings = load_refinement_coverings(self.refinement_strategy)
-                    prove_thread = threading.Thread(target=self.__safe_prove_geometry, args=(geometry, chosen_indices, num_workers, worker_id), daemon=True)
-                else: assert False, f"Unknown message {message}"
-                self.stop_event = threading.Event()
-                prove_thread.start()
-                while True:
-                    if self.conn.poll():
-                        message = self.conn.recv()
-                        if isinstance(message, str) and message == 'stop':
-                            self.stop_event.set()
-                            if hasattr(self, 'blocks_generator_process') and self.blocks_generator_process.poll() is None:  # means still running
-                                self.blocks_generator_process.terminate()
-                            break
-                        if message[0] == 'SaP&CC':
-                            new_combs, reference_bitmasks, target_s_cnt = prepare4pruning(torch.from_numpy(message[1]), self.num_pixels)
-                            # stepping on new_combs before pruning can make each worker's pruned_combs.shape[0] roughly the same, which can slightly speed up the proving process since the workload is more balanced among workers.
-                            new_combs = new_combs.to(self.device)[worker_id::num_workers].contiguous() # faster than on CPU.
-                            pruned_combs = prune(new_combs, reference_bitmasks, target_s_cnt, self.__level)
-                            self.conn.send(pruned_combs.shape[0])
-                        elif message[0] == 'CC':
-                            pruned_combs = torch.from_numpy(message[1])
-                        else: assert False, f"Unknown message {message}"
-                        self.__level += 1
-                        prove_thread = threading.Thread(target=self.__prove_concrete_combs, args=(pruned_combs,), daemon=True)
-                        prove_thread.start()
-                prove_thread.join()
-                self.conn.send('stopped')
-                message = self.conn.recv()
-
-if __name__ == '__main__':
-    import argparse
-    from utils.shared import add_shared_arguments, get_verifier
-    parser = argparse.ArgumentParser(description='L0 Robustness Verifier: (GPU) Worker',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    add_shared_arguments(parser)
-    parser.add_argument('--worker_id', type=int, default=0, help='The index of the worker')
-    parser.add_argument('--num-workers', type=int, default=1, help='Total number of workers')
-    parser.add_argument('--port', type=int, default=0, help='The port main verification process is listening on')
-    args = parser.parse_args()
-
-    verifier = get_verifier(args)
-    verifier.work_as_worker(port=args.port, num_workers=args.num_workers, worker_id=args.worker_id)

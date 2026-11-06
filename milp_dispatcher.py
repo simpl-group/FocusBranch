@@ -12,6 +12,7 @@ import torch
 from tqdm import tqdm
 from bimm import combs2bitmasks, bitmasks2combs, superset_sum
 from utils import TQDM_BAR_FORMAT
+from utils import protocol as P
 
 JOBS_PER_WORKER = 3  # in-flight jobs per MILP worker
 
@@ -56,11 +57,11 @@ class MilpDispatcher:
     def send_stop(self):
         """Ask every MILP worker to abandon the current image (see `wait_stopped`)."""
         for cpu_worker in self.cpu_workers:
-            cpu_worker.send('stop')
+            cpu_worker.send(P.STOP)
 
     def wait_stopped(self):
         for cpu_worker in self.cpu_workers:
-            while not (isinstance(message := cpu_worker.recv(), str) and message == 'stopped'):
+            while not (isinstance(message := cpu_worker.recv(), str) and message == P.STOPPED):
                 pass  # verdicts of abandoned jobs
 
     def stop(self):

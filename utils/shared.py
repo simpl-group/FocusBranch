@@ -3,7 +3,7 @@ from data.prepare import build_loader
 from data import Strategy
 from data.db import DB_PATH
 from AbstractInterpreter import L0BoundedInput, SequentialAT
-from verifier import Verifier
+from bounding_engine import BoundingEngine
 from utils import DEVICE
 import argparse
 import torch
@@ -49,17 +49,17 @@ def get4(args: argparse.Namespace) -> tuple[torch.nn.Module, SequentialAT, L0Bou
 
 from inspect import signature
 
-def get2(args: argparse.Namespace) -> tuple[Verifier, torch.utils.data.DataLoader]:
+def get2(args: argparse.Namespace) -> tuple[BoundingEngine, torch.utils.data.DataLoader]:
     net, seqAT, bounded_x0, data_loader = get4(args)
-    init_param_names = signature(Verifier.__init__).parameters.keys()
+    init_param_names = signature(BoundingEngine.__init__).parameters.keys()
     init_kwargs = {
         name: getattr(args, name) for name in init_param_names if hasattr(args, name)
     }
-    return Verifier(
+    return BoundingEngine(
         net.cpu(), seqAT, bounded_x0, **init_kwargs
     ), data_loader
 
-def get_verifier(args: argparse.Namespace) -> Verifier:
+def get_engine(args: argparse.Namespace) -> BoundingEngine:
     net, dataset_utils = get_network_and_dataset_utils(args.net, device=DEVICE)
     x_ = torch.zeros(1, *dataset_utils.image_shape).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
@@ -69,10 +69,10 @@ def get_verifier(args: argparse.Namespace) -> Verifier:
         channel_size=dataset_utils.channel_size,
         num_pixels=dataset_utils.num_pixels
     )
-    init_param_names = signature(Verifier.__init__).parameters.keys()
+    init_param_names = signature(BoundingEngine.__init__).parameters.keys()
     init_kwargs = {
         name: getattr(args, name) for name in init_param_names if hasattr(args, name)
     }
-    return Verifier(
+    return BoundingEngine(
         net.cpu(), seqAT, bounded_x0, **init_kwargs
     )

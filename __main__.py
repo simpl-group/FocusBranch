@@ -16,7 +16,7 @@ import pandas as pd
 from utils.shared import add_shared_arguments, get2
 from data.db import set_database, store_ours_result, ours_should_skip, ours_config_consistent, sigma0_min_eps, insert_ours
 from solver_check import __file__ as solver_file
-from verifier import __file__ as verifier_file
+from gpu_worker import __file__ as gpu_worker_file
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Sample-wise (local) L0 robustness verification for neural networks', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -59,7 +59,7 @@ if __name__ == '__main__':
             my_env = os.environ.copy()
             my_env["CUDA_VISIBLE_DEVICES"] = str(available_gpus[worker_id % len(available_gpus)])
             Popen([
-                sys.executable, verifier_file,
+                sys.executable, gpu_worker_file,
                 "--strategy", args.strategy.name,
                 "--worker_id", str(worker_id),
                 "--num-workers", str(args.gpu_num),

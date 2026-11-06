@@ -1,12 +1,13 @@
 # Reference: https://github.com/YuvShap/CoVerD/blob/main/tf_verify/calzone_robustness_analyzer.py
 from utils import TQDM_BAR_FORMAT
+from utils import protocol as P
 from data import load_covering_sizes, Strategy
 from coverd_finite_geometries import Geometry
 from covering_generator import CVD_MIN_T, CVD_MAX_T
 from covering_generator.estimator import estimate_generator_speed, estimate_extra_time
 from split_and_prune import estimate_SaP_speed, estimate_SaP_time, prepare4pruning, prune, canonical_split
 from milp_dispatcher import MilpDispatcher
-from verifier import Verifier
+from bounding_engine import BoundingEngine
 import planner
 import math
 import time
@@ -23,7 +24,7 @@ SR_THRES_TO_SAMPLE_SUPER = [0., 0., 0.7, 0.97, 0.9997,0.99999,0.999999,0.9999999
 MAX_MEAN_SIZE_NOT_ALL_SAFE = 15
 
 class LZeroRobustnessAnalyzer:
-    def __init__(self, verifier: Verifier, gpu_workers: list[Connection], cpu_workers: list[Connection], plan_only: bool, strategy: Strategy, probe_thickness: int, until_timedout: bool, force_reestimate: bool):
+    def __init__(self, verifier: BoundingEngine, gpu_workers: list[Connection], cpu_workers: list[Connection], plan_only: bool, strategy: Strategy, probe_thickness: int, until_timedout: bool, force_reestimate: bool):
         self.verifier = verifier
         self.__gpu_workers = gpu_workers
         self.__num_gpu_workers = len(gpu_workers)
@@ -67,9 +68,9 @@ class LZeroRobustnessAnalyzer:
             num_each = combs2check.shape[0] // self.__num_gpu_workers
             for i, gpu_worker in enumerate(self.__gpu_workers):
                 if i == self.__num_gpu_workers - 1:
-                    gpu_worker.send(('CC', combs2check[i * num_each :].numpy()))
+                    gpu_worker.send((P.BOUND_CONCRETE, combs2check[i * num_each :].numpy()))
                 else:
-                    gpu_worker.send(('CC', combs2check[i * num_each : (i + 1) * num_each].numpy()))
+                    gpu_worker.send((P.BOUND_CONCRETE, combs2check[i * num_each : (i + 1) * num_each].numpy()))
             for i, gpu_worker in enumerate(self.__gpu_workers):
                 if i == self.__num_gpu_workers - 1:
                     lb_l_min_values[i * num_each :] = torch.from_numpy(gpu_worker.recv())
@@ -96,7 +97,7 @@ class LZeroRobustnessAnalyzer:
         if not self.__strategy == Strategy.toptCoVerD:
             first_all_safe_level, min_lb_l, unk_combs1 = self.__probe()
             print(f'Finished probing, first_all_safe_level: {first_all_safe_level}, min_lb_l: {min_lb_l:.4f}, took {round(time.time() - self.analyzer_start_time, 3)} s')
-            self.__gpu_workers_send_all(('finished probing', first_all_safe_level))
+            self.__gpu_workers_send_all((P.PROBE_DONE, first_all_safe_level))
             if first_all_safe_level <= 1:
                 sample_counts[first_all_safe_level:] = [math.comb(self.__v, l) for l in range(first_all_safe_level, self.__e + 1)]
                 sample_successes = sample_counts.copy()
@@ -121,7 +122,7 @@ class LZeroRobustnessAnalyzer:
                 if self.__strategy != Strategy.toptCoVerD and concrete_safe_rate[l] >= SR_THRES_TO_SAMPLE_SUPER[l] or l == sample_all_k_end_level:
                     print(f' {l}', end='\n' if l == sample_all_k_end_level else '', flush=True)
                     for gpu_worker in self.__gpu_workers:
-                        gpu_worker.send(('sample-all-k', l))
+                        gpu_worker.send((P.SAMPLE_SUPER, l))
                     super_success_rate[l], mean_supercheck_time[l] = planner.aggregate_super_samples([w.recv() for w in self.__gpu_workers], l)
         estimated_CC_time_per_l = [0.0] * (self.__e + 1)
         estimated_SaP_time_per_l = [0.0] * (self.__e + 1)  # only estimate SaP time for levels >= 2, since level 0 and 1 are usually very fast and don't need pruning
@@ -216,7 +217,7 @@ class LZeroRobustnessAnalyzer:
         self.__milp.start(self.analyzer_start_time, deduplicate=best_strategy[1] == 'SCSaP' and self.__level == self.__e)
 
         if best_strategy[1] == 'CCSaP':
-            self.__gpu_workers_send_all(('CCSaP', self.__level))  # no geometry, no refinement strategy
+            self.__gpu_workers_send_all((P.START_CONCRETE, self.__level))  # no geometry, no refinement strategy
             current_level_start_time = time.time()
             if self.__level == 1:
                 unk_combs = unk_combs1
@@ -240,7 +241,7 @@ class LZeroRobustnessAnalyzer:
             chosen_indices = random.sample(range(chosen_geometry.number_of_points()), self.__v)
             random.shuffle(chosen_indices)
             for gpu_worker in self.__gpu_workers:
-                gpu_worker.send(('SCSaP', chosen_geometry, chosen_indices, refinement_strategy))
+                gpu_worker.send((P.START_SUPER, chosen_geometry, chosen_indices, refinement_strategy))
 
             print(
                 f'Chosen {chosen_geometries_info[self.__level]}; Operating on level: {self.__level}'
@@ -329,18 +330,19 @@ class LZeroRobustnessAnalyzer:
             for gpu_worker in self.__gpu_workers:
                 if gpu_worker.poll():
                     message = gpu_worker.recv()
-                    if isinstance(message, str) and message == 'adversarial-example-suspects':
-                        self.__milp.submit(gpu_worker.recv())
-                    elif isinstance(message, str) and message == 'unknown-combs':
-                        unk_combs_lst.append(gpu_worker.recv())
-                    elif isinstance(message, str) and message == 'done':
+                    tag = message[0]
+                    if tag == P.SUSPECTS:
+                        self.__milp.submit(message[1])
+                    elif tag == P.UNKNOWN:
+                        unk_combs_lst.append(message[1])
+                    elif tag == P.DONE:
                         done_count += 1
-                    else:  # update statistics
-                        num_indices, num_checked, num_verified, duration = message
+                    elif tag == P.STATS:
+                        _, num_indices, num_checked, num_verified, duration = message
                         size_statistics = statistics_by_size[num_indices]
                         if num_indices < self.__level:
                             num_finished += num_verified
-                        elif refinement_strategy[num_indices] is not None:  # could potentially be refined
+                        elif refinement_strategy.get(num_indices) is not None:  # could potentially be refined
                             num_finished += num_checked
                             size_statistics['num_checked'] += num_checked
                             size_statistics['successes'] += num_verified
@@ -353,6 +355,7 @@ class LZeroRobustnessAnalyzer:
                             size_statistics['num_checked'] += num_checked
                             size_statistics['total_duration'] += duration
                             size_statistics['successes'] += num_verified
+                    else: assert False, f"Unexpected message {message}"
         pbar.close()
         print(f"num_finished: {num_finished}, total_covering_size: {total_covering_size}, remaining: {total_covering_size - num_finished}")
         return torch.from_numpy(np.vstack(unk_combs_lst)) if len(unk_combs_lst) > 0 else torch.empty((0, self.__level), dtype=torch.int64)
@@ -372,7 +375,7 @@ class LZeroRobustnessAnalyzer:
             if estimated_SaP_time > 1.0:  # local split, parallel prune
                 print(f'Level {self.__level} estimated SaP time: {estimated_SaP_time:3f} s. Sharing SaP workload across all GPU workers...')
                 for i, gpu_worker in enumerate(self.__gpu_workers):
-                    gpu_worker.send(('SaP&CC', unk_combs.numpy()))
+                    gpu_worker.send((P.SPLIT_PRUNE_CHECK, unk_combs.numpy()))
                 num_new_combs_per_worker = [0] * self.__num_gpu_workers
                 for i, gpu_worker in enumerate(self.__gpu_workers):
                     num_new_combs_per_worker[i] = gpu_worker.recv()
@@ -394,9 +397,9 @@ class LZeroRobustnessAnalyzer:
                 for i, gpu_worker in enumerate(self.__gpu_workers):
                     num_each = pruned_combs.shape[0] // self.__num_gpu_workers
                     if i == self.__num_gpu_workers - 1:
-                        gpu_worker.send(('CC', pruned_combs[i * num_each :]))
+                        gpu_worker.send((P.BOUND_CONCRETE, pruned_combs[i * num_each :]))
                     else:
-                        gpu_worker.send(('CC', pruned_combs[i * num_each : (i + 1) * num_each]))
+                        gpu_worker.send((P.BOUND_CONCRETE, pruned_combs[i * num_each : (i + 1) * num_each]))
             if self.timed_out(estimated_more=(num_after_prune / self.__num_gpu_workers) * self.mean_boundconcrete_time[self.__level]):
                 print(f'Level {self.__level} estimated concrete check time: {(num_after_prune / self.__num_gpu_workers) * self.mean_boundconcrete_time[self.__level]:.2f} s, which is too long, terminating early.')
                 return True
@@ -422,15 +425,15 @@ class LZeroRobustnessAnalyzer:
     def __stop_workers(self):
         """Abandon the current image on every worker, and wait until they all acknowledged it."""
         for gpu_worker in self.__gpu_workers:
-            gpu_worker.send('stop')
+            gpu_worker.send(P.STOP)
         self.__milp.send_stop()
         for gpu_worker in self.__gpu_workers:
             message = gpu_worker.recv()
-            while not isinstance(message, str) or message != 'stopped':
+            while not isinstance(message, str) or message != P.STOPPED:
                 message = gpu_worker.recv()
         self.__milp.wait_stopped()
 
     def __skip_this_image(self):
         for gpu_worker in self.__gpu_workers:
-            gpu_worker.send(('skip', 0))
+            gpu_worker.send((P.SKIP, 0))
         self.__milp.stop()
