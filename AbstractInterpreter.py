@@ -4,7 +4,7 @@ from typing_extensions import Self
 import warnings
 from contextlib import contextmanager
 from typing import NamedTuple
-from topksum import selected_top_k_sum, selected_bottom_k_sum, top_top_sum, bottom_bottom_sum
+from l0bound import selected_top_k_sum, selected_bottom_k_sum, top_top_sum, bottom_bottom_sum
 
 torch.set_default_dtype(torch.float32)
 torch.backends.cuda.matmul.allow_tf32 = True

@@ -11,56 +11,6 @@ static constexpr int BIT_FLOOR[33] = {
     16, 16, 16, 16, 16, 16, 16, 16
 };
 
-template <typename scalar_t>
-__global__ void wipe_selected_kernel(
-    scalar_t* __restrict__ W,
-    const long* __restrict__ selected_idx,
-    const int batch_size,
-    const int num_rows,
-    const int num_cols,
-    const int rows_per_thread,
-    const int num_selected
-) {
-    const int b = blockIdx.x;
-    const long* sib = selected_idx + b * num_selected;
-    scalar_t* Wb = W + b * num_rows * num_cols;
-    int r = threadIdx.x * rows_per_thread;
-    for (int i = 0; i < rows_per_thread && r < num_rows; i++, r++) {
-        scalar_t* Wb_r = Wb + r * num_cols;
-        for (int j = 0; j < num_selected; j++) {
-            Wb_r[sib[j]] = static_cast<scalar_t>(0);
-        }
-    }
-}
-void wipe_selected_cuda(
-    at::Tensor& WX_diff,
-    const at::Tensor& selected_idx,
-    const int batch_size,
-    const int num_rows,
-    const int num_cols,
-    const int num_selected
-) {
-    dim3 threads(MAX_THREADS_PER_BLOCK);
-    dim3 blocks(batch_size); // each block handles one batch element
-    const int rows_per_thread = (num_rows + MAX_THREADS_PER_BLOCK - 1) / MAX_THREADS_PER_BLOCK;
-
-    AT_DISPATCH_ALL_TYPES(
-        WX_diff.scalar_type(),
-        "wipe_selected_cuda",
-        ([&] {
-            wipe_selected_kernel<scalar_t><<<blocks, threads>>>(
-                WX_diff.data_ptr<scalar_t>(),
-                selected_idx.data_ptr<long>(),
-                batch_size,
-                num_rows,
-                num_cols,
-                rows_per_thread,
-                num_selected
-            );
-        })
-    );
-}
-
 template<typename scalar_t, int K> // k > 0
 __global__ void selected_top_k_sum_warped_kernel(
     scalar_t* __restrict__ x,      // [num_rows, nv] assume all(x>0)

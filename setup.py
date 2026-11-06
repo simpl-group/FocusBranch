@@ -22,11 +22,11 @@ bimm_extension = CUDAExtension(
     ],
 )
 
-topksum_extension = CUDAExtension(
-    name='topksum.topksum',
+l0bound_extension = CUDAExtension(
+    name='l0bound.l0bound',
     sources=[
-        'topksum/topksum_bindings.cpp',
-        'topksum/topksum.cu',
+        'l0bound/bindings.cpp',
+        'l0bound/topksum.cu',
     ],
     extra_compile_args={
         "cxx": ["-O3"],
@@ -37,7 +37,7 @@ topksum_extension = CUDAExtension(
 setup(
     name='L0-Robustness-Verifier',
     version='0.1',
-    packages=['bimm', 'topksum'],
-    ext_modules=[bimm_extension, topksum_extension],
+    packages=['bimm', 'l0bound'],
+    ext_modules=[bimm_extension, l0bound_extension],
     cmdclass={'build_ext': BuildExtension}
 )

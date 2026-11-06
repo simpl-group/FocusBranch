@@ -7,28 +7,6 @@ std::map<std::pair<int, int>, int> min_nv_to_warp = {
 #include "min_nv_to_warp_data.txt"
 };
 
-void wipe_selected_cuda(
-    at::Tensor& WX_diff,
-    const at::Tensor& selected_idx,
-    const int batch_size,
-    const int num_rows,
-    const int num_cols,
-    const int num_selected
-);
-at::Tensor& wipe_selected_laucher(at::Tensor& WX_diff, const at::Tensor& selected_idx) {
-    CHECK_CUDA(WX_diff);
-    CHECK_CUDA(selected_idx);
-
-    const int batch_size   = WX_diff.size(0);
-    const int num_rows     = WX_diff.size(1);
-    const int num_cols     = WX_diff.size(2);
-    const int num_selected = selected_idx.size(1);
-
-    wipe_selected_cuda(WX_diff, selected_idx, batch_size, num_rows, num_cols, num_selected);
-
-    return WX_diff;
-}
-
 void selected_sum_cuda(
     const at::Tensor& x,
     const at::Tensor& selected_idx,
@@ -405,7 +383,6 @@ at::Tensor bottom_bottom_sum_laucher(
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("wipe_selected", &wipe_selected_laucher, "Wipe Selected Elements (CUDA)");
     m.def("selected_top_k_sum", &selected_top_k_sum_laucher, "Sum the elements from selected indices and the Top K elements from the rest (CUDA). Auto-decides between single and warped implementation based on the number of selected indicess, k and the number of elements per row.");
     m.def("selected_top_k_sum_warped", &selected_top_k_sum_warped_laucher, "Sum the elements from selected indices and the Top K elements from the rest (CUDA). Uses warp (32) threads per row.");
     m.def("selected_top_k_sum_single", &selected_top_k_sum_single_laucher, "Sum the elements from selected indices and the Top K elements from the rest (CUDA). Uses single thread per row.");

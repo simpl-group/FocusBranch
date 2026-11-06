@@ -1,6 +1,6 @@
 import torch
 from torch.utils import benchmark
-from topksum import selected_top_k_sum_single, selected_top_k_sum_warped
+from l0bound import selected_top_k_sum_single, selected_top_k_sum_warped
 
 def bench(shp, num_select, k, device="cuda"):
     x = torch.rand(shp, device=device)
