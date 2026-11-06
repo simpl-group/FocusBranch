@@ -160,7 +160,7 @@ class BoundingEngine:
         k = partial_indices.shape[0] if partial_indices is not None else self.num_pixels
         nodes_per_second = 0.0
         estimated_total_nodes = 0
-        last_success_rate = 0.
+        last_safe_rate = 0.
         first_any_safe_level = start_level
         if self.demo:
             sampled_nodes = 0
@@ -175,7 +175,7 @@ class BoundingEngine:
                     estimated_nodes_this_level = k
                 else:
                     focus_sets = selected_indices_sample(k, level, self.rep_each_level)
-                    estimated_nodes_this_level = math.ceil(math.comb(k, level) * (1 - last_success_rate) ** 2)
+                    estimated_nodes_this_level = math.ceil(math.comb(k, level) * (1 - last_safe_rate) ** 2)
                 sample_nodes_this_level = focus_sets.shape[0]
                 num_safe_nodes = 0
                 level_start = perf_counter()
@@ -187,11 +187,11 @@ class BoundingEngine:
                 if num_safe_nodes == 0: first_any_safe_level += 1
                 current_speed = sample_nodes_this_level / (perf_counter() - level_start)
                 if level != self.eps: nodes_per_second = max(current_speed, nodes_per_second)  # not the last level
-                last_success_rate = num_safe_nodes / sample_nodes_this_level
+                last_safe_rate = num_safe_nodes / sample_nodes_this_level
                 estimated_total_nodes += estimated_nodes_this_level
                 if self.demo:
                     sampled_nodes += sample_nodes_this_level
-                    print(f"Level {level}: {100*last_success_rate:>6.2f}% safe, speed: {current_speed:>8.2f} nodes/s, estimated nodes: {estimated_nodes_this_level}")
+                    print(f"Level {level}: {100*last_safe_rate:>6.2f}% safe, speed: {current_speed:>8.2f} nodes/s, estimated nodes: {estimated_nodes_this_level}")
                 if num_safe_nodes == sample_nodes_this_level:
                     break  # All nodes are safe, no need to go deeper
         estimated_verification_time = estimated_total_nodes / nodes_per_second

@@ -1,5 +1,5 @@
 """
-Strategy planning by node sampling (Section 3.4 and Appendix F.3 of the paper): from sampled success rates and bounding
+Strategy planning by node sampling (Section 3.4 and Appendix F.3 of the paper): from sampled safe rates and bounding
 times, pick the super branching strategy R (refinement size for every focus-set size) and the covering verification design
 (finite geometry) with the smallest estimated verification time at a level.
 """
@@ -12,7 +12,7 @@ from coverd_finite_geometries import get_possible_geometries, Geometry
 
 
 def aggregate_super_samples(per_worker: list[tuple[list[int], list[int], list[float]]], level: int) -> tuple[dict[int, float], dict[int, float]]:
-    """Success rate and mean bounding time of super nodes per focus-set size, from every worker's samples."""
+    """Safe rate and mean bounding time of super nodes per focus-set size, from every worker's samples."""
     counts = np.sum([np.array(c) for c, _, _ in per_worker], axis=0)
     successes = np.sum([np.array(s) for _, s, _ in per_worker], axis=0)
     durations = np.sum([np.array(t) for _, _, t in per_worker], axis=0)
@@ -26,23 +26,23 @@ def aggregate_super_samples(per_worker: list[tuple[list[int], list[int], list[fl
     return {k + level: v for k, v in enumerate(sr)}, {k + level: v for k, v in enumerate(mean_time)}
 
 
-def fraction_robust(success_rate: dict[int, float], level: int, max_size: int) -> dict[int, dict[int, float]]:
+def fraction_robust(safe_rate: dict[int, float], level: int, max_size: int) -> dict[int, dict[int, float]]:
     """Estimated fraction of the size-k children of an unknown size-v node that are safe."""
     fraction: dict[int, dict[int, float]] = {}
     for v in range(level, max_size + 1):
         fraction[v] = {}
         for k in range(level, v):
-            if 1 - success_rate[v] < 1e-7:
+            if 1 - safe_rate[v] < 1e-7:
                 fraction[v][k] = 1.0
             else:
-                fraction[v][k] = min(1, max((success_rate[k] - success_rate[v]) / (1 - success_rate[v]), 0))
+                fraction[v][k] = min(1, max((safe_rate[k] - safe_rate[v]) / (1 - safe_rate[v]), 0))
     return fraction
 
 
 def compute_super_branching_strategy(
     fraction: dict[int, dict[int, float]],
     mean_time: dict[int, float],
-    success_rate: dict[int, float],
+    safe_rate: dict[int, float],
     covering_sizes: dict[tuple[int, int], int],
     level: int,
     max_size: int,
@@ -61,7 +61,7 @@ def compute_super_branching_strategy(
             if refine_time < best_time:
                 best_k, best_time = k, refine_time
         RT[v], strategy[v] = best_time, best_k
-        VT[v] = mean_time[v] + best_time * (1 - success_rate[v])
+        VT[v] = mean_time[v] + best_time * (1 - safe_rate[v])
     return VT, strategy
 
 

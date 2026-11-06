@@ -80,7 +80,7 @@ class Verifier:
     def __sample(self) -> tuple[list[int], list[int], dict, dict, dict, torch.Tensor]:
         """Sample concrete nodes of every level and super nodes of the promising levels (Algorithm 2, line 3)."""
         sample_counts, sample_successes = [0] * (self.__e + 1), [0] * (self.__e + 1)
-        super_success_rate, mean_supercheck_time = {}, {}
+        super_safe_rate, mean_supercheck_time = {}, {}
         mean_size_limits = {l: self.__refinement_db_max_v for l in range(CVD_MIN_T, min(self.__e + 1, CVD_MAX_T + 1))}
         unk_combs1 = torch.empty((0, 1), dtype=torch.int64)
         if not self.__strategy == Strategy.toptCoVerD:
@@ -110,12 +110,12 @@ class Verifier:
                 if self.__strategy != Strategy.toptCoVerD and concrete_safe_rate[l] >= SR_THRES_TO_SAMPLE_SUPER[l] or l == sample_all_k_end_level:
                     print(f' {l}', end='\n' if l == sample_all_k_end_level else '', flush=True)
                     self.__gpus.broadcast((P.SAMPLE_SUPER, l))
-                    super_success_rate[l], mean_supercheck_time[l] = planner.aggregate_super_samples(self.__gpus.gather(), l)
-        return sample_counts, sample_successes, super_success_rate, mean_supercheck_time, mean_size_limits, unk_combs1
+                    super_safe_rate[l], mean_supercheck_time[l] = planner.aggregate_super_samples(self.__gpus.gather(), l)
+        return sample_counts, sample_successes, super_safe_rate, mean_supercheck_time, mean_size_limits, unk_combs1
 
     def __plan(self) -> dict:
         """Choose the starting level and the branching strategy with the smallest estimated time (Algorithm 3)."""
-        sample_counts, sample_successes, super_success_rate, mean_supercheck_time, mean_size_limits, unk_combs1 = self.__sample()
+        sample_counts, sample_successes, super_safe_rate, mean_supercheck_time, mean_size_limits, unk_combs1 = self.__sample()
         concrete_safe_rate = [s / c if c > 0 else 0. for s, c in zip(sample_successes, sample_counts)]
         estimated_CC_time_per_l = [0.0] * (self.__e + 1)
         estimated_SaP_time_per_l = [0.0] * (self.__e + 1)  # only estimate SaP time for levels >= 2, since level 0 and 1 are usually very fast and don't need pruning
@@ -154,9 +154,9 @@ class Verifier:
             if not self.__strategy.require_supercheck():
                 CCSaP_time = (self.mean_boundconcrete_time[l] * math.comb(self.__v, l) + tail_CC_time) / self.__num_gpu_workers + tail_SaP_time
                 candidate_strategies.append((CCSaP_time, 'CCSaP', l))
-            if l in super_success_rate:
-                fraction_robusts[l] = planner.fraction_robust(super_success_rate[l], l, self.__refinement_db_max_v)
-                VTs[l], refinement_strategies[l] = planner.compute_super_branching_strategy(fraction_robusts[l], mean_supercheck_time[l], super_success_rate[l], self.covering_sizes[l], l, self.__refinement_db_max_v)
+            if l in super_safe_rate:
+                fraction_robusts[l] = planner.fraction_robust(super_safe_rate[l], l, self.__refinement_db_max_v)
+                VTs[l], refinement_strategies[l] = planner.compute_super_branching_strategy(fraction_robusts[l], mean_supercheck_time[l], super_safe_rate[l], self.covering_sizes[l], l, self.__refinement_db_max_v)
                 geometry, geometries_data = planner.choose_geometry(VTs[l], self.__v, l, self.__refinement_db_max_v, mean_size_limits[l])
                 chosen_geometries[l], chosen_geometries_info[l] = geometry, geometries_data[0]
                 candidate_geometries.extend(geometries_data)
@@ -188,7 +188,7 @@ class Verifier:
         plan = {'results': results, 'strategy': best_strategy[1], 'level': level, 'unk_combs1': unk_combs1}
         if best_strategy[1] == 'SCSaP':
             plan.update(geometry=chosen_geometries[level], geometry_info=chosen_geometries_info[level],
-                        refinement_strategy=refinement_strategies[level], super_success_rate=super_success_rate[level],
+                        refinement_strategy=refinement_strategies[level], super_safe_rate=super_safe_rate[level],
                         mean_supercheck_time=mean_supercheck_time[level], VT=VTs[level], fraction_robust=fraction_robusts[level])
         return plan
 
@@ -302,7 +302,7 @@ class Verifier:
             'summed_duration': summed_duration
         }
         results['exec_details'] = {
-            "Success Rate": {k:round(v, 5) for k, v in plan['super_success_rate'].items()},
+            "Safe Rate": {k:round(v, 5) for k, v in plan['super_safe_rate'].items()},
             "Mean Time": {k:round(v, 6) for k, v in plan['mean_supercheck_time'].items()},
             "VT": {k:round(v, 6) for k, v in plan['VT'].items()},
             "R": refinement_strategy,
@@ -310,7 +310,7 @@ class Verifier:
             "fraction_robust": {v: round(plan['fraction_robust'][v][k], 5) for v, k in refinement_strategy.items() if k is not None},
             "num_checked": {size: stats['num_checked'] for size, stats in stats_by_size.items()},
             "successes": {size: stats['successes'] for size, stats in stats_by_size.items()},
-            "success_rate": {size: round(stats['successes'] / stats['num_checked'], 5) if stats['num_checked'] > 0 else 0 for size, stats in stats_by_size.items()},
+            "safe_rate": {size: round(stats['successes'] / stats['num_checked'], 5) if stats['num_checked'] > 0 else 0 for size, stats in stats_by_size.items()},
             "total_duration": {size: round(stats['total_duration'], 6) for size, stats in stats_by_size.items()},
             "mean_duration": {size: round(stats['total_duration'] / stats['num_checked'], 6) if stats['num_checked'] > 0 else 0 for size, stats in stats_by_size.items()},
         }
