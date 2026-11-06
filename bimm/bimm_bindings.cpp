@@ -1,30 +1,6 @@
 #include <torch/extension.h>
 #define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 
-void bimm64_cuda(
-    const at::Tensor& A,
-    const at::Tensor& B,
-    at::Tensor& C,
-    const int na,
-    const int nb,
-    const int nv
-);
-at::Tensor bimm64_laucher(const at::Tensor& A, const at::Tensor& B) {
-    CHECK_CUDA(A);
-    CHECK_CUDA(B);
-    const int na = A.size(0);
-    const int nb = B.size(0);
-    if (na == 0 || nb == 0) {
-        throw std::runtime_error("A and B must be non-empty");
-    }
-    if (A.size(1) != B.size(1)) {
-        throw std::runtime_error("A and B must have the same number of columns");
-    }
-    auto C = torch::zeros({na, nb}, torch::TensorOptions().dtype(torch::kUInt8).device(torch::kCUDA));
-    bimm64_cuda(A, B, C, na, nb, A.size(1));
-    return C;
-}
-
 void superset_popc_cuda(
     const at::Tensor& A,
     const at::Tensor& B,
@@ -89,7 +65,6 @@ at::Tensor bitmasks2combs_laucher(const at::Tensor& bitmasks, const int popc) {
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("bimm64", &bimm64_laucher, "Binary Matmul 64 (CUDA)");
     m.def("superset_sum", &superset_sum_laucher, "Superset Sum (CUDA)");
     m.def("combs2bitmasks", &combs2bitmasks_laucher, "Combination to Bitmask (CUDA)");
     m.def("bitmasks2combs", &bitmasks2combs_laucher, "Bitmask to Combination (CUDA)");

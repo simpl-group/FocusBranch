@@ -112,20 +112,6 @@ def insert_milp(net: str, img: int, eps: int, cc=True, verified=False, timed_out
                 values = [net, img, higher_eps, int(cc), 0, int(timed_out), int(found_adv), 0.0, 1]
                 _insert_row("milp", columns, values, db=db)
 
-def insert_coverd(net: str, img: int, eps: int, cc=True, verified=False, timed_out=False, found_adv=False, estimated_time=0.0, total_duration=0.0, planning_duration=0.0, db: str=""):
-    if not db: db = __db
-    columns = ["net", "img", "eps", "cc", "verified", "timed_out", "found_adv", "estimated_time", "total_duration", "planning_duration", "skip"]
-    values = [net, img, eps, int(cc), int(verified), int(timed_out), int(found_adv), estimated_time, total_duration, planning_duration, 1]
-    _insert_row("coverd", columns, values, db=db)
-    if not verified:
-        with sqlite3.connect(db) as conn:
-            result = conn.execute("SELECT max(eps) FROM coverd_config WHERE net = ?", (net,)).fetchone()
-        if result and result[0] is not None:
-            max_eps = result[0]
-            for higher_eps in range(eps + 1, max_eps + 1):
-                values = [net, img, higher_eps, int(cc), 0, int(timed_out), int(found_adv), 0.0, 0.0, 0.0, 1]
-                _insert_row("coverd", columns, values, db=db)
-
 def insert_ours(net: str, img: int, eps: int, cc=True, estimated_time=0.0, use_cvd=False, starting_level=-1, skip=True, verified=False, timed_out=False, found_adv=False, total_duration=0.0, db: str=""):
     if not db: db = __db
     """skip: equivalent to actually ran"""
@@ -251,7 +237,6 @@ def _make_should_skip(table: str):
 ours_should_skip = _make_should_skip("ours")
 milp_should_skip = _make_should_skip("milp")
 lirpa_should_skip = _make_should_skip("lirpa")
-coverd_should_skip = _make_should_skip("coverd")
 
 def ours_config_consistent(net: str, epsilon: int, img: int, gpu_num: int, milp_num: int, timeout:int, rep_each_k: int, rep_each_level: int, concretecheck_batch: int, supercheck_batch: int, pool_size: int, probe_thickness: int, db: str="") -> tuple[bool, str]:
     if not db: db = __db
@@ -311,19 +296,6 @@ def lirpa_config_consistent(net: str, eps: int, img: int, method: str, timeout:i
             config['method'] == method and
             config['time_limit_seconds'] == timeout and
             config['max_iteration'] == max_iteration)
-
-def coverd_config_consistent(net: str, eps: int, img: int, gpu_num: int, timeout:int, db: str="") -> bool:
-    if not db: db = __db
-    query = "SELECT * FROM coverd_config WHERE net = ? AND eps = ?"
-    with sqlite3.connect(db) as c:
-        c.row_factory = sqlite3.Row
-        result = c.execute(query, (net, eps)).fetchone()
-    if not result:
-        return False
-    config = dict(result)
-    return (config['num_img'] > img and
-            config['gpu_num'] == gpu_num and
-            config['time_limit_seconds'] == timeout)
 
 def main():
     parser = argparse.ArgumentParser(description="DB helper")

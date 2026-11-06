@@ -3,49 +3,6 @@
 #include <torch/extension.h>
 #define MAX_THREADS_PER_BLOCK 256
 
-__global__ void bimm64_kernel(
-    const uint64_t* __restrict__ A,
-    const uint64_t* __restrict__ B,
-    uint8_t* __restrict__ C,
-    const int na,
-    const int nb,
-    const int nv
-) {
-    const int ia = blockIdx.y * blockDim.y + threadIdx.y;
-    const int ib = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (ia < na && ib < nb) {
-        int sum = 0;
-        const uint64_t* Ai = A + ia * nv;
-        const uint64_t* Bi = B + ib * nv;
-
-        for (int k = 0; k < nv; k += 1) {
-            sum += __popcll(Ai[k] & Bi[k]);
-        }
-        C[ia * nb + ib] = sum;
-    }
-}
-void bimm64_cuda(
-    const at::Tensor& A,
-    const at::Tensor& B,
-    at::Tensor& C,
-    const int na,
-    const int nb,
-    const int nv
-) {
-    dim3 threads(16, 16);
-    dim3 blocks((nb + 15) / 16, (na + 15) / 16);
-
-    bimm64_kernel<<<blocks, threads>>>(
-        reinterpret_cast<const uint64_t*>(A.data_ptr<int64_t>()),
-        reinterpret_cast<const uint64_t*>(B.data_ptr<int64_t>()),
-        C.data_ptr<uint8_t>(),
-        na,
-        nb,
-        nv
-    );
-}
-
 __global__ void superset_popc_kernel(
     const uint64_t* __restrict__ A,
     const uint64_t* __restrict__ B,

@@ -198,7 +198,7 @@ class GpuWorker:
         engine = self.engine
         torch.manual_seed(seed)
         engine.adapt_target_images(images=torch.tensor(image, dtype=torch.float32).reshape(1, -1, 1),
-                              true_label=label, check_first=False)
+                              true_label=label)
         message = self.__plan()
         if message[0] == P.SKIP:
             return

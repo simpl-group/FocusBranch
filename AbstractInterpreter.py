@@ -469,18 +469,3 @@ class SequentialAT:
             if isinstance(AT, ActivationAT):
                 AT.lrp = None
                 AT.urp = None
-
-    def to_(self, device: str | torch.device) -> None:
-        for AT in self.ATs[:-1]:
-            if isinstance(AT, AffineAT):
-                AT.rp.to_(device)
-
-    @contextmanager
-    def working_on(self, device: str | torch.device):
-        self.to_(device)
-        try:
-            yield
-        finally:
-            self.remove_activation_rp()
-            self.to_("cpu")
-            torch.cuda.empty_cache()

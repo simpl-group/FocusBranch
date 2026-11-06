@@ -43,7 +43,6 @@ class Verifier:
         self.cvd_extra_time = lambda geometry: generator_launch_time + estimate_extra_time(geometry, num_workers=self.__num_gpu_workers, num_pixels=self.__v, pool_size=engine.pool_size, skipping_iter_speed=skipping_iter_speed, iter_speed=normal_iter_speed)
         splitting_speed, pruning_speed = estimate_SaP_speed(epsilon=self.__e, num_indices=self.__v, force_reestimate=force_reestimate)
         self.estimate_SaP_time = lambda num_unk, level: estimate_SaP_time(num_unk, level, self.__v, splitting_speed[level], pruning_speed[level])
-        self.estimate_pruning_time = lambda num_new_combs, num_references, level: num_new_combs * num_references / pruning_speed[level]
         self.mean_boundconcrete_time: list[float]|None = None
 
     def update_image(self, image: np.ndarray, label: int):

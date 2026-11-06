@@ -17,47 +17,6 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-# deprecated
-def gurobi_check_unsat(
-    x0: np.ndarray,
-    coefficients: np.ndarray,
-    bias: np.ndarray,
-    eps: int,
-    selected_idx: np.ndarray,
-    pixel_value_range=(0, 1),
-    mute=False
-) -> bool:
-    num_batch, num_pixel = x0.shape
-    L, U = pixel_value_range
-
-    model = gp.Model("check_unsat", env=env)
-
-    controllers = model.addMVar((num_pixel,), vtype=GRB.BINARY, name="c")
-    triggers = model.addMVar((num_pixel,), vtype=GRB.CONTINUOUS, lb=L, ub=U, name="t")
-
-    # l0=eps constraint
-    model.addConstr(controllers.sum() == eps)
-    if len(selected_idx) > 0:
-        assert len(selected_idx) <= eps
-        model.addConstr(controllers[selected_idx] == 1)
-
-    for i in range(num_batch):
-        img = controllers * triggers + (1 - controllers) * x0[i]
-        model.addConstr(coefficients[i] @ img + bias[i] <= 0)
-
-    model.optimize()
-
-    if model.Status == GRB.Status.INFEASIBLE: return True
-    if mute: return False
-    if model.Status == GRB.Status.OPTIMAL:
-        print("Solution found:")
-        for idx in range(num_pixel):
-            if controllers[idx].X > 0.5:  # If idx is within the trigger
-                print(f"{idx}: {triggers[idx].X}")
-    else:
-        print(f"Solver status: {model.Status}")
-    return False
-
 def add_forward_constraints(model: gp.Model, seqAT: SequentialAT, bounded_x0, x: gp.MVar) -> gp.MVar:
     pre_activation_bounds_list = seqAT.get_preactivation_bounds(bounded_in=bounded_x0)
     relu_layer_idx = 0

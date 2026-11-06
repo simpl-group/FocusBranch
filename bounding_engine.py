@@ -1,16 +1,12 @@
 from AbstractInterpreter import L0BoundedInput, SequentialAT
-from split_and_prune import split_and_prune, prepare4pruning
-from bimm import combs2bitmasks
 from data import Strategy
 from data.db import insert_mean_concretecheck_time, get_mean_concretecheck_time
-from utils import DEVICE, TQDM_BAR_FORMAT, TimeoutException
+from utils import DEVICE
 from time import perf_counter
 import threading
 import math
-import signal
 import numpy as np
 import torch
-from tqdm import tqdm
 
 
 def batched_randsample(upper_bound: int, sample_size: int, batch_size: int) -> torch.Tensor:
@@ -128,102 +124,6 @@ class BoundingEngine:
             unknown.append(batch[~self.bound_nodes(batch)].cpu())
         return torch.cat(unknown, dim=0).numpy()
 
-    def first_safe_level(self) -> int:
-        for level in range(self.eps + 1):
-            all_safe = True
-            if level == 0:
-                focus_sets = torch.empty((1, 0), dtype=torch.int64)
-            elif level == 1:
-                focus_sets = torch.arange(self.num_pixels).reshape(-1, 1)
-            else:
-                focus_sets = selected_indices_sample(self.num_pixels, level, self.rep_each_level)
-            for i in range(0, focus_sets.shape[0], self.concretecheck_batch):
-                focus_sets_batch = focus_sets[i:i + self.concretecheck_batch].to(self.device)
-                with self.bounded_x0.selecting(focus_sets_batch):
-                    safes = self.bound_current_batch()
-                if not safes.all():
-                    all_safe = False
-                    break
-            if all_safe:
-                break
-        return level
-
-    def probe(self, partial_indices: torch.Tensor | None=None, start_level: int=0) -> tuple[float, int]:
-        """
-        Probe from start_level downward with the given partial indices and estimate the verification time.
-
-        :param partial_indices: Indices of the pixels to be considered in the computation of diff.
-        :type partial_indices: torch.Tensor with shape (num_indices,) | None
-        :param start_level: The level to start probing from.
-        :return: Estimated verification time and the actual start level.
-        """
-        k = partial_indices.shape[0] if partial_indices is not None else self.num_pixels
-        nodes_per_second = 0.0
-        estimated_total_nodes = 0
-        last_safe_rate = 0.
-        first_any_safe_level = start_level
-        if self.demo:
-            sampled_nodes = 0
-            start = perf_counter()
-        with self.bounded_x0.partial(partial_indices):
-            for level in range(start_level, self.eps + 1):
-                if level == 0:
-                    focus_sets = torch.empty((1, 0), dtype=torch.int64)
-                    estimated_nodes_this_level = 1
-                elif level == 1:
-                    focus_sets = torch.arange(k).reshape(-1, 1)
-                    estimated_nodes_this_level = k
-                else:
-                    focus_sets = selected_indices_sample(k, level, self.rep_each_level)
-                    estimated_nodes_this_level = math.ceil(math.comb(k, level) * (1 - last_safe_rate) ** 2)
-                sample_nodes_this_level = focus_sets.shape[0]
-                num_safe_nodes = 0
-                level_start = perf_counter()
-                for i in range(0, sample_nodes_this_level, self.concretecheck_batch):
-                    focus_sets_batch = focus_sets[i:i + self.concretecheck_batch].to(self.device)
-                    with self.bounded_x0.selecting(focus_sets_batch):
-                        num_safe_nodes += int(self.bound_current_batch().sum().item())
-
-                if num_safe_nodes == 0: first_any_safe_level += 1
-                current_speed = sample_nodes_this_level / (perf_counter() - level_start)
-                if level != self.eps: nodes_per_second = max(current_speed, nodes_per_second)  # not the last level
-                last_safe_rate = num_safe_nodes / sample_nodes_this_level
-                estimated_total_nodes += estimated_nodes_this_level
-                if self.demo:
-                    sampled_nodes += sample_nodes_this_level
-                    print(f"Level {level}: {100*last_safe_rate:>6.2f}% safe, speed: {current_speed:>8.2f} nodes/s, estimated nodes: {estimated_nodes_this_level}")
-                if num_safe_nodes == sample_nodes_this_level:
-                    break  # All nodes are safe, no need to go deeper
-        estimated_verification_time = estimated_total_nodes / nodes_per_second
-        if self.demo: print(f"Sample Time: {perf_counter() - start:2.2}s, Sampled Nodes: {sampled_nodes}, Speed: {nodes_per_second:.2f} nodes/s, Estimated nodes: {estimated_total_nodes}\nEstimated verification time: {estimated_verification_time:.2f}s, First any safe level: {first_any_safe_level}")
-        return estimated_verification_time, first_any_safe_level
-
-    def probeps(self, start_level: int=1) -> int:
-        focus_sets = torch.arange(self.num_pixels).reshape(-1, 1)
-        start = perf_counter()
-        for level in range(start_level, self.eps + 1):
-            sample_nodes_this_level = focus_sets.shape[0]
-            num_safe_nodes = 0
-            all_lb_l_list = []
-            for i in range(0, sample_nodes_this_level, self.concretecheck_batch):
-                focus_sets_batch = focus_sets[i:i + self.concretecheck_batch].to(self.device)
-                with self.bounded_x0.selecting(focus_sets_batch):
-                    self.seqAT.update_activation_rp(bounded_in=self.bounded_x0)
-                    lb_l = self.bounded_x0.compute_lbound(self.seqAT.tail.backsubstitution_lrp()).squeeze(2).cpu()
-                    all_lb_l_list.append(lb_l)
-                    num_safe_nodes += int(lb_l.gt(0).all(dim=1).sum().item())
-            all_lb_l = torch.cat(all_lb_l_list, dim=0)
-            lb_l_min_values = all_lb_l.min(dim=1).values
-            num_lt_0 = int(lb_l_min_values.le(0).sum().item())
-            print(f"Level {level} min: {lb_l_min_values.min().item():.2f}\t(safe:unk)/all: ({num_safe_nodes}:{num_lt_0})/{sample_nodes_this_level}, using {perf_counter() - start:.2f}s")
-            start = perf_counter()
-            least_indices = focus_sets[lb_l_min_values.topk(min(5, num_lt_0), largest=False, sorted=False).indices]
-            if num_safe_nodes == sample_nodes_this_level:
-                return 0
-            if level == self.eps:
-                return num_lt_0
-            focus_sets, _, _ = prepare4pruning(least_indices, self.num_pixels)
-        assert False, "Should never reach here"
 
     def min_margin_lbs(self, concrete_combs: torch.Tensor) -> torch.Tensor:
         """The smallest margin lower bound of each concrete node (on cpu); a node is unknown iff it is <= 0."""
@@ -236,95 +136,17 @@ class BoundingEngine:
                 lb_l_min_values_lst.append(lb_l.min(dim=1).values.cpu())
         return torch.cat(lb_l_min_values_lst, dim=0)
 
-    def adapt_target_images(self, images: torch.Tensor, true_label: int, check_first=True) -> None:
+    def adapt_target_images(self, images: torch.Tensor, true_label: int) -> None:
         """
         Set the image to verify and its label: the output rows become the margins of the true label over the others.
-        Will first check if the image matches the true label if check_first is True.
 
-        :param images: The input image, of shape (1, channel, height, width), or (1, -1, 1) if check_first is False.
-        :param true_label: The true label of the image.
-        :param check_first: If True, will assert that the input image matches the true label.
+        :param images: (1, num_features, 1) the flattened image; the verifier verifies one image at a time.
+        :param true_label: The label of the image.
         """
-        if check_first:
-            assert images.ndim == 4, "Input images must be of shape (batch_size, channel, height, width)."
-            assert self.torch_net(images.cpu()).argmax(dim=1).item() == true_label, "The input image does not match the true label."
-            images = images.flatten(start_dim=1).unsqueeze(2)
         assert images.ndim == 3, "Input images must be of shape (batch_size, -1, 1)."
         self.bounded_x0.update_x(images)  # (batch, d1, 1)
         self.seqAT.tail.make_marginals(true_label=true_label, device=self.device)
         self.max_sizes_to_batch: dict[int, int] = {}  # key: level, value: max size to batch at this level
-
-    def verify1(self, partial_indices: torch.Tensor | None=None, start_level: int=0) -> bool:
-        num_indices = self.num_pixels
-        if partial_indices is not None:
-            num_indices = partial_indices.shape[0]
-        bitmask_length = (num_indices + 63) // 64
-        if math.comb(num_indices, start_level) > 10 * 1024 ** 3 * 8 * num_indices:
-            return False
-        focus_sets = torch.combinations(torch.arange(num_indices), start_level)
-        if start_level == 0: focus_sets = torch.empty((1, 0), dtype=torch.int64)
-        safe_bitmasks: torch.Tensor = torch.empty((0, bitmask_length), dtype=torch.long)
-        success = False
-        if self.demo:
-            start = perf_counter()
-            branching_time, total_nodes = 0.0, 0
-        for level in range(start_level, self.eps + 1):
-            num_to_check = focus_sets.shape[0]
-            if num_to_check == 0:
-                success = True
-                break
-            unk_combs_lst: list[torch.Tensor] = []
-            new_safe_bitmasks_lst: list[torch.Tensor] = [safe_bitmasks]
-            if self.demo:
-                safe_cnt, unk_cnt = 0, 0
-            level_start = perf_counter()
-            pbar = tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not self.demo)
-            with self.seqAT.working_on(self.device), self.bounded_x0.partial(partial_indices):
-                for i in range(0, num_to_check, self.concretecheck_batch):
-                    focus_sets_batch = focus_sets[i:i + self.concretecheck_batch].to(self.device)
-                    with self.bounded_x0.selecting(focus_sets_batch):
-                        self.seqAT.update_activation_rp(bounded_in=self.bounded_x0)
-                        lrp = self.seqAT.tail.backsubstitution_lrp()
-                        lb_l = self.bounded_x0.compute_lbound(lrp).squeeze(2)
-
-                    safes = lb_l.gt(0).all(dim=1)
-                    new_safe_bitmasks_lst.append(combs2bitmasks(focus_sets_batch[safes], bitmask_length).cpu())
-                    unk_combs_lst.append(focus_sets_batch[~safes].cpu())
-
-                    if self.demo:
-                        safe_cnt += new_safe_bitmasks_lst[-1].shape[0]
-                        unk_cnt += unk_combs_lst[-1].shape[0]
-                        posfix: dict = {"Safe:UNK": f"{safe_cnt}:{unk_cnt}"}
-                        pbar.set_postfix(posfix)
-                        pbar.update(focus_sets_batch.shape[0])
-                    if self.timeout != 0 and i == self.concretecheck_batch * 100:  # calculate remaining time to decide if to early stop
-                        if not self.demo: # calculate remaining time without pbar
-                            rate = (perf_counter() - level_start) / 100
-                            if ((num_to_check - i) / self.concretecheck_batch) * rate > self.timeout:
-                                return False
-                        elif (pbar.total - pbar.n) / pbar.format_dict['rate'] > self.timeout:
-                            signal.alarm(0)
-                            raise TimeoutException()
-            pbar.close()
-
-            if self.demo: total_nodes += num_to_check
-            unk_combs = torch.cat(unk_combs_lst, dim=0)
-            if unk_combs.shape[0] == 0:
-                success = True
-                break
-            if level == self.eps: break
-            safe_bitmasks = torch.cat(new_safe_bitmasks_lst, dim=0)
-            del focus_sets, focus_sets_batch, lb_l, lrp, new_safe_bitmasks_lst, unk_combs_lst, safes
-            torch.cuda.empty_cache()
-            level_start = perf_counter()
-            focus_sets = split_and_prune(unk_combs, safe_bitmasks, level, num_indices, self.demo)
-            if self.demo: branching_time += perf_counter() - level_start
-            del unk_combs
-            torch.cuda.empty_cache()
-        if self.demo:
-            print(f"Total: Nodes {total_nodes}; Time {perf_counter() - start:.2f}s; Branching Time {branching_time:.2f}s")
-            print(f"Safe: {success}")
-        return success
 
     def estimate_mean_boundconcrete_time(self, netname: str, sample_size_coeff: int=10, force_reestimate: bool=False) -> list[float]:
         mean_boundconcrete_time = [0.0] * (self.eps + 1)
@@ -352,46 +174,6 @@ class BoundingEngine:
         self.seqAT.remove_activation_rp()
         torch.cuda.empty_cache()
         return mean_boundconcrete_time
-
-    def check_partial(self, partial_indices: torch.Tensor, start_level: int=0, end_level: int=0) -> tuple[bool, torch.Tensor|None]:
-        """
-        Deprecated but worth keeping for reference.
-        Speed up version of verify1 for a given partial indices.
-        No demo, no seqAT.working_on context manager, no raising of TimeoutException and no cuda cache clearing.
-        This method checks if the partial indices are safe from start_level to end_level.
-
-        :param partial_indices: Indices of the pixels to be considered in the computation of diff.
-        :type partial_indices: torch.Tensor with shape (num_indices,)
-        :param start_level: The level to start verification.
-        :param end_level: The level to end verification. Default to 0 (root level).
-        :return: A tuple (is_safe, unk_combs) where is_safe is True if the partial indices are safe til end_level, False otherwise. unk_combs is a tensor of shape (num_unk, self.eps) on cpu with the unknown combinations only if the partial is not safe til level=self.eps, None otherwise.
-        """
-        num_indices = partial_indices.shape[0]
-        assert end_level >= start_level, "end_level must be greater than or equal to start_level"
-        bitmask_length = (num_indices + 63) // 64
-        if start_level == 0: focus_sets = torch.empty((1, 0), dtype=torch.long)
-        else: focus_sets = torch.combinations(torch.arange(num_indices), start_level)
-        safe_bitmasks: torch.Tensor = torch.empty((0, bitmask_length), dtype=torch.long)
-        for level in range(start_level, end_level + 1):
-            num_to_check = focus_sets.shape[0]
-            if num_to_check == 0: return True, None
-            unk_combs_lst: list[torch.Tensor] = []
-            new_safe_bitmasks_lst: list[torch.Tensor] = [safe_bitmasks]
-            with self.bounded_x0.partial(partial_indices):
-                for i in range(0, num_to_check, self.concretecheck_batch):
-                    focus_sets_batch = focus_sets[i:i + self.concretecheck_batch].to(self.device)
-                    with self.bounded_x0.selecting(focus_sets_batch):
-                        safes = self.bound_current_batch()
-                    new_safe_bitmasks_lst.append(combs2bitmasks(focus_sets_batch[safes], bitmask_length).cpu())
-                    unk_combs_lst.append(focus_sets_batch[~safes].cpu())
-
-            unk_combs = torch.cat(unk_combs_lst, dim=0)
-            if unk_combs.shape[0] == 0: return True, None
-            if level == self.eps: return False, unk_combs
-            if level == end_level: return False, None
-            safe_bitmasks = torch.cat(new_safe_bitmasks_lst, dim=0)
-            focus_sets = split_and_prune(unk_combs, safe_bitmasks, level, num_indices, False)
-        assert False, "Should not reach here"
 
     def bound_supernodes(self, supersets: torch.Tensor, level: int) -> torch.Tensor:
         """

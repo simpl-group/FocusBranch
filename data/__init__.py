@@ -108,14 +108,6 @@ class DatasetUtils:
             images = Normalize(self.mean, self.std)(images)
         return images, labels
 
-    def sample_pixels(self, num: int, device: str = "cpu") -> torch.Tensor:
-        indices = torch.randperm(self.num_pixels, device=device)[:num]
-        if self.channel_size == 1: return indices
-        indices = indices.repeat(self.channel_size, -1)
-        for i in range(1, self.channel_size):
-            indices[i] += i * self.num_pixels
-        return indices.view(-1)
-
 
 DATASETS: dict[DatasetName, DatasetUtils] = {
     DatasetName.MNIST: DatasetUtils(
