@@ -6,7 +6,7 @@ from coverd_finite_geometries import Geometry
 from covering_generator import CVD_MIN_T, CVD_MAX_T
 from covering_generator.estimator import estimate_generator_speed, estimate_extra_time
 from split_and_prune import estimate_SaP_speed, estimate_SaP_time, prepare4pruning, prune, canonical_split
-from gpu_worker import GpuWorkerPool
+from gpu_worker import WorkerError, check_worker_error, GpuWorkerPool
 from milp_dispatcher import MilpDispatcher
 from bounding_engine import BoundingEngine
 import planner
@@ -218,21 +218,25 @@ class Verifier:
 
         # the level-eps unknown nodes of super branching may repeat, so deduplicate them once they are all known
         self.__milp.start(self.verifier_start_time, deduplicate=plan['strategy'] == 'SCSaP' and self.__level == self.__e)
-        if plan['strategy'] == 'CCSaP':
-            unk_combs = self.__run_concrete_start(plan)
-        elif plan['strategy'] == 'SCSaP':
-            unk_combs = self.__run_super_branching(plan, results)
-        else: assert False, f'Unknown best strategy: {best_strategy}'
+        try:
+            if plan['strategy'] == 'CCSaP':
+                unk_combs = self.__run_concrete_start(plan)
+            elif plan['strategy'] == 'SCSaP':
+                unk_combs = self.__run_super_branching(plan, results)
+            else: assert False, f'Unknown best strategy: {best_strategy}'
 
-        if self.timed_out() or self.__milp.done():
-            results['timed_out'] = self.timed_out()
-        else:
-            handle_unk_combs_start = time.time()
-            results['timed_out'] = self.__handle_unk_combs(unk_combs, deduplicate=plan['strategy'] == 'SCSaP')
-            handle_unk_combs_duration = round(time.time() - handle_unk_combs_start, 3)
-            if handle_unk_combs_duration > 0.01:
-                print(f'Handling unk_combs duration: {handle_unk_combs_duration} s.')
-                results['handle_unk_combs_duration'] = handle_unk_combs_duration
+            if self.timed_out() or self.__milp.done():
+                results['timed_out'] = self.timed_out()
+            else:
+                handle_unk_combs_start = time.time()
+                results['timed_out'] = self.__handle_unk_combs(unk_combs, deduplicate=plan['strategy'] == 'SCSaP')
+                handle_unk_combs_duration = round(time.time() - handle_unk_combs_start, 3)
+                if handle_unk_combs_duration > 0.01:
+                    print(f'Handling unk_combs duration: {handle_unk_combs_duration} s.')
+                    results['handle_unk_combs_duration'] = handle_unk_combs_duration
+        except WorkerError as e:  # the image cannot be verified; stop everything and report it
+            print(f'A GPU worker failed, abandoning this image: {e}')
+            results['worker_error'] = str(e)
         self.__milp.settle()
 
         waiting_milp_start = time.time()
@@ -247,7 +251,7 @@ class Verifier:
             results['waiting_milp_duration'] = waiting_milp_duration
         if self.__milp.found_adversarial.is_set():
             results['adversarial_results'] = self.__milp.adversarial_results
-        elif not results['timed_out']:
+        elif not results['timed_out'] and 'worker_error' not in results:  # a failed GPU worker leaves the image unverified
             results['verified'] = True
         if len(self.__milp.innocent) + len(self.__milp.waiting) > 0:
             results['proved_with_milp'] = len(self.__milp.innocent)
@@ -333,7 +337,7 @@ class Verifier:
         while done_count < self.__num_gpu_workers and not self.__milp.done() and not self.timed_out():
             last_print_time = self.__print_progress(pbar, total_covering_size, num_finished, last_print_time)
             for conn in wait(workers, timeout=0.5):
-                message = conn.recv()
+                message = check_worker_error(conn.recv())
                 tag = message[0]
                 if tag == P.SUSPECTS:
                     self.__milp.submit(message[1])

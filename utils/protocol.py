@@ -4,6 +4,7 @@ Every message is either a bare tag or a tuple whose first element is a tag."""
 
 # per image
 TERMINATE = 'terminate'           # main -> worker: no more images
+ERROR = 'worker-error'            # gpu -> main: (ERROR, description) a job of the worker failed
 SKIP = 'skip'                     # main -> gpu: planning decided not to run the image
 STOP = 'stop'                     # main -> worker: abandon the current image
 STOPPED = 'stopped'               # worker -> main: acknowledged STOP

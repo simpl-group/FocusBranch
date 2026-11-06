@@ -71,6 +71,7 @@ class BoundingEngine:
         self.demo = demo
         self.pool_size = pool_size
         self.strategy = strategy
+        self.max_batch_size = max(concretecheck_batch, supercheck_batch)  # lowered when the GPU runs out of memory
 
     def bound_current_batch(self) -> torch.Tensor:
         """
@@ -95,19 +96,25 @@ class BoundingEngine:
         """
         if batch_size is None:
             batch_size = self.concretecheck_batch if level is None else self.supercheck_batch
+        batch_size = min(batch_size, self.max_batch_size)
         safes = torch.empty(focus.shape[0], dtype=torch.bool, device=self.device)
         if focus.device != self.device:
             focus = focus.to(self.device)
-        if level is None:
-            for i in range(0, focus.shape[0], batch_size):
-                with self.bounded_x0.selecting(focus[i:i + batch_size]):
-                    safes[i:i + batch_size] = self.bound_current_batch()
-            return safes
         self.bounded_x0.level = level
         try:
-            for i in range(0, focus.shape[0], batch_size):
-                with self.bounded_x0.partial(focus[i:i + batch_size]):
-                    safes[i:i + batch_size] = self.bound_current_batch()
+            i = 0
+            while i < focus.shape[0]:
+                try:
+                    with self.bounded_x0.selecting(focus[i:i + batch_size]) if level is None else self.bounded_x0.partial(focus[i:i + batch_size]):
+                        safes[i:i + batch_size] = self.bound_current_batch()
+                except torch.OutOfMemoryError:
+                    if batch_size == 1: raise
+                    self.seqAT.remove_activation_rp()
+                    torch.cuda.empty_cache()
+                    batch_size = self.max_batch_size = max(1, batch_size // 2)  # sticky: the GPU is shared or too small
+                    print(f"CUDA out of memory, bounding at most {batch_size} nodes per batch from now on", flush=True)
+                    continue
+                i += batch_size
         finally:
             self.bounded_x0.level = None
         return safes

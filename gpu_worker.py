@@ -9,6 +9,7 @@ from multiprocessing.connection import Client, Connection, Listener
 from time import perf_counter
 import math
 import threading
+import traceback
 import numpy as np
 import torch
 from covering_generator import launch_covering_generator, CVD_MIN_T
@@ -118,6 +119,16 @@ class GpuWorker:
         with self.__send_lock:  # the job thread and the message loop both talk to the verifier
             self.conn.send(message)
 
+    def __job(self, target, *args) -> threading.Thread:
+        """A job thread that reports its failure to the verifier instead of dying silently."""
+        def guarded():
+            try:
+                target(*args)
+            except Exception as e:
+                traceback.print_exc()
+                self.send((P.ERROR, f"gpu worker {self.worker_id}: {e!r}"))
+        return threading.Thread(target=guarded, daemon=True)
+
     def serve(self, port: int):
         with Client(('localhost', port)) as self.conn:
             self.send(self.worker_id)
@@ -196,18 +207,18 @@ class GpuWorker:
         if message[0] == P.START_CONCRETE:
             level = int(message[1])
             if level == 1:  # level-1 nodes were all bounded while probing
-                job = threading.Thread(target=lambda: None, daemon=True)
+                job = self.__job(lambda: None)
             else:
                 all_combs = torch.combinations(torch.arange(engine.num_pixels), level)
                 share = all_combs.shape[0] // self.num_workers
                 end = all_combs.shape[0] if self.worker_id == self.num_workers - 1 else (self.worker_id + 1) * share
-                job = threading.Thread(target=self.__check_concrete, args=(all_combs[self.worker_id * share:end], stop_event), daemon=True)
+                job = self.__job(self.__check_concrete, all_combs[self.worker_id * share:end], stop_event)
                 del all_combs
         elif message[0] == P.START_SUPER:
             _, geometry, chosen_indices, refinement_strategy = message
             super_branching = SuperBranching(self, geometry, chosen_indices, refinement_strategy, stop_event)
             level = geometry.t
-            job = threading.Thread(target=super_branching.run, daemon=True)
+            job = self.__job(super_branching.run)
         else: assert False, f"Unknown message {message}"
         job.start()
         while True:
@@ -221,22 +232,37 @@ class GpuWorker:
             job.join()  # the previous level is finished before the verifier sends the next one
             super_branching = None
             if message[0] == P.SPLIT_PRUNE_CHECK:
-                new_combs, reference_bitmasks, target_s_cnt = prepare4pruning(torch.from_numpy(message[1]), engine.num_pixels)
-                # striding over the children balances the pruned workload among workers
-                new_combs = new_combs.to(engine.device)[self.worker_id::self.num_workers].contiguous()
-                combs = prune(new_combs, reference_bitmasks, target_s_cnt, level)
+                try:
+                    new_combs, reference_bitmasks, target_s_cnt = prepare4pruning(torch.from_numpy(message[1]), engine.num_pixels)
+                    # striding over the children balances the pruned workload among workers
+                    new_combs = new_combs.to(engine.device)[self.worker_id::self.num_workers].contiguous()
+                    combs = prune(new_combs, reference_bitmasks, target_s_cnt, level)
+                except Exception as e:  # e.g. CUDA OOM: report it like a failing job instead of dying, then wait for STOP
+                    traceback.print_exc()
+                    self.send((P.ERROR, f"gpu worker {self.worker_id}: {e!r}"))
+                    continue
                 self.send(combs.shape[0])
             elif message[0] == P.BOUND_CONCRETE:
                 combs = torch.from_numpy(message[1])
             else: assert False, f"Unknown message {message}"
             level += 1
-            job = threading.Thread(target=self.__check_concrete, args=(combs, stop_event), daemon=True)
+            job = self.__job(self.__check_concrete, combs, stop_event)
             job.start()
         job.join()
         self.send(P.STOPPED)
 
     def __check_concrete(self, combs: torch.Tensor, stop_event: threading.Event):
         self.send(self.engine.unknown_concrete(combs, stop_event))
+
+
+class WorkerError(RuntimeError):
+    pass
+
+
+def check_worker_error(message):
+    if isinstance(message, tuple) and len(message) > 0 and isinstance(message[0], str) and message[0] == P.ERROR:
+        raise WorkerError(message[1])
+    return message
 
 
 class GpuWorkerPool:
@@ -253,7 +279,7 @@ class GpuWorkerPool:
             worker.send(message)
 
     def gather(self) -> list:
-        return [worker.recv() for worker in self.workers]
+        return [check_worker_error(worker.recv()) for worker in self.workers]
 
     def scatter(self, tag: str, rows: np.ndarray | torch.Tensor):
         """Split rows evenly (the remainder goes to the last worker) and send (tag, rows_i) to worker i."""
