@@ -12,6 +12,7 @@ from functools import lru_cache
 import threading
 import math
 import signal
+import numpy as np
 import torch
 from tqdm import tqdm
 
@@ -93,7 +94,7 @@ class Verifier:
         self.pool_size = pool_size
         self.strategy = strategy
 
-    def __check_current_batch(self) -> torch.Tensor:
+    def bound_current_batch(self) -> torch.Tensor:
         """
         Check if each of the current batch is safe.
 
@@ -104,19 +105,57 @@ class Verifier:
         lb_l = self.bounded_x0.compute_lbound(lrp).squeeze(2)
         return lb_l.gt(0).all(dim=1)  # safe iff the true label beats every other label
 
+    def bound_nodes(self, focus: torch.Tensor, level: int | None = None, batch_size: int | None = None) -> torch.Tensor:
+        """
+        Bound the nodes (focus[i], level) in batches.
+
+        :param focus: (num_nodes, |S|) focus sets.
+        :param level: The level shared by the nodes. None for concrete nodes (level |S|), which are bounded by selecting
+            their pixels; otherwise the nodes are bounded as super nodes, restricted to their focus sets.
+        :param batch_size: Defaults to the concrete or super batch size depending on the node type.
+        :return: A boolean tensor on self.device, True for the nodes proven safe.
+        """
+        if batch_size is None:
+            batch_size = self.concretecheck_batch if level is None else self.supercheck_batch
+        safes = torch.empty(focus.shape[0], dtype=torch.bool, device=self.device)
+        if focus.device != self.device:
+            focus = focus.to(self.device)
+        if level is None:
+            for i in range(0, focus.shape[0], batch_size):
+                with self.bounded_x0.selecting(focus[i:i + batch_size]):
+                    safes[i:i + batch_size] = self.bound_current_batch()
+            return safes
+        self.bounded_x0.level = level
+        try:
+            for i in range(0, focus.shape[0], batch_size):
+                with self.bounded_x0.partial(focus[i:i + batch_size]):
+                    safes[i:i + batch_size] = self.bound_current_batch()
+        finally:
+            self.bounded_x0.level = None
+        return safes
+
+    def unknown_concrete(self, combs: torch.Tensor, stop_event: threading.Event | None = None) -> np.ndarray:
+        """The concrete nodes among `combs` that cannot be proven safe (the ones bounded so far if stopped early)."""
+        unknown: list[torch.Tensor] = [torch.empty((0, combs.shape[1]), dtype=torch.int64)]
+        for i in range(0, combs.shape[0], self.concretecheck_batch):
+            if stop_event is not None and stop_event.is_set(): break
+            batch = combs[i:i + self.concretecheck_batch].to(self.device)
+            unknown.append(batch[~self.bound_nodes(batch)].cpu())
+        return torch.cat(unknown, dim=0).numpy()
+
     def first_safe_level(self) -> int:
         for level in range(self.eps + 1):
             all_safe = True
             if level == 0:
-                combs_to_check = torch.empty((1, 0), dtype=torch.int64)
+                focus_sets = torch.empty((1, 0), dtype=torch.int64)
             elif level == 1:
-                combs_to_check = torch.arange(self.num_pixels).reshape(-1, 1)
+                focus_sets = torch.arange(self.num_pixels).reshape(-1, 1)
             else:
-                combs_to_check = selected_indices_sample(self.num_pixels, level, self.rep_each_level)
-            for i in range(0, combs_to_check.shape[0], self.concretecheck_batch):
-                combs_to_check_batch = combs_to_check[i:i + self.concretecheck_batch].to(self.device)
-                with self.bounded_x0.selecting(combs_to_check_batch):
-                    safes = self.__check_current_batch()
+                focus_sets = selected_indices_sample(self.num_pixels, level, self.rep_each_level)
+            for i in range(0, focus_sets.shape[0], self.concretecheck_batch):
+                focus_sets_batch = focus_sets[i:i + self.concretecheck_batch].to(self.device)
+                with self.bounded_x0.selecting(focus_sets_batch):
+                    safes = self.bound_current_batch()
                 if not safes.all():
                     all_safe = False
                     break
@@ -144,21 +183,21 @@ class Verifier:
         with self.bounded_x0.partial(partial_indices):
             for level in range(start_level, self.eps + 1):
                 if level == 0:
-                    combs_to_check = torch.empty((1, 0), dtype=torch.int64)
+                    focus_sets = torch.empty((1, 0), dtype=torch.int64)
                     estimated_nodes_this_level = 1
                 elif level == 1:
-                    combs_to_check = torch.arange(k).reshape(-1, 1)
+                    focus_sets = torch.arange(k).reshape(-1, 1)
                     estimated_nodes_this_level = k
                 else:
-                    combs_to_check = selected_indices_sample(k, level, self.rep_each_level)
+                    focus_sets = selected_indices_sample(k, level, self.rep_each_level)
                     estimated_nodes_this_level = math.ceil(math.comb(k, level) * (1 - last_success_rate) ** 2)
-                sample_nodes_this_level = combs_to_check.shape[0]
+                sample_nodes_this_level = focus_sets.shape[0]
                 num_safe_nodes = 0
                 level_start = perf_counter()
                 for i in range(0, sample_nodes_this_level, self.concretecheck_batch):
-                    combs_to_check_batch = combs_to_check[i:i + self.concretecheck_batch].to(self.device)
-                    with self.bounded_x0.selecting(combs_to_check_batch):
-                        num_safe_nodes += int(self.__check_current_batch().sum().item())
+                    focus_sets_batch = focus_sets[i:i + self.concretecheck_batch].to(self.device)
+                    with self.bounded_x0.selecting(focus_sets_batch):
+                        num_safe_nodes += int(self.bound_current_batch().sum().item())
 
                 if num_safe_nodes == 0: first_any_safe_level += 1
                 current_speed = sample_nodes_this_level / (perf_counter() - level_start)
@@ -175,15 +214,15 @@ class Verifier:
         return estimated_verification_time, first_any_safe_level
 
     def probeps(self, start_level: int=1) -> int:
-        combs_to_check = torch.arange(self.num_pixels).reshape(-1, 1)
+        focus_sets = torch.arange(self.num_pixels).reshape(-1, 1)
         start = perf_counter()
         for level in range(start_level, self.eps + 1):
-            sample_nodes_this_level = combs_to_check.shape[0]
+            sample_nodes_this_level = focus_sets.shape[0]
             num_safe_nodes = 0
             all_lb_l_list = []
             for i in range(0, sample_nodes_this_level, self.concretecheck_batch):
-                combs_to_check_batch = combs_to_check[i:i + self.concretecheck_batch].to(self.device)
-                with self.bounded_x0.selecting(combs_to_check_batch):
+                focus_sets_batch = focus_sets[i:i + self.concretecheck_batch].to(self.device)
+                with self.bounded_x0.selecting(focus_sets_batch):
                     self.seqAT.update_activation_rp(bounded_in=self.bounded_x0)
                     lb_l = self.bounded_x0.compute_lbound(self.seqAT.tail.backsubstitution_lrp()).squeeze(2).cpu()
                     all_lb_l_list.append(lb_l)
@@ -193,15 +232,16 @@ class Verifier:
             num_lt_0 = int(lb_l_min_values.le(0).sum().item())
             print(f"Level {level} min: {lb_l_min_values.min().item():.2f}\t(safe:unk)/all: ({num_safe_nodes}:{num_lt_0})/{sample_nodes_this_level}, using {perf_counter() - start:.2f}s")
             start = perf_counter()
-            least_indices = combs_to_check[lb_l_min_values.topk(min(5, num_lt_0), largest=False, sorted=False).indices]
+            least_indices = focus_sets[lb_l_min_values.topk(min(5, num_lt_0), largest=False, sorted=False).indices]
             if num_safe_nodes == sample_nodes_this_level:
                 return 0
             if level == self.eps:
                 return num_lt_0
-            combs_to_check, _, _ = prepare4pruning(least_indices, self.num_pixels)
+            focus_sets, _, _ = prepare4pruning(least_indices, self.num_pixels)
         assert False, "Should never reach here"
 
-    def __get_min_lb_ls_from(self, concrete_combs: torch.Tensor):
+    def min_margin_lbs(self, concrete_combs: torch.Tensor) -> torch.Tensor:
+        """The smallest margin lower bound of each concrete node (on cpu); a node is unknown iff it is <= 0."""
         lb_l_min_values_lst: list[torch.Tensor] = [torch.empty((0), dtype=torch.float32)]
         for i in range(0, concrete_combs.shape[0], self.concretecheck_batch):
             combs_batch = concrete_combs[i:i + self.concretecheck_batch].to(self.device)
@@ -236,15 +276,15 @@ class Verifier:
         bitmask_length = (num_indices + 63) // 64
         if math.comb(num_indices, start_level) > 10 * 1024 ** 3 * 8 * num_indices:
             return False
-        combs_to_check = torch.combinations(torch.arange(num_indices), start_level)
-        if start_level == 0: combs_to_check = torch.empty((1, 0), dtype=torch.int64)
+        focus_sets = torch.combinations(torch.arange(num_indices), start_level)
+        if start_level == 0: focus_sets = torch.empty((1, 0), dtype=torch.int64)
         safe_bitmasks: torch.Tensor = torch.empty((0, bitmask_length), dtype=torch.long)
         success = False
         if self.demo:
             start = perf_counter()
             branching_time, total_nodes = 0.0, 0
         for level in range(start_level, self.eps + 1):
-            num_to_check = combs_to_check.shape[0]
+            num_to_check = focus_sets.shape[0]
             if num_to_check == 0:
                 success = True
                 break
@@ -256,22 +296,22 @@ class Verifier:
             pbar = tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not self.demo)
             with self.seqAT.working_on(self.device), self.bounded_x0.partial(partial_indices):
                 for i in range(0, num_to_check, self.concretecheck_batch):
-                    combs_to_check_batch = combs_to_check[i:i + self.concretecheck_batch].to(self.device)
-                    with self.bounded_x0.selecting(combs_to_check_batch):
+                    focus_sets_batch = focus_sets[i:i + self.concretecheck_batch].to(self.device)
+                    with self.bounded_x0.selecting(focus_sets_batch):
                         self.seqAT.update_activation_rp(bounded_in=self.bounded_x0)
                         lrp = self.seqAT.tail.backsubstitution_lrp()
                         lb_l = self.bounded_x0.compute_lbound(lrp).squeeze(2)
 
                     safes = lb_l.gt(0).all(dim=1)
-                    new_safe_bitmasks_lst.append(combs2bitmasks(combs_to_check_batch[safes], bitmask_length).cpu())
-                    unk_combs_lst.append(combs_to_check_batch[~safes].cpu())
+                    new_safe_bitmasks_lst.append(combs2bitmasks(focus_sets_batch[safes], bitmask_length).cpu())
+                    unk_combs_lst.append(focus_sets_batch[~safes].cpu())
 
                     if self.demo:
                         safe_cnt += new_safe_bitmasks_lst[-1].shape[0]
                         unk_cnt += unk_combs_lst[-1].shape[0]
                         posfix: dict = {"Safe:UNK": f"{safe_cnt}:{unk_cnt}"}
                         pbar.set_postfix(posfix)
-                        pbar.update(combs_to_check_batch.shape[0])
+                        pbar.update(focus_sets_batch.shape[0])
                     if self.timeout != 0 and i == self.concretecheck_batch * 100:  # calculate remaining time to decide if to early stop
                         if not self.demo: # calculate remaining time without pbar
                             rate = (perf_counter() - level_start) / 100
@@ -289,10 +329,10 @@ class Verifier:
                 break
             if level == self.eps: break
             safe_bitmasks = torch.cat(new_safe_bitmasks_lst, dim=0)
-            del combs_to_check, combs_to_check_batch, lb_l, lrp, new_safe_bitmasks_lst, unk_combs_lst, safes
+            del focus_sets, focus_sets_batch, lb_l, lrp, new_safe_bitmasks_lst, unk_combs_lst, safes
             torch.cuda.empty_cache()
             level_start = perf_counter()
-            combs_to_check = split_and_prune(unk_combs, safe_bitmasks, level, num_indices, self.demo)
+            focus_sets = split_and_prune(unk_combs, safe_bitmasks, level, num_indices, self.demo)
             if self.demo: branching_time += perf_counter() - level_start
             del unk_combs
             torch.cuda.empty_cache()
@@ -310,12 +350,9 @@ class Verifier:
             start_level = CVD_MIN_T
         else: assert False, f"Unsupported strategy {self.strategy}"
         for level in range(start_level, self.eps + 1):
-            combs_to_check = selected_indices_sample(self.num_pixels, level, self.rep_each_level, num_workers=num_workers, worker_id=worker_id)
-            sample_counts[level] = combs_to_check.shape[0]
-            for i in range(0, combs_to_check.shape[0], self.concretecheck_batch):
-                combs_to_check_batch = combs_to_check[i:i + self.concretecheck_batch].to(self.device)
-                with self.bounded_x0.selecting(combs_to_check_batch):
-                    sample_successes[level] += int(self.__check_current_batch().sum().item())
+            focus_sets = selected_indices_sample(self.num_pixels, level, self.rep_each_level, num_workers=num_workers, worker_id=worker_id)
+            sample_counts[level] = focus_sets.shape[0]
+            sample_successes[level] = int(self.bound_nodes(focus_sets).sum().item())
             if sample_successes[level] == sample_counts[level]:
                 # fake the rest
                 sample_counts[level+1:self.eps + 1] = [min(self.rep_each_level, math.comb(self.num_pixels, l)) for l in range(level + 1, self.eps + 1)]
@@ -323,51 +360,46 @@ class Verifier:
                 break  # All nodes are safe, no need to go deeper
         return sample_counts, sample_successes
 
-    def estimate_mean_concretecheck_time(self, netname: str, sample_size_coeff: int=10, force_reestimate: bool=False) -> list[float]:
-        mean_concretecheck_time = [0.0] * (self.eps + 1)
+    def estimate_mean_boundconcrete_time(self, netname: str, sample_size_coeff: int=10, force_reestimate: bool=False) -> list[float]:
+        mean_boundconcrete_time = [0.0] * (self.eps + 1)
         start_level = 0
         if not force_reestimate:
             for level in range(self.eps + 1):
                 mean_time = get_mean_concretecheck_time(net=netname, batch_size=self.concretecheck_batch, eps=self.eps, level=level)
                 if mean_time is not None:
-                    mean_concretecheck_time[level] = mean_time
+                    mean_boundconcrete_time[level] = mean_time
                     start_level = level + 1
                 else: break
             if start_level > self.eps:
-                return mean_concretecheck_time
+                return mean_boundconcrete_time
         print(f"Estimating mean ConcreteCheck time for net={netname}, batch_size={self.concretecheck_batch}, eps={self.eps} on level", end="")
         sample_size = sample_size_coeff * self.concretecheck_batch
         for level in range(start_level, self.eps + 1):
             print(f" {level}: ", end="", flush=True)
-            combs_to_check = selected_indices_sample(self.num_pixels, level, sample_size) if level > 0 else torch.empty((1, 0), dtype=torch.int64)
+            focus_sets = selected_indices_sample(self.num_pixels, level, sample_size) if level > 0 else torch.empty((1, 0), dtype=torch.int64)
             start = perf_counter()
-            for i in range(0, combs_to_check.shape[0], self.concretecheck_batch):
-                combs_to_check_batch = combs_to_check[i:i + self.concretecheck_batch].to(self.device)
-                with self.bounded_x0.selecting(combs_to_check_batch):
-                    self.__check_current_batch()
-            mean_concretecheck_time[level] = (perf_counter() - start) / combs_to_check.shape[0]
-            print(f"{mean_concretecheck_time[level]:.7f}s,", end="" if level != self.eps else "\n", flush=True)
-            insert_mean_concretecheck_time(net=netname, batch_size=self.concretecheck_batch, eps=self.eps, level=level, mean_time=mean_concretecheck_time[level])
+            self.bound_nodes(focus_sets)
+            mean_boundconcrete_time[level] = (perf_counter() - start) / focus_sets.shape[0]
+            print(f"{mean_boundconcrete_time[level]:.7f}s,", end="" if level != self.eps else "\n", flush=True)
+            insert_mean_concretecheck_time(net=netname, batch_size=self.concretecheck_batch, eps=self.eps, level=level, mean_time=mean_boundconcrete_time[level])
         self.bounded_x0.clear_cache()
         self.seqAT.remove_activation_rp()
         torch.cuda.empty_cache()
-        return mean_concretecheck_time
+        return mean_boundconcrete_time
 
-    def superset_sample_all_k(self, level: int) -> tuple[list[int], list[int], list[float]]:
-        self.bounded_x0.level = level
+    def super_sample_all_k(self, level: int) -> tuple[list[int], list[int], list[float]]:
         sampling_counts, sampling_successes , sampling_time = [], [], []
         rep_each_k = self.rep_each_k
         for k in range(level, self.max_k + 1):
             k_sized_supersets = batched_randsample(self.num_pixels, k, rep_each_k)
             batched_supercheck_start = perf_counter()
-            sampling_successes.append(int(self.check_supersets(k_sized_supersets).sum().item()))
+            sampling_successes.append(int(self.bound_supernodes(k_sized_supersets, level).sum().item()))
             sampling_time.append(perf_counter() - batched_supercheck_start)
             sampling_counts.append(k_sized_supersets.shape[0])
             if sampling_successes[-1] == 0:
                 rep_each_k = max(1, self.rep_each_k // 20)  # if no safe supersets, use smaller batch size to sample more
             else:
                 self.max_sizes_to_batch[level] = k
-        self.bounded_x0.level = None
         return sampling_counts, sampling_successes, sampling_time
 
     def check_partial(self, partial_indices: torch.Tensor, start_level: int=0, end_level: int=0) -> tuple[bool, torch.Tensor|None]:
@@ -386,57 +418,50 @@ class Verifier:
         num_indices = partial_indices.shape[0]
         assert end_level >= start_level, "end_level must be greater than or equal to start_level"
         bitmask_length = (num_indices + 63) // 64
-        if start_level == 0: combs_to_check = torch.empty((1, 0), dtype=torch.long)
-        else: combs_to_check = torch.combinations(torch.arange(num_indices), start_level)
+        if start_level == 0: focus_sets = torch.empty((1, 0), dtype=torch.long)
+        else: focus_sets = torch.combinations(torch.arange(num_indices), start_level)
         safe_bitmasks: torch.Tensor = torch.empty((0, bitmask_length), dtype=torch.long)
         for level in range(start_level, end_level + 1):
-            num_to_check = combs_to_check.shape[0]
+            num_to_check = focus_sets.shape[0]
             if num_to_check == 0: return True, None
             unk_combs_lst: list[torch.Tensor] = []
             new_safe_bitmasks_lst: list[torch.Tensor] = [safe_bitmasks]
             with self.bounded_x0.partial(partial_indices):
                 for i in range(0, num_to_check, self.concretecheck_batch):
-                    combs_to_check_batch = combs_to_check[i:i + self.concretecheck_batch].to(self.device)
-                    with self.bounded_x0.selecting(combs_to_check_batch):
-                        safes = self.__check_current_batch()
-                    new_safe_bitmasks_lst.append(combs2bitmasks(combs_to_check_batch[safes], bitmask_length).cpu())
-                    unk_combs_lst.append(combs_to_check_batch[~safes].cpu())
+                    focus_sets_batch = focus_sets[i:i + self.concretecheck_batch].to(self.device)
+                    with self.bounded_x0.selecting(focus_sets_batch):
+                        safes = self.bound_current_batch()
+                    new_safe_bitmasks_lst.append(combs2bitmasks(focus_sets_batch[safes], bitmask_length).cpu())
+                    unk_combs_lst.append(focus_sets_batch[~safes].cpu())
 
             unk_combs = torch.cat(unk_combs_lst, dim=0)
             if unk_combs.shape[0] == 0: return True, None
             if level == self.eps: return False, unk_combs
             if level == end_level: return False, None
             safe_bitmasks = torch.cat(new_safe_bitmasks_lst, dim=0)
-            combs_to_check = split_and_prune(unk_combs, safe_bitmasks, level, num_indices, False)
+            focus_sets = split_and_prune(unk_combs, safe_bitmasks, level, num_indices, False)
         assert False, "Should not reach here"
 
-    def check_supersets(self, supersets: torch.Tensor) -> torch.Tensor:
+    def bound_supernodes(self, supersets: torch.Tensor, level: int) -> torch.Tensor:
         """
-        Check safe for given supersets with batch processing. (batched SuperCheck)
-        bounded_x0.level should be set carefully before calling this method.
-        No splitting throughout sub-levels for any superset (current check can be seen as sub-level 0, deepest sub-level equals bounded_x0.level).
+        Check safe for given super nodes (supersets[i], level) with batch processing. (batched SuperCheck)
+        No splitting throughout sub-levels for any super node.
         Returns a boolean tensor on cpu.
 
-        :param supersets: Each row is a set of partial indices.
+        :param supersets: Each row is the focus set of a node.
         :type supersets: torch.Tensor of shape (num_supersets, num_indices)
-        :return: A 1D tensor on cpu of shape (num_supersets,) with True if the corresponding partial indices is safe, False otherwise.
+        :param level: The level shared by all the nodes.
+        :return: A 1D tensor on cpu of shape (num_supersets,) with True if the corresponding node is safe, False otherwise.
         """
         assert supersets.ndim == 2, "supersets must be of shape (num_supersets, num_indices)"
-        num_supersets = supersets.shape[0]
-        safes_book = torch.zeros(num_supersets, dtype=torch.bool, device=self.device)
-        if supersets.device != self.device:
-            supersets = supersets.to(self.device)
-        for i in range(0, num_supersets, self.supercheck_batch):
-            with self.bounded_x0.partial(supersets[i:i + self.supercheck_batch]):
-                safes_book[i:i + self.supercheck_batch] = self.__check_current_batch()
-        return safes_book.cpu()
+        return self.bound_nodes(supersets, level, self.supercheck_batch).cpu()
 
-    def __handle_supersets(self, num_indices: int):
+    def __handle_supernodes(self, num_indices: int):
         if self.stop_event.is_set(): return
         start = perf_counter()
         supersets = torch.tensor(self.batch_pool[num_indices])
         self.batch_pool[num_indices].clear()
-        safes = self.check_supersets(supersets=supersets)
+        safes = self.bound_supernodes(supersets, self.__level)
         self.conn.send((num_indices, supersets.shape[0], safes.sum().item(), perf_counter() - start))
         if not safes.all():  # need to refine
             if num_indices == self.__level:  # concrete combs, cannot refine
@@ -452,9 +477,9 @@ class Verifier:
                 for unk_superset in supersets[~safes].tolist():
                     refined_supersets.extend(get_refinement_subsets(unk_superset, self.refinement_coverings[num_indices]))
                 for refined_superset in refined_supersets:
-                    self.__handle_superset(refined_superset)
+                    self.__handle_supernode(refined_superset)
 
-    def __handle_superset(self, superset: list[int]):
+    def __handle_supernode(self, superset: list[int]):
         if self.stop_event.is_set(): return
         num_indices = len(superset)
         # message: (num_indices, runs, successes, duration)
@@ -463,11 +488,11 @@ class Verifier:
         elif num_indices <= self.max_size_to_batch:  # batched SuperCheck
             self.batch_pool[num_indices].append(superset)
             if len(self.batch_pool[num_indices]) == self.pool_size:
-                self.__handle_supersets(num_indices)
+                self.__handle_supernodes(num_indices)
         else:  # no need to do SuperCheck (default to not safe), just refine
             self.conn.send((num_indices, 1, 0, 0.))
             for refined_superset in get_refinement_subsets(superset, self.refinement_coverings[num_indices]):
-                self.__handle_superset(refined_superset)
+                self.__handle_supernode(refined_superset)
 
     def __prove_geometry(self, geometry: Geometry, chosen_indices: list[int], num_workers: int, worker_id: int):
         num_of_blocks = math.floor(geometry.number_of_blocks() / num_workers)
@@ -485,36 +510,25 @@ class Verifier:
                 for _ in range(num_of_blocks):
                     if self.stop_event.is_set(): return
                     superset = blocks_conn.recv()  # assert superset is sorted and of type list[int]
-                    self.__handle_superset(superset)
+                    self.__handle_supernode(superset)
                 assert blocks_conn.recv() == 'done'
                 blocks_conn.send('done')
 
         # handle remaining supersets in the pool in descending order according to the key (num_indices). The batch_pool is created in this order
         for num_indices in self.batch_pool:
             if len(self.batch_pool[num_indices]) > 0:
-                self.__handle_supersets(num_indices)
+                self.__handle_supernodes(num_indices)
         self.conn.send('done')
 
     def __safe_prove_geometry(self, *args, **kwargs):
         try:
-            self.bounded_x0.level = self.__level
             self.__prove_geometry(*args, **kwargs)
         except EOFError:
             pass  # self.blocks_generator_process terminated early
-        finally:
-            self.bounded_x0.level = None
 
     def __prove_concrete_combs(self, concrete_combs: torch.Tensor):
-        unk_combs_lst: list[torch.Tensor] = [torch.empty((0, concrete_combs.shape[1]), dtype=torch.int64)]
-        for i in range(0, concrete_combs.shape[0], self.concretecheck_batch):
-            if self.stop_event.is_set(): break
-            combs_batch = concrete_combs[i:i + self.concretecheck_batch].to(self.device)
-            with self.bounded_x0.selecting(combs_batch):
-                safes = self.__check_current_batch()
-            unk_combs_lst.append(combs_batch[~safes].cpu())
-        unk_combs = torch.cat(unk_combs_lst, dim=0).numpy()
         # send the unknown combinations to the main process
-        self.conn.send(unk_combs)
+        self.conn.send(self.unknown_concrete(concrete_combs, self.stop_event))
 
     def work_as_worker(self, port: int, num_workers: int=1, worker_id: int=0):
         with Client(('localhost', port)) as self.conn:
@@ -528,11 +542,11 @@ class Verifier:
                 self.adapt_target_images(images=torch_img, true_label=label, check_first=False)
                 if not self.strategy == Strategy.toptCoVerD:
                     if worker_id == 0:
-                        self.conn.send(1. if bool(self.__check_current_batch().item()) else -1.)
+                        self.conn.send(1. if bool(self.bound_nodes(torch.empty((1, 0), dtype=torch.int64)).item()) else -1.)
                     message = self.conn.recv()
                     while message[0] == 'CC':
                         combs2check = torch.from_numpy(message[1])
-                        self.conn.send(self.__get_min_lb_ls_from(combs2check).numpy())
+                        self.conn.send(self.min_margin_lbs(combs2check).numpy())
                         message = self.conn.recv()
                     assert message[0] == 'finished probing', f"Expected 'finished probing' message, but got {message}"
                     if message[1] > 1:
@@ -540,7 +554,7 @@ class Verifier:
                 message = self.conn.recv()
                 while message[0] == 'sample-all-k':
                     l = int(message[1])
-                    self.conn.send(self.superset_sample_all_k(l))
+                    self.conn.send(self.super_sample_all_k(l))
                     message = self.conn.recv()
                 if message[0] == 'skip':
                     message = self.conn.recv()

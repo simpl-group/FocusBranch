@@ -41,7 +41,7 @@ class LZeroRobustnessAnalyzer:
         splitting_speed, pruning_speed = estimate_SaP_speed(epsilon=self.__e, num_indices=self.__v, force_reestimate=force_reestimate)
         self.estimate_SaP_time = lambda num_unk, level: estimate_SaP_time(num_unk, level, self.__v, splitting_speed[level], pruning_speed[level])
         self.estimate_pruning_time = lambda num_new_combs, num_references, level: num_new_combs * num_references / pruning_speed[level]
-        self.mean_concretecheck_time: list[float]|None = None
+        self.mean_boundconcrete_time: list[float]|None = None
 
     def update_image(self, image: np.ndarray, label: int):
         for gpu_worker in self.__gpu_workers:
@@ -87,7 +87,7 @@ class LZeroRobustnessAnalyzer:
         return level, min_lb_l, unk_combs1
 
     def analyze(self):
-        assert self.mean_concretecheck_time is not None, "mean_concretecheck_time should have been set by now."
+        assert self.mean_boundconcrete_time is not None, "mean_boundconcrete_time should have been set by now."
         print('Planning stage started')
         self.analyzer_start_time = time.time()
         sample_counts, sample_successes = [0] * (self.__e + 1), [0] * (self.__e + 1)
@@ -141,7 +141,7 @@ class LZeroRobustnessAnalyzer:
                     estimated_SaP_time_per_l[l] = self.estimate_SaP_time(estimated_unk_nodes_this_level, l)
                     # print(f"Estimated unknowns   on level {l}: {estimated_unk_nodes_this_level:.2f}")
                     # print(f"Estimated SaP   time on level {l}: {estimated_SaP_time_per_l[l]:.2f} seconds")
-            estimated_CC_time_per_l[l] = self.mean_concretecheck_time[l] * estimated_nodes_this_level
+            estimated_CC_time_per_l[l] = self.mean_boundconcrete_time[l] * estimated_nodes_this_level
             # print(f"Estimated check time on level {l}: {estimated_CC_time_per_l[l]:.2f} seconds")
             if concrete_safe_rate[l] == 1.0:
                 break  # this level is estimated to be 100% robust and verified, no need to go deeper
@@ -164,7 +164,7 @@ class LZeroRobustnessAnalyzer:
             tail_SaP_time = sum(estimated_SaP_time_per_l[l:])
             if tail_SaP_time > 1.0: tail_SaP_time /= self.__num_gpu_workers
             if not self.__strategy.require_supercheck():
-                CCSaP_time = (self.mean_concretecheck_time[l] * math.comb(self.__v, l) + tail_CC_time) / self.__num_gpu_workers + tail_SaP_time
+                CCSaP_time = (self.mean_boundconcrete_time[l] * math.comb(self.__v, l) + tail_CC_time) / self.__num_gpu_workers + tail_SaP_time
                 candidate_strategies.append((CCSaP_time, 'CCSaP', l))
             if l in super_success_rate:
                 fraction_robusts[l] = planner.fraction_robust(super_success_rate[l], l, self.__refinement_db_max_v)
@@ -397,8 +397,8 @@ class LZeroRobustnessAnalyzer:
                         gpu_worker.send(('CC', pruned_combs[i * num_each :]))
                     else:
                         gpu_worker.send(('CC', pruned_combs[i * num_each : (i + 1) * num_each]))
-            if self.timed_out(estimated_more=(num_after_prune / self.__num_gpu_workers) * self.mean_concretecheck_time[self.__level]):
-                print(f'Level {self.__level} estimated concrete check time: {(num_after_prune / self.__num_gpu_workers) * self.mean_concretecheck_time[self.__level]:.2f} s, which is too long, terminating early.')
+            if self.timed_out(estimated_more=(num_after_prune / self.__num_gpu_workers) * self.mean_boundconcrete_time[self.__level]):
+                print(f'Level {self.__level} estimated concrete check time: {(num_after_prune / self.__num_gpu_workers) * self.mean_boundconcrete_time[self.__level]:.2f} s, which is too long, terminating early.')
                 return True
             unk_combs_lst: list[np.ndarray] = []
             for gpu_worker in self.__gpu_workers:

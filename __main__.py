@@ -129,9 +129,9 @@ if __name__ == '__main__':
         if not skip or args.force_store or args.demo:
             if is_correctly_classified:
                 tried_images += 1
-                if analyzer.mean_concretecheck_time == None:
+                if analyzer.mean_boundconcrete_time == None:
                     verifier.adapt_target_images(image, label)
-                    analyzer.mean_concretecheck_time = verifier.estimate_mean_concretecheck_time(netname=args.net, force_reestimate=args.force_reestimate)
+                    analyzer.mean_boundconcrete_time = verifier.estimate_mean_boundconcrete_time(netname=args.net, force_reestimate=args.force_reestimate)
                 print(f'Starting to analyze image {i}, label {label}')
 
                 random.seed(args.base_seed + i)
