@@ -5,7 +5,6 @@ from data import Strategy
 from data.db import insert_mean_concretecheck_time, get_mean_concretecheck_time
 from utils import DEVICE, TQDM_BAR_FORMAT, TimeoutException
 from time import perf_counter
-from functools import lru_cache
 import threading
 import math
 import signal
@@ -23,31 +22,24 @@ def batched_randsample(upper_bound: int, sample_size: int, batch_size: int) -> t
     rand_combs = torch.rand(batch_size, upper_bound, device=DEVICE).topk(sample_size, dim=1, sorted=False).indices
     return rand_combs.sort().values.cpu()
 
-@lru_cache(maxsize=None)
 def selected_indices_sample(k: int, num_select: int, repetitions: int, num_workers: int=1, worker_id: int=0) -> torch.Tensor:
     """
-    Generate a tensor of shape (repetitions, num_select) with random indices from 0 to k-1.
-    The indices are sorted in ascending order.
+    Generate a tensor of shape (<= repetitions, num_select) with distinct random combinations of indices from 0 to k-1.
+    Each row is sorted in ascending order. The samples depend only on the torch seed, so every image gets its own
+    reproducible sample regardless of the images verified before it.
 
-    Sample plan A: for comb(k, num_select) >= (repetitions*num_workers*10000). use torch.randperm(k)[:num_select] for each row
-    Sample plan B: for (repetitions) < comb(k, num_select) <  (repetitions*10000). get all combinations and then use randperm to select a batch of combinations
-    Sample plan C: for comb(k, num_select) < (repetitions), use torch.combinations(torch.arange(k), num_select) to generate all combinations
+    Small spaces are enumerated and split among the workers (striding), so that the workers sample disjoint rows;
+    larger ones are sampled uniformly and deduplicated.
     """
-    if math.comb(k, num_select) > repetitions * num_workers * 10000:  # If k is too large, we use the plan A
-        return batched_randsample(k, num_select, repetitions)
-    else:  # If k is small enough, we use the plan B
-        all_combs = torch.combinations(torch.arange(k, device=DEVICE), num_select)
-        # Distribute the combinations among workers
-        partition_size = all_combs.shape[0] // num_workers
-        if worker_id < num_workers - 1:
-            all_combs = all_combs[worker_id * partition_size : (worker_id + 1) * partition_size]
-        else:
-            all_combs = all_combs[worker_id * partition_size :]
+    if math.comb(k, num_select) <= 4 * repetitions * num_workers:
+        all_combs = torch.combinations(torch.arange(k, device=DEVICE), num_select)[worker_id::num_workers]
         if len(all_combs) > repetitions:
-            choices = torch.randperm(len(all_combs), device=DEVICE)[:repetitions]
-            return all_combs[choices].cpu()
-        else:
-            return all_combs.cpu()
+            all_combs = all_combs[torch.randperm(len(all_combs), device=DEVICE)[:repetitions]]
+        return all_combs.cpu()
+    samples = batched_randsample(k, num_select, repetitions).unique(dim=0)
+    while samples.shape[0] < repetitions:
+        samples = torch.cat((samples, batched_randsample(k, num_select, repetitions - samples.shape[0]))).unique(dim=0)
+    return samples
 
 class BoundingEngine:
     def __init__(self,
