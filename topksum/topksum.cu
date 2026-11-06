@@ -254,7 +254,9 @@ __global__ void top_top_sum_warped_kernel(
     // each lane has its own local top-K buffer
     scalar_t local[K] = {static_cast<scalar_t>(0)};
     // store top-k indices, will be use to avoid duplicate selection
-    long top_l_idx[K] = {static_cast<long>(-1)};
+    long top_l_idx[K];
+    #pragma unroll
+    for (int i = 0; i < K; ++i) top_l_idx[i] = -1;
     // first, find top-k in partial indices among each lane
     #pragma unroll
     for (int p_col = lane; p_col < num_partial; p_col += 32) {
@@ -575,7 +577,9 @@ __global__ void bottom_bottom_sum_warped_kernel(
     // each lane has its own local top-K buffer
     scalar_t local[K] = {static_cast<scalar_t>(0)};
     // store top-k indices, will be use to avoid duplicate selection
-    long top_l_idx[K] = {static_cast<long>(-1)};
+    long top_l_idx[K];
+    #pragma unroll
+    for (int i = 0; i < K; ++i) top_l_idx[i] = -1;
     // first, find top-k in partial indices among each lane
     #pragma unroll
     for (int p_col = lane; p_col < num_partial; p_col += 32) {

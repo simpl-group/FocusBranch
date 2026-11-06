@@ -59,7 +59,9 @@ class L0BoundedInput(BoundedInput):
         self.num_pixels = int(self.num_features / channel_size)
         assert self.num_pixels == num_pixels, f"num_pixels should be {num_pixels}, but got {self.num_pixels}"
         self.partial_indices: torch.Tensor | None = None
-        """indices of the pixels to be considered in the computation of the diff, if None, all pixels are considered"""
+        """indices of the features to be considered in the computation of the diff, if None, all pixels are considered"""
+        self.partial_pixel_indices: torch.Tensor | None = None
+        """pixel-level (not channel-expanded) batched partial indices, used by the node-constrained concretization"""
         self.level: int|None = None
 
     def update_x(self, x: torch.Tensor) -> None:
@@ -103,6 +105,7 @@ class L0BoundedInput(BoundedInput):
                 partial_batch_size = partial_indices.shape[0]
                 if self.batch_size != partial_batch_size:
                     self.__update_batch_size(partial_batch_size)
+                self.partial_pixel_indices = partial_indices
                 partial_indices = partial_indices.unsqueeze(1)  # (batch_size, 1, num_partial_pixels)
                 if self.channel_size > 1:
                     partial_indices = (partial_indices + self.channel_offsets).reshape(partial_batch_size, 1, -1)
@@ -114,6 +117,7 @@ class L0BoundedInput(BoundedInput):
             yield
         finally:
             self.partial_indices = None
+            self.partial_pixel_indices = None
             self.U_X = self.__U_X
             self.L_X = self.__L_X
 
@@ -157,7 +161,7 @@ class L0BoundedInput(BoundedInput):
             if WX_diff.shape[0] != self.batch_size:
                 WX_diff = WX_diff.repeat(self.batch_size, 1, 1)
             assert WX_diff.is_cuda
-            return top_top_sum(WX_diff, self.partial_indices.squeeze(1), self.eps, self.level)
+            return top_top_sum(WX_diff, self.partial_pixel_indices, self.eps, self.level)  # WX_diff is per pixel, so index by pixels
         if self.partial_indices is not None:
             if self.partial_indices.ndim == 1:
                 rpW = rpW[:, :, self.partial_indices]
@@ -193,7 +197,7 @@ class L0BoundedInput(BoundedInput):
             if WX_diff.shape[0] != self.batch_size:
                 WX_diff = WX_diff.repeat(self.batch_size, 1, 1)
             assert WX_diff.is_cuda
-            return bottom_bottom_sum(WX_diff, self.partial_indices.squeeze(1), self.eps, self.level)
+            return bottom_bottom_sum(WX_diff, self.partial_pixel_indices, self.eps, self.level)  # WX_diff is per pixel, so index by pixels
         if self.partial_indices is not None:
             if self.partial_indices.ndim == 1:
                 rpW = rpW[:, :, self.partial_indices]

@@ -1,5 +1,6 @@
 # Reference: https://github.com/YuvShap/CoVerD/blob/main/tf_verify/coverd_finite_geometries.py
 from dataclasses import dataclass
+from pathlib import Path
 
 
 def q_binomial_coefficient(a, b, q):
@@ -25,7 +26,7 @@ class Geometry:
 
 
 def get_possible_geometries(num_of_pixels, t):
-    with open('coverd_prime_powers.txt', 'r') as f:
+    with open(Path(__file__).parent / 'coverd_prime_powers.txt', 'r') as f:
         for line in f:
             q = int(line)
             if num_of_pixels / q < 1:

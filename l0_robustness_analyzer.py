@@ -548,7 +548,8 @@ class LZeroRobustnessAnalyzer:
                 bitmask_length = (self.__v + 63) // 64
                 known_suspects_bm = combs2bitmasks(torch.tensor(list(known_suspects), device="cuda"), bitmask_length)
                 unique_jobs_bm = combs2bitmasks(unique_jobs, bitmask_length)
-                unique_jobs = bitmasks2combs(unique_jobs_bm[superset_sum(unique_jobs_bm, known_suspects_bm)==0], self.__e).tolist()
+                unique_jobs = bitmasks2combs(unique_jobs_bm[superset_sum(unique_jobs_bm, known_suspects_bm)==0], self.__e)
+            unique_jobs = unique_jobs.tolist()  # plain lists: suspects are tracked as hashable tuples of ints and sent to MILP workers
             removed = len(queued_jobs) - len(unique_jobs)
             for job in unique_jobs:
                 self.milp_job_queue.put(job)

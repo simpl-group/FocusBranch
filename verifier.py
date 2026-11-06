@@ -383,7 +383,7 @@ class Verifier:
             sampling_time.append(perf_counter() - batched_supercheck_start)
             sampling_counts.append(k_sized_supersets.shape[0])
             if sampling_successes[-1] == 0:
-                rep_each_k = self.rep_each_k // 20  # if no safe supersets, use smaller batch size to sample more
+                rep_each_k = max(1, self.rep_each_k // 20)  # if no safe supersets, use smaller batch size to sample more
             else:
                 self.max_sizes_to_batch[level] = k
         self.bounded_x0.level = None
@@ -580,7 +580,8 @@ class Verifier:
                 elif message[0] == 'SCSaP':
                     _, geometry, chosen_indices, self.refinement_strategy = message
                     self.__level = geometry.t
-                    self.max_size_to_batch = self.max_sizes_to_batch[self.__level]
+                    # if no sampled super node was safe at this level, only concrete nodes are worth bounding in batches
+                    self.max_size_to_batch = self.max_sizes_to_batch.get(self.__level, self.__level)
                     self.batch_pool: dict[int, list[list[int]]] = {k: [] for k in list(range(self.__level, self.max_size_to_batch + 1))[::-1]}
                     self.refinement_coverings = load_refinement_coverings(self.refinement_strategy)
                     prove_thread = threading.Thread(target=self.__safe_prove_geometry, args=(geometry, chosen_indices, num_workers, worker_id), daemon=True)
