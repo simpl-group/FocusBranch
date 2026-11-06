@@ -14,8 +14,6 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-bs", "--batch-size", type=int, default=200)
     parser.add_argument("-cb", "--concretecheck-batch", type=int, default=200, help="Batch size to bound concrete nodes. Defaults to the same as --batch-size if not specified.")
     parser.add_argument("-sb", "--supercheck-batch", type=int, default=200, help="Batch size to bound super nodes. Defaults to the same as --batch-size if not specified.")
-    parser.add_argument("--grain-size", type=int, default=1, help="Legacy, don't use. The number of images to verify in parallel. Defaults to 1.")
-    parser.add_argument("--target-label", type=int, default=None, help="Legacy, don't use. The target label for targeted verification. Defaults to None (untargeted).")
     parser.add_argument("-to", "--timeout", type=int, default=1800, help="Time limit in seconds for each image verification.")
     parser.add_argument("-s", "--start-idx", type=int, default=0, help="The starting index of the image to verify.")
     parser.add_argument("--demo", action="store_true", help="If set, it bypass the local database and force a demo verification on a single image.")
@@ -38,18 +36,11 @@ def get4(args: argparse.Namespace) -> tuple[torch.nn.Module, SequentialAT, L0Bou
         images, labels = dataset_utils.load_xy_from_pt()
     elif args.data_source == 'csv':
         images, labels = dataset_utils.load_xy_from_csv(normalize=False)  # TODO: add option to normalize
-    data_loader = build_loader(
-        images,
-        labels,
-        batch_size=args.grain_size,
-        target_label=args.target_label,
-        start_idx=args.start_idx,
-        num_batches=args.test_batches
-    )
-    x_ = torch.zeros(args.grain_size, *dataset_utils.image_shape).to(DEVICE)
+    data_loader = build_loader(images, labels, batch_size=1, start_idx=args.start_idx, num_batches=args.test_batches)
+    x_ = torch.zeros(1, *dataset_utils.image_shape).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
     bounded_x0 = L0BoundedInput(
-        x=x_.reshape(args.grain_size, -1, 1),
+        x=x_.reshape(1, -1, 1),
         eps=args.epsilon,
         channel_size=dataset_utils.channel_size,
         num_pixels=dataset_utils.num_pixels
@@ -65,15 +56,15 @@ def get2(args: argparse.Namespace) -> tuple[Verifier, torch.utils.data.DataLoade
         name: getattr(args, name) for name in init_param_names if hasattr(args, name)
     }
     return Verifier(
-        net.cpu(), seqAT, bounded_x0, targeted=args.target_label is not None, **init_kwargs
+        net.cpu(), seqAT, bounded_x0, **init_kwargs
     ), data_loader
 
 def get_verifier(args: argparse.Namespace) -> Verifier:
     net, dataset_utils = get_network_and_dataset_utils(args.net, device=DEVICE)
-    x_ = torch.zeros(args.grain_size, *dataset_utils.image_shape).to(DEVICE)
+    x_ = torch.zeros(1, *dataset_utils.image_shape).to(DEVICE)
     seqAT = SequentialAT.from_sequential(net, x_)
     bounded_x0 = L0BoundedInput(
-        x=x_.reshape(args.grain_size, -1, 1),
+        x=x_.reshape(1, -1, 1),
         eps=args.epsilon,
         channel_size=dataset_utils.channel_size,
         num_pixels=dataset_utils.num_pixels
@@ -83,5 +74,5 @@ def get_verifier(args: argparse.Namespace) -> Verifier:
         name: getattr(args, name) for name in init_param_names if hasattr(args, name)
     }
     return Verifier(
-        net.cpu(), seqAT, bounded_x0, targeted=args.target_label is not None, **init_kwargs
+        net.cpu(), seqAT, bounded_x0, **init_kwargs
     )

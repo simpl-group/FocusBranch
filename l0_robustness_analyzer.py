@@ -67,7 +67,7 @@ class LZeroRobustnessAnalyzer:
         unk_combs1 = torch.empty((0, 1), dtype=torch.int64)
         min_lb_l = self.__gpu_workers[0].recv()  # get the result from the first gpu worker
         combs2check = torch.arange(self.__v).reshape(-1, 1)
-        while min_lb_l < 0 or level == self.__e:
+        while min_lb_l <= 0 or level == self.__e:  # a node is unknown iff its bound is <= 0
             lb_l_min_values = torch.empty((combs2check.shape[0],), dtype=torch.float32)
             level += 1
             num_each = combs2check.shape[0] // self.__num_gpu_workers
@@ -82,14 +82,14 @@ class LZeroRobustnessAnalyzer:
                 else:
                     lb_l_min_values[i * num_each : (i + 1) * num_each] = torch.from_numpy(gpu_worker.recv())
             if level == 1:
-                unk_combs1 = combs2check[lb_l_min_values < 0]
+                unk_combs1 = combs2check[lb_l_min_values <= 0]
             min_lb_l = lb_l_min_values.min().item()
             # print(f"Level {level} min lb_l: {min_lb_l:.4f}, num combs: {combs2check.shape[0]}")
-            if min_lb_l >= 0 or level == self.__e: break
-            num_lt_0 = int(lb_l_min_values.lt(0).sum().item())
+            if min_lb_l > 0 or level == self.__e: break
+            num_lt_0 = int(lb_l_min_values.le(0).sum().item())
             unk_combs = combs2check[lb_l_min_values.topk(min(self.__probe_thickness, num_lt_0), largest=False, sorted=False).indices]
             combs2check = canonical_split(unk_combs, self.__v)
-        if min_lb_l < 0: level += 1
+        if min_lb_l <= 0: level += 1
         return level, min_lb_l, unk_combs1
 
     def analyze(self):

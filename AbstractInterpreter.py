@@ -331,23 +331,11 @@ class AffineAT(AbstractTransformer):
                                     W[row, input_idx] = kernel[co_idx, ci_idx, kh_idx, kw_idx]
         return cls(weight=W.unsqueeze(0), bias=b.reshape(1, -1, 1))
 
-    def make_marginal(self, true_labels: torch.Tensor, target_label: int, device: str | torch.device="cpu") -> None:
-        if true_labels.shape[0] != 1:
-            self.W = self.W.expand(true_labels.shape[0], -1, -1)
-            self.b = self.b.expand(true_labels.shape[0], -1, -1)
-        batch_idx = torch.arange(true_labels.shape[0])
-        W = (self.W[batch_idx, true_labels, :] - self.W[:, target_label, :]).unsqueeze(1)
-        b = (self.b[batch_idx, true_labels, :] - self.b[:, target_label, :]).unsqueeze(1)
-        self.rp = RelationalPolyhedra(W.to(device), b.to(device))
-
-    def make_marginals(self, true_labels: torch.Tensor, device: str | torch.device="cpu") -> None:
-        if true_labels.shape[0] != 1:
-            self.W = self.W.expand(true_labels.shape[0], -1, -1)
-            self.b = self.b.expand(true_labels.shape[0], -1, -1)
-        batch_idx = torch.arange(true_labels.shape[0])
-        # each row of W should be the difference between the true label and others
-        W = self.W[batch_idx, true_labels, :].unsqueeze(1) - self.W
-        b = self.b[batch_idx, true_labels, :].unsqueeze(1) - self.b
+    def make_marginals(self, true_label: int, device: str | torch.device="cpu") -> None:
+        """The margins of the true label over the other labels: row j is output[true_label] - output[other_j], the
+        other labels in increasing order (the true label's own row, identically zero, is left out)."""
+        W = self.W[:, true_label:true_label + 1, :] - torch.cat((self.W[:, :true_label, :], self.W[:, true_label + 1:, :]), dim=1)
+        b = self.b[:, true_label:true_label + 1, :] - torch.cat((self.b[:, :true_label, :], self.b[:, true_label + 1:, :]), dim=1)
         self.rp = RelationalPolyhedra(W.to(device), b.to(device))
 
 class ActivationAT(AbstractTransformer):

@@ -130,7 +130,7 @@ if __name__ == '__main__':
             if is_correctly_classified:
                 tried_images += 1
                 if analyzer.mean_concretecheck_time == None:
-                    verifier.adapt_target_images(image, true_label)
+                    verifier.adapt_target_images(image, label)
                     analyzer.mean_concretecheck_time = verifier.estimate_mean_concretecheck_time(netname=args.net, force_reestimate=args.force_reestimate)
                 print(f'Starting to analyze image {i}, label {label}')
 

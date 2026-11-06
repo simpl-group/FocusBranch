@@ -69,7 +69,6 @@ class Verifier:
         bounded_x0: L0BoundedInput,
         concretecheck_batch: int=200,
         supercheck_batch: int=200,
-        targeted: bool=False,
         max_k: int=200,
         rep_each_k: int=50,
         rep_each_level: int=5000,
@@ -86,7 +85,6 @@ class Verifier:
         self.device = self.bounded_x0.device
         self.concretecheck_batch = concretecheck_batch
         self.supercheck_batch = supercheck_batch
-        self.targeted = targeted
         self.max_k = max_k
         self.rep_each_k = rep_each_k
         self.rep_each_level = rep_each_level
@@ -104,7 +102,7 @@ class Verifier:
         self.seqAT.update_activation_rp(bounded_in=self.bounded_x0)
         lrp = self.seqAT.tail.backsubstitution_lrp()
         lb_l = self.bounded_x0.compute_lbound(lrp).squeeze(2)
-        return lb_l.ge(0).all(dim=1)
+        return lb_l.gt(0).all(dim=1)  # safe iff the true label beats every other label
 
     def first_safe_level(self) -> int:
         for level in range(self.eps + 1):
@@ -189,12 +187,10 @@ class Verifier:
                     self.seqAT.update_activation_rp(bounded_in=self.bounded_x0)
                     lb_l = self.bounded_x0.compute_lbound(self.seqAT.tail.backsubstitution_lrp()).squeeze(2).cpu()
                     all_lb_l_list.append(lb_l)
-                    num_safe_nodes += int(lb_l.ge(0).all(dim=1).sum().item())
+                    num_safe_nodes += int(lb_l.gt(0).all(dim=1).sum().item())
             all_lb_l = torch.cat(all_lb_l_list, dim=0)
-            # add 1000 to all_lb_l that are == 0
-            all_lb_l[all_lb_l == 0] += 1000
             lb_l_min_values = all_lb_l.min(dim=1).values
-            num_lt_0 = int(lb_l_min_values.lt(0).sum().item())
+            num_lt_0 = int(lb_l_min_values.le(0).sum().item())
             print(f"Level {level} min: {lb_l_min_values.min().item():.2f}\t(safe:unk)/all: ({num_safe_nodes}:{num_lt_0})/{sample_nodes_this_level}, using {perf_counter() - start:.2f}s")
             start = perf_counter()
             least_indices = combs_to_check[lb_l_min_values.topk(min(5, num_lt_0), largest=False, sorted=False).indices]
@@ -211,33 +207,26 @@ class Verifier:
             combs_batch = concrete_combs[i:i + self.concretecheck_batch].to(self.device)
             with self.bounded_x0.selecting(combs_batch):
                 self.seqAT.update_activation_rp(bounded_in=self.bounded_x0)
-                lb_l = self.bounded_x0.compute_lbound(self.seqAT.tail.backsubstitution_lrp()).squeeze(2).cpu()
-                # somthing TODO with true label, this is just a quick patch
-                lb_l[lb_l == 0] += 1000
-                lb_l_min_values_lst.append(lb_l.min(dim=1).values)
+                lb_l = self.bounded_x0.compute_lbound(self.seqAT.tail.backsubstitution_lrp()).squeeze(2)
+                lb_l_min_values_lst.append(lb_l.min(dim=1).values.cpu())
         return torch.cat(lb_l_min_values_lst, dim=0)
 
-    def adapt_target_images(self, images: torch.Tensor, true_labels: torch.Tensor, target_label: int | None=None, check_first=True) -> None:
+    def adapt_target_images(self, images: torch.Tensor, true_label: int, check_first=True) -> None:
         """
-        Adapt the input image and true label for the verification process. Will first check if the image matches the true label if check_first is True.
+        Set the image to verify and its label: the output rows become the margins of the true label over the others.
+        Will first check if the image matches the true label if check_first is True.
 
-        :param images: Input images to be verified. If there is only one image, the batch size is 1.
-        :type images: torch.Tensor with shape (batch_size, channel, height, width) or (batch_size, -1, 1).
-        :param true_labels: True labels for the input images. Must be a tensor of shape (batch_size,).
-        :type true_labels: torch.Tensor with shape (batch_size,).
-        :param target_label: Target label for targeted verification, if any.
+        :param images: The input image, of shape (1, channel, height, width), or (1, -1, 1) if check_first is False.
+        :param true_label: The true label of the image.
         :param check_first: If True, will assert that the input image matches the true label.
         """
         if check_first:
             assert images.ndim == 4, "Input images must be of shape (batch_size, channel, height, width)."
-            assert self.torch_net(images.cpu()).argmax(dim=1).eq(true_labels).all(), "The input image does not match the true label."
+            assert self.torch_net(images.cpu()).argmax(dim=1).item() == true_label, "The input image does not match the true label."
             images = images.flatten(start_dim=1).unsqueeze(2)
         assert images.ndim == 3, "Input images must be of shape (batch_size, -1, 1)."
         self.bounded_x0.update_x(images)  # (batch, d1, 1)
-        if target_label is not None:
-            self.seqAT.tail.make_marginal(true_labels=true_labels, target_label=target_label, device=self.device)
-        else:
-            self.seqAT.tail.make_marginals(true_labels=true_labels, device=self.device)
+        self.seqAT.tail.make_marginals(true_label=true_label, device=self.device)
         self.max_sizes_to_batch: dict[int, int] = {}  # key: level, value: max size to batch at this level
 
     def verify1(self, partial_indices: torch.Tensor | None=None, start_level: int=0) -> bool:
@@ -263,8 +252,6 @@ class Verifier:
             new_safe_bitmasks_lst: list[torch.Tensor] = [safe_bitmasks]
             if self.demo:
                 safe_cnt, unk_cnt = 0, 0
-                if self.targeted:
-                    min_value = float("inf")
             level_start = perf_counter()
             pbar = tqdm(total=num_to_check, desc=f"Level {level}", bar_format=TQDM_BAR_FORMAT, disable=not self.demo)
             with self.seqAT.working_on(self.device), self.bounded_x0.partial(partial_indices):
@@ -275,7 +262,7 @@ class Verifier:
                         lrp = self.seqAT.tail.backsubstitution_lrp()
                         lb_l = self.bounded_x0.compute_lbound(lrp).squeeze(2)
 
-                    safes = lb_l.ge(0).all(dim=1)
+                    safes = lb_l.gt(0).all(dim=1)
                     new_safe_bitmasks_lst.append(combs2bitmasks(combs_to_check_batch[safes], bitmask_length).cpu())
                     unk_combs_lst.append(combs_to_check_batch[~safes].cpu())
 
@@ -283,12 +270,6 @@ class Verifier:
                         safe_cnt += new_safe_bitmasks_lst[-1].shape[0]
                         unk_cnt += unk_combs_lst[-1].shape[0]
                         posfix: dict = {"Safe:UNK": f"{safe_cnt}:{unk_cnt}"}
-                        if self.targeted:
-                            if lb_l.min() < min_value:
-                                min_value = lb_l.min().item()
-                                min_comb = combs_to_check_batch[lb_l.argmin()]
-                            posfix["Min"] = f"{min_value:.2f}"
-                            posfix["Comb"] = min_comb.tolist()
                         pbar.set_postfix(posfix)
                         pbar.update(combs_to_check_batch.shape[0])
                     if self.timeout != 0 and i == self.concretecheck_batch * 100:  # calculate remaining time to decide if to early stop
@@ -544,7 +525,7 @@ class Verifier:
                 seed, image, label = message
                 torch.manual_seed(seed)
                 torch_img = torch.tensor(image, dtype=torch.float32).reshape(1, -1, 1)
-                self.adapt_target_images(images=torch_img, true_labels=torch.tensor([label], dtype=torch.int64), check_first=False)
+                self.adapt_target_images(images=torch_img, true_label=label, check_first=False)
                 if not self.strategy == Strategy.toptCoVerD:
                     if worker_id == 0:
                         self.conn.send(1. if bool(self.__check_current_batch().item()) else -1.)

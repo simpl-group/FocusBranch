@@ -120,7 +120,6 @@ if __name__ == '__main__':
         images,
         labels,
         batch_size=1,
-        target_label=args.target_label,
         start_idx=args.start_idx,
         num_batches=args.test_batches
     )

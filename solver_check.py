@@ -90,8 +90,7 @@ def add_forward_constraints(model: gp.Model, seqAT: SequentialAT, bounded_x0, x:
             raise NotImplementedError(type(AT))
     return x
 
-def gurobi_complete_check(seqAT: SequentialAT, bounded_x0: L0BoundedInput,
-    demo: bool = True, ground_truth_label: int | None = None
+def gurobi_complete_check(seqAT: SequentialAT, bounded_x0: L0BoundedInput, demo: bool = True
 ) -> tuple[bool,bool,bool]: # (verified, timed_out, found_adv)
     model = gp.Model("check_unsat", env=env)
     img = bounded_x0.x[0, ..., 0].cpu().numpy()  # input: [784] or [3072]
@@ -122,18 +121,13 @@ def gurobi_complete_check(seqAT: SequentialAT, bounded_x0: L0BoundedInput,
 
     x = add_forward_constraints(model, seqAT, bounded_x0, x)
 
-    if ground_truth_label is None:
-        model.addConstr(x[0] <= 0)
-    else:
-        any_not_safe = [model.addVar(vtype=GRB.BINARY) for _ in range(10)]
-        for i in range(10):
-            if i == ground_truth_label:
-                model.addConstr(any_not_safe[i] == 0)
-                continue
-            model.addGenConstrIndicator(any_not_safe[i], True, x[i] <= 0)
+    # x: the margins of the true label over the other labels; adversarial iff one of them is <= 0
+    any_not_safe = [model.addVar(vtype=GRB.BINARY) for _ in range(x.shape[0])]
+    for i in range(x.shape[0]):
+        model.addGenConstrIndicator(any_not_safe[i], True, x[i] <= 0)
 
-        res = model.addVar(vtype=GRB.BINARY, lb=1, ub=1)  # True constant
-        model.addGenConstrOr(res, any_not_safe)
+    res = model.addVar(vtype=GRB.BINARY, lb=1, ub=1)  # True constant
+    model.addGenConstrOr(res, any_not_safe)
 
     model.optimize()
 
@@ -265,7 +259,7 @@ class MILPWorker:
             bounds.l[0, pixel, 0] = self.__lb
             bounds.u[0, pixel, 0] = self.__ub
         bounded_x0 = LinfBoundedInput(x=torch_image, eps=None, bounds=bounds)
-        self.__seqAT.tail.make_marginals(true_labels=torch.Tensor([label]).long(), device="cpu")
+        self.__seqAT.tail.make_marginals(true_label=label, device="cpu")
 
         # constraint
         model = gp.Model("check_unsat", env=self.__env)
@@ -282,12 +276,9 @@ class MILPWorker:
         # forward
         x = add_forward_constraints(model, self.__seqAT, bounded_x0, img)
 
-        label_size = self.__seqAT.tail.W.shape[1]
-        any_not_safe = [model.addVar(vtype=GRB.BINARY) for _ in range(label_size)]
-        for i in range(label_size):
-            if i == label:
-                model.addConstr(any_not_safe[i] == 0)
-                continue
+        # x: the margins of the true label over the other labels; adversarial iff one of them is <= 0
+        any_not_safe = [model.addVar(vtype=GRB.BINARY) for _ in range(x.shape[0])]
+        for i in range(x.shape[0]):
             model.addGenConstrIndicator(any_not_safe[i], True, x[i] <= 0)
 
         res = model.addVar(vtype=GRB.BINARY, lb=1, ub=1)  # True constant
@@ -303,9 +294,9 @@ class MILPWorker:
             return True, None, None
         if model.Status in {GRB.Status.OPTIMAL, GRB.Status.SOLUTION_LIMIT}:
             adv_image = img.X.tolist()
-            for i in range(label_size):
+            for i in range(len(any_not_safe)):
                 if any_not_safe[i].X > 0.5:
-                    return False, adv_image, i
+                    return False, adv_image, i if i < label else i + 1  # row i: the margin over label i, or i + 1 past the true label
         if model.Status in {GRB.Status.TIME_LIMIT, GRB.Status.INTERRUPTED}:
             return False, None, None
         raise NotImplementedError(f"Unknown state: {model.Status}.")
@@ -361,15 +352,12 @@ if __name__ == "__main__":
         if not skip or args.force_store or args.demo:
             if net(images).argmax(dim=1).eq(pred_labels).all():
                 bounded_x0.update_x(images.flatten(start_dim=1).unsqueeze(2))  # (batch, d1, 1)
-                if args.target_label is not None:
-                    seqAT.tail.make_marginal(true_labels=pred_labels, target_label=args.target_label, device="cpu")
-                else:
-                    seqAT.tail.make_marginals(true_labels=pred_labels, device="cpu")
+                seqAT.tail.make_marginals(true_label=pred_labels.item(), device="cpu")
 
                 elapsed_time = 0.
                 t0 = perf_counter()
                 safe, timed_out, found_adv = gurobi_complete_check(
-                    seqAT, bounded_x0, demo=args.demo, ground_truth_label=pred_labels.item() if args.target_label is None else None
+                    seqAT, bounded_x0, demo=args.demo
                 )
                 num_verified += 1 if safe else 0
                 bounded_x0.clear_cache()

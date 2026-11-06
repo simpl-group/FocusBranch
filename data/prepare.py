@@ -9,13 +9,9 @@ def build_loader(
     images: torch.Tensor,
     labels: torch.Tensor,
     batch_size: int,
-    target_label: int | None=None,
     start_idx: int=0,
     num_batches: int=1
 ) -> DataLoader:
-    if target_label is not None:
-        non_targeted_indices = (labels != target_label).nonzero().squeeze(1)
-        images, labels = images[non_targeted_indices], labels[non_targeted_indices]
     num_samples = min(num_batches * batch_size, len(images))
     images, labels = images[start_idx:start_idx+num_samples], labels[start_idx:start_idx+num_samples]
     dataset = TensorDataset(images, labels)

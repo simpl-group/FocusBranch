@@ -2,7 +2,7 @@ import warnings
 from utils import timeout_handler, TimeoutException, DEVICE, TQDM_BAR_FORMAT
 from utils.shared import add_shared_arguments
 from models import get_network_and_dataset_utils, MODEL_SPECS
-from models.networks import make_marginal_tail, make_marginals_tail
+from models.networks import make_marginals_tail
 from data.prepare import build_loader
 from data.db import insert_lirpa, lirpa_should_skip, lirpa_config_consistent, sigma0_min_eps
 from time import perf_counter
@@ -45,7 +45,6 @@ if __name__ == "__main__":
         images,
         labels,
         batch_size=1,
-        target_label=args.target_label,
         start_idx=args.start_idx,
         num_batches=args.test_batches
     )
@@ -77,10 +76,7 @@ if __name__ == "__main__":
             if net(images).argmax(dim=1).eq(pred_labels).all():
                 num_tried += 1
                 images = images.to(DEVICE)
-                if args.target_label is not None:
-                    marginal_tail = make_marginal_tail(pred_labels.item(), args.target_label)
-                else:
-                    marginal_tail = make_marginals_tail(pred_labels.item())
+                marginal_tail = make_marginals_tail(pred_labels.item())
                 lirpa_model = BoundedModule(net+marginal_tail, torch.empty_like(images)).to(DEVICE)
                 lirpa_model.set_bound_opts({
                     'optimize_bound_args':{
