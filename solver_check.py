@@ -9,7 +9,8 @@ import warnings
 import threading
 import queue
 from multiprocessing.connection import Client
-from time import perf_counter
+from time import perf_counter, sleep
+import sys
 import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
@@ -153,6 +154,26 @@ def gurobi_complete_check(seqAT: SequentialAT, bounded_x0: L0BoundedInput, demo:
         warnings.warn(f"Solver status: {model.Status}")
     return False, False, False
 
+def gurobi_env_waiting(params: dict) -> gp.Env:
+    """gp.Env(params), waiting while the license server has no token free ("use limit exceeded"): a cluster's token
+    pool can be used up for hours, and a MILP worker that gives up here leaves its run hanging at start-up.
+    Stops waiting (exit status 1) once the parent process is gone, e.g. a killed `python .` run."""
+    parent, waited = os.getppid(), False
+    while True:
+        try:
+            return gp.Env(params=params)
+        except gp.GurobiError as e:
+            if 'use limit' not in str(e):
+                raise
+            if not waited:
+                print(f'Gurobi: {e}; waiting for a free license token', file=sys.stderr, flush=True)
+                waited = True
+            sleep(10)
+            if os.getppid() != parent:  # reparented: nobody is waiting for this process any more
+                print('Gurobi: parent process is gone, no longer waiting for a license token', file=sys.stderr, flush=True)
+                sys.exit(1)
+
+
 class MILPWorker:
     def __init__(self, net: torch.nn.Sequential, x_: torch.Tensor, milp_solver: str="gurobi"):
         _, self.__channel_size, __H, __W = x_.shape
@@ -164,7 +185,7 @@ class MILPWorker:
             self.__seqAT = SequentialAT.from_sequential(net, x_)
             self.__model_lock = threading.Lock()
             self.__current_model = None
-            self.__env = gp.Env(params={"OutputFlag": 0, "SolutionLimit": 1})
+            self.__env = gurobi_env_waiting({"OutputFlag": 0, "SolutionLimit": 1})
         elif milp_solver == "abcrown":
             from abcrown import ABCrownSolver, IOConstraints, input_vars, output_vars
             import contextlib, logging
@@ -327,9 +348,9 @@ if __name__ == "__main__":
         if not args.force_store and not args.demo:
             exit(1)
 
-    import sys, signal
+    import signal
     signal.signal(signal.SIGALRM, timeout_handler)
-    env = gp.Env(params={"OutputFlag": 0, "SolutionLimit": 1, "TimeLimit": args.timeout})
+    env = gurobi_env_waiting({"OutputFlag": 0, "SolutionLimit": 1, "TimeLimit": args.timeout})
 
     if args.demo:
         args.test_batches = 1
