@@ -1,12 +1,13 @@
 # Reference: https://github.com/YuvShap/CoVerD/blob/main/tf_verify/calzone_robustness_analyzer.py
 from utils import TQDM_BAR_FORMAT
 from data import load_covering_sizes, Strategy
-from coverd_finite_geometries import get_possible_geometries, Geometry
+from coverd_finite_geometries import Geometry
 from covering_generator import CVD_MIN_T, CVD_MAX_T
 from covering_generator.estimator import estimate_generator_speed, estimate_extra_time
 from split_and_prune import estimate_SaP_speed, estimate_SaP_time, prepare4pruning, prune, canonical_split
 from bimm import combs2bitmasks, bitmasks2combs, superset_sum
 from verifier import Verifier
+import planner
 import threading
 import queue
 import math
@@ -18,7 +19,6 @@ from collections import defaultdict
 from multiprocessing.connection import Connection
 import torch
 import numpy as np
-from scipy.stats import norm
 from tqdm import tqdm
 
 SR_THRES_TO_SAMPLE_SUPER = [0., 0., 0.7, 0.97, 0.9997,0.99999,0.999999,0.9999999,0.99999999,0.999999999]  # if the concrete safe rate is higher than this threshold, we will sample super-nodes on this level. The thresholds are determined by experiments and can be tuned.
@@ -128,8 +128,7 @@ class LZeroRobustnessAnalyzer:
                     print(f' {l}', end='\n' if l == sample_all_k_end_level else '', flush=True)
                     for gpu_worker in self.__gpu_workers:
                         gpu_worker.send(('sample-all-k', l))
-                    self.__level = l
-                    super_success_rate[l], mean_supercheck_time[l] = self.__estimate_sr_and_mt()
+                    super_success_rate[l], mean_supercheck_time[l] = planner.aggregate_super_samples([w.recv() for w in self.__gpu_workers], l)
         estimated_CC_time_per_l = [0.0] * (self.__e + 1)
         estimated_SaP_time_per_l = [0.0] * (self.__e + 1)  # only estimate SaP time for levels >= 2, since level 0 and 1 are usually very fast and don't need pruning
         first_any_safe_level = 0
@@ -174,13 +173,12 @@ class LZeroRobustnessAnalyzer:
                 CCSaP_time = (self.mean_concretecheck_time[l] * math.comb(self.__v, l) + tail_CC_time) / self.__num_gpu_workers + tail_SaP_time
                 candidate_strategies.append((CCSaP_time, 'CCSaP', l))
             if l in super_success_rate:
-                self.__level = l
-                fraction_robusts[l] = self.__compute_fraction_robust(super_success_rate[l])
-                VTs[l], refinement_strategies[l] = self.__choose_strategy(fraction_robusts[l], mean_supercheck_time[l], super_success_rate[l])
-                chosen_geometries[l], geometries_data = self.__choose_geometry(VTs[l], mean_size_limits[l])
-                chosen_geometries_info[l] = geometries_data[0]
+                fraction_robusts[l] = planner.fraction_robust(super_success_rate[l], l, self.__refinement_db_max_v)
+                VTs[l], refinement_strategies[l] = planner.compute_super_branching_strategy(fraction_robusts[l], mean_supercheck_time[l], super_success_rate[l], self.covering_sizes[l], l, self.__refinement_db_max_v)
+                geometry, geometries_data = planner.choose_geometry(VTs[l], self.__v, l, self.__refinement_db_max_v, mean_size_limits[l])
+                chosen_geometries[l], chosen_geometries_info[l] = geometry, geometries_data[0]
                 candidate_geometries.extend(geometries_data)
-                SCSaP_time: float = (chosen_geometries_info[l]["estimated_summed_duration"] + tail_CC_time) / self.__num_gpu_workers + self.cvd_extra_time(chosen_geometries[l]) + tail_SaP_time
+                SCSaP_time: float = (chosen_geometries_info[l]["estimated_summed_duration"] + tail_CC_time) / self.__num_gpu_workers + self.cvd_extra_time(geometry) + tail_SaP_time
                 candidate_strategies.append((round(SCSaP_time, 3), 'SCSaP', l))
         choosing_strategy_duration = round(time.time() - choosing_strategy_start, 3)
         planning_duration = round(time.time() - self.analyzer_start_time, 3)
@@ -324,100 +322,6 @@ class LZeroRobustnessAnalyzer:
         results['end_level'] = self.__level
         self.__stop_workers()
         return results
-
-    def __estimate_sr_and_mt(self) -> tuple[dict[int, float], dict[int, float]]:
-        sampling_lower_bound = self.__level
-        sampling_upper_bound = self.__refinement_db_max_v
-
-        sampling_counts_vector = np.zeros(sampling_upper_bound - sampling_lower_bound + 1)
-        sampling_successes_vector = np.zeros(sampling_upper_bound - sampling_lower_bound + 1)
-        sampling_time_vector = np.zeros(sampling_upper_bound - sampling_lower_bound + 1)
-        for gpu_worker in self.__gpu_workers:
-            sampling_counts, sampling_successes, sampling_time = gpu_worker.recv()
-            sampling_counts_vector += np.array(sampling_counts)
-            sampling_successes_vector += np.array(sampling_successes)
-            sampling_time_vector += np.array(sampling_time)
-
-        sr_vector = sampling_successes_vector / sampling_counts_vector
-        mean_time_vector = sampling_time_vector / sampling_counts_vector
-        mean_time_vector[0] = mean_time_vector[1]
-
-        # lower entry should be strictly greater than higher entry, otherwise the fraction robust estimation will be inaccurate.
-        # Enforce a monotone decrease by interpolation to decrease the lower entry
-        # sr[i-1] > sr[i] should hold for accurate estimation of fraction robust. If not, we can interpolate between sr[i-1] and sr[i+1] to get a new sr[i], which should be smaller than sr[i+1]
-        for i in range(1, len(sr_vector) - 1):
-            if sr_vector[i] >= sr_vector[i - 1]:
-                sr_vector[i] = min((sr_vector[i - 1] + sr_vector[i + 1]) / 2, sr_vector[i - 1])
-
-        return {k + self.__level:v for k, v in enumerate(sr_vector)}, {k + self.__level:v for k, v in enumerate(mean_time_vector)}
-
-    def __compute_fraction_robust(self, success_rate: dict[int, float]) -> dict[int, dict[int, float]]:
-        fraction_robust: dict[int, dict[int, float]] = dict()
-        for v in range(self.__level, self.__refinement_db_max_v + 1):
-            fraction_robust[v] = dict()
-            for k in range(self.__level, v):
-                if 1 - success_rate[v] < 1e-7:
-                    fraction_robust[v][k] = 1.0
-                else:
-                    estimated_value = (success_rate[k] - success_rate[v]) / (1 - success_rate[v])
-                    fraction_robust[v][k] = min(1, max(estimated_value, 0))
-
-        return fraction_robust
-
-    def __choose_strategy(self,
-        fraction_robust: dict[int, dict[int, float]],
-        mean_time: dict[int, float],
-        success_rate: dict[int, float]
-    ) -> tuple[dict[int,float], dict[int,int|None]]:
-        RT: dict[int,float] = {self.__level: 0.}  # estimated refinement time
-        VT: dict[int,float] = {self.__level: mean_time[self.__level]}  # estimated verification time
-        refinement_strategy: dict[int,int|None] = {self.__level: None}  # best next k or None
-        for v in range(self.__level + 1, self.__refinement_db_max_v + 1):
-            best_next_k = None
-            min_refine_time = float('inf')
-            for k in range(self.__level, min(v, self.__refinement_db_max_v + 1)):
-                if (v, k) not in self.covering_sizes[self.__level]:
-                    continue
-                refine_time = self.covering_sizes[self.__level][(v, k)] * (mean_time[k] + (1 - fraction_robust[v][k]) * RT[k])
-                if refine_time < min_refine_time:
-                    best_next_k = k
-                    min_refine_time = refine_time
-            RT[v] = min_refine_time
-            refinement_strategy[v] = best_next_k
-            VT[v] = mean_time[v] + min_refine_time * (1 - success_rate[v])
-        return VT, refinement_strategy
-
-    def __choose_geometry(self, VT: dict[int,float], mean_size_limit: int) -> tuple[Geometry, list[dict[str, object]]]:
-        best_geometry: Geometry = None
-        best_time = float('inf')
-        geometries = []
-        for geometry in get_possible_geometries(self.__v, self.__level):
-            estimated_time = 0
-            pseudo_k = geometry.block_size() * self.__v / geometry.number_of_points()  # mean block size
-            std_dev = math.sqrt(pseudo_k * (1 - pseudo_k + (geometry.block_size() - 1) * (self.__v - 1) / (geometry.number_of_points() - 1)))
-            total_number_of_blocks = geometry.number_of_blocks()
-
-            if (1 - norm.cdf(self.__refinement_db_max_v, pseudo_k, std_dev)) * total_number_of_blocks > 1e-2:
-                continue
-            if pseudo_k > mean_size_limit: continue
-
-            cdf_before = norm.cdf(self.__level - 0.5, pseudo_k, std_dev)
-            for block_size in range(self.__level, self.__refinement_db_max_v + 1):
-                cdf_after = norm.cdf(block_size + 0.5, pseudo_k, std_dev)
-                block_size_probability = cdf_after - cdf_before
-                cdf_before = cdf_after
-                expected_number_of_blocks_of_current_size = block_size_probability * total_number_of_blocks
-                number_of_blocks_of_current_size = math.floor(expected_number_of_blocks_of_current_size)
-                if random.random() < expected_number_of_blocks_of_current_size - number_of_blocks_of_current_size:
-                    number_of_blocks_of_current_size += 1
-                estimated_time += number_of_blocks_of_current_size * VT[block_size]
-
-            geometries.append({str(geometry): f"{geometry.number_of_blocks()} blocks, mean size {round(pseudo_k, 3)}",
-                               "estimated_summed_duration": round(float(estimated_time), 3)})
-            if estimated_time < best_time:
-                best_time = estimated_time
-                best_geometry = geometry
-        return best_geometry, sorted(geometries, key=lambda x: x["estimated_summed_duration"])[:3]  # return top 3 geometries sorted by estimated time
 
     def __handle_gpu_workers_messages(
         self,
