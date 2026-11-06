@@ -59,11 +59,11 @@ sqlite3 data/data.db < data/sigma0.sql
 Then you can run our tool, for example, you can verify the $\ell_0$ robustness of afc1 on image #2 at $\epsilon=4$
 
 ```bash
-python . --net afc1 -e 4 -s 2 -n 1 -to 1800 -g 4 -m 5 -rk 200 -rl 5000 -cb 4000 -sb 800 -ps 1600 --demo -ut
+python . --net afc1 -e 4 -s 2 -n 1 -to 1800 -g 4 -m 5 -rk 200 -rl 5000 -cb 4000 -sb 800 -pf 2 --demo -ut
 ```
 if you want to verify afc1 for all 100 images with $\epsilon$ set to 5, and all the rest arguments stay default (e.g., number of GPU worker set to 4 and number of MILP worker set to 5), with results saved to local database
 ```bash
-python . --net afc1 -e 5 -s 0 -tb 100 -to 1800 -g 4 -m 5 -rk 200 -rl 5000 -cb 4000 -sb 800 -ps 1600
+python . --net afc1 -e 5 -s 0 -tb 100 -to 1800 -g 4 -m 5 -rk 200 -rl 5000 -cb 4000 -sb 800 -pf 2
 ```
 
 some command line arguments:
@@ -78,7 +78,7 @@ some command line arguments:
 - `-rl`: the sample size of each level's concrete nodes, **per GPU worker**
 - `-cb`: the batch size to bound concrete nodes
 - `-sb`: the batch size to bound super nodes
-- `-ps`: the pool size to cache super nodes for each focus set size
+- `-pf`: the pool factor: the super nodes of each focus set size are bounded once `-pf` x `-sb` of them are cached
 
 some flags:
 - `--demo`: If set, it bypass the local database and force a demo verification on a single image

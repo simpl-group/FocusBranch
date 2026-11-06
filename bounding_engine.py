@@ -47,7 +47,7 @@ class BoundingEngine:
         max_k: int=200,
         rep_each_k: int=50,
         rep_each_level: int=5000,
-        pool_size: int=2000,
+        pool_factor: int=2,  # pool size = supercheck_batch x pool_factor
         timeout: int=0,
         strategy: Strategy=Strategy.FocusBranch,
         demo: bool=False
@@ -65,7 +65,8 @@ class BoundingEngine:
         self.rep_each_level = rep_each_level
         self.timeout = timeout
         self.demo = demo
-        self.pool_size = pool_size
+        assert pool_factor >= 1, "--pool-factor must be at least 1"
+        self.pool_size = supercheck_batch * pool_factor
         self.strategy = strategy
         self.max_batch_size = max(concretecheck_batch, supercheck_batch)  # lowered when the GPU runs out of memory
 

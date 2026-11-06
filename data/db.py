@@ -238,7 +238,7 @@ ours_should_skip = _make_should_skip("ours")
 milp_should_skip = _make_should_skip("milp")
 lirpa_should_skip = _make_should_skip("lirpa")
 
-def ours_config_consistent(net: str, epsilon: int, img: int, gpu_num: int, milp_num: int, timeout:int, rep_each_k: int, rep_each_level: int, concretecheck_batch: int, supercheck_batch: int, pool_size: int, probe_thickness: int, db: str="") -> tuple[bool, str]:
+def ours_config_consistent(net: str, epsilon: int, img: int, gpu_num: int, milp_num: int, timeout:int, rep_each_k: int, rep_each_level: int, concretecheck_batch: int, supercheck_batch: int, pool_factor: int, probe_thickness: int, db: str="") -> tuple[bool, str]:
     if not db: db = __db
     query = "SELECT * FROM ours_config WHERE net = ? AND eps = ?"
     with sqlite3.connect(db) as c:
@@ -267,8 +267,10 @@ def ours_config_consistent(net: str, epsilon: int, img: int, gpu_num: int, milp_
         inconsistent_args.append(f"--concretecheck_batch \r\t\t\t(config: {config['concretecheck_batch']} != {concretecheck_batch})")
     if config['supercheck_batch'] != 0 and config['supercheck_batch'] != supercheck_batch:
         inconsistent_args.append(f"--supercheck_batch \r\t\t\t(config: {config['supercheck_batch']} != {supercheck_batch})")
-    if config['pool_size'] != 0 and config['pool_size'] != pool_size:
-        inconsistent_args.append(f"--pool_size \r\t\t\t(config: {config['pool_size']} != {pool_size})")
+    if 'pool_factor' not in config:  # databases made before --pool-size became --pool-factor
+        config['pool_factor'] = config['pool_size'] // config['supercheck_batch'] if config['pool_size'] and config['supercheck_batch'] else 0
+    if config['pool_factor'] != 0 and config['pool_factor'] != pool_factor:
+        inconsistent_args.append(f"--pool_factor \r\t\t\t(config: {config['pool_factor']} != {pool_factor})")
     return len(inconsistent_args) == 0, "\n".join(inconsistent_args)
 
 def milp_config_consistent(net: str, eps: int, img: int, timeout:int, db: str="") -> bool:

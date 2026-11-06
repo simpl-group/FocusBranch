@@ -25,7 +25,7 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-k", type=int, default=200, help="Maximum size of focus sets to sample from.")
     parser.add_argument("-rk", "--rep-each-k", type=int, default=200, help="Sample size of super nodes of each focus set size, per GPU worker.")
     parser.add_argument("-rl", "--rep-each-level", type=int, default=5000, help="Sample size of each level's concrete nodes, per GPU worker.")
-    parser.add_argument("-ps", "--pool-size", type=int, default=2000, help='Pool size to cache super nodes for each focus set size.')
+    parser.add_argument("-pf", "--pool-factor", type=int, default=2, help="The super nodes of a focus-set size are bounded once pool-factor x -sb of them are pooled (the pool size).")
     parser.add_argument("--strategy", type=lambda s: Strategy[s], choices=list(Strategy), default=Strategy.FocusBranch, help="Strategy to use for verification.")
     parser.add_argument("-db", "--database", type=str, default=DB_PATH, help="Path to the SQLite database file to use for storing results. If not specified, the default database will be used.")
     parser.add_argument("--solver", type=str, choices=["gurobi", "abcrown"], default="gurobi", help="The solver to use for optimization.")

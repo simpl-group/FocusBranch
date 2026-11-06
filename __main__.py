@@ -65,10 +65,9 @@ if __name__ == '__main__':
         warnings.warn(f"Requested {args.gpu_num} GPU workers but only {len(available_gpus)} GPU are available.")
 
     export_results = args.output != None
-    ilogname = f"{args.output if args.output else ''}{args.net}e{args.epsilon}g{args.gpu_num}b{args.supercheck_batch}p{args.pool_size}"
-    args.output = f"{args.output if args.output else ''}{args.net}e{args.epsilon}s{args.start_idx}_n{args.test_batches}g{args.gpu_num}m{args.milp_num}cb{args.concretecheck_batch}sb{args.supercheck_batch}ps{args.pool_size}"
+    ilogname = f"{args.output if args.output else ''}{args.net}e{args.epsilon}g{args.gpu_num}b{args.supercheck_batch}pf{args.pool_factor}"
+    args.output = f"{args.output if args.output else ''}{args.net}e{args.epsilon}s{args.start_idx}_n{args.test_batches}g{args.gpu_num}m{args.milp_num}cb{args.concretecheck_batch}sb{args.supercheck_batch}pf{args.pool_factor}"
     args.output = args.output + ".json"
-    args.pool_size = min(max(args.pool_size, args.supercheck_batch), args.supercheck_batch * 10)
 
     address = ('localhost', 0)
     with Listener(address) as gpu_listener, Listener(address) as cpu_listener:
@@ -85,7 +84,7 @@ if __name__ == '__main__':
                 "--net",  args.net,
                 "--concretecheck-batch", str(args.concretecheck_batch),
                 "--supercheck-batch", str(args.supercheck_batch),
-                "--pool-size", str(args.pool_size),
+                "--pool-factor", str(args.pool_factor),
                 "--epsilon", str(args.epsilon),
                 "--max-k", str(args.max_k),
                 "--rep-each-k", str(args.rep_each_k),
@@ -202,7 +201,7 @@ if __name__ == '__main__':
             'rep_each_level': args.rep_each_level,
             'concretecheck_batch': args.concretecheck_batch,
             'supercheck_batch': args.supercheck_batch,
-            'pool_size': args.pool_size,
+            'pool_factor': args.pool_factor,
             'gpu_num': args.gpu_num,
             'milp_num': args.milp_num,
             'timeout': args.timeout,
