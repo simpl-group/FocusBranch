@@ -1,6 +1,6 @@
 """
 Dispatches unbranchable unknown nodes (level-eps concrete nodes) to the MILP workers and collects their verdicts
-(Algorithm 1, lines 11-13). Runs in a background thread of the analyzer.
+(Algorithm 1, lines 11-13). Runs in a background thread of the verifier.
 """
 from multiprocessing.connection import Connection, wait
 import queue

@@ -1,11 +1,11 @@
 """
-GPU worker process: bounds nodes on one GPU on behalf of the analyzer (see `l0_robustness_analyzer.py`).
+GPU worker process: bounds nodes on one GPU on behalf of the verifier (see `verifier.py`).
 
 In super branching (SCSaP), every worker verifies its share of the covering verification design: every num_workers-th
 block, streamed by a covering generator process (`covering_generator`). Nodes wait in per-size pools, a full pool is
 bounded in batches, and the unknown super nodes are refined with the refinement coverings.
 """
-from multiprocessing.connection import Client, Listener
+from multiprocessing.connection import Client, Connection, Listener
 from time import perf_counter
 import math
 import threading
@@ -115,7 +115,7 @@ class GpuWorker:
         self.__send_lock = threading.Lock()
 
     def send(self, message):
-        with self.__send_lock:  # the job thread and the message loop both talk to the analyzer
+        with self.__send_lock:  # the job thread and the message loop both talk to the verifier
             self.conn.send(message)
 
     def serve(self, port: int):
@@ -165,7 +165,7 @@ class GpuWorker:
         return sampling_counts, sampling_successes, sampling_time
 
     def __plan(self):
-        """Answer the analyzer's probing and sampling requests; returns the first message of the verification stage."""
+        """Answer the verifier's probing and sampling requests; returns the first message of the verification stage."""
         engine = self.engine
         if engine.strategy != Strategy.toptCoVerD:
             if self.worker_id == 0:  # the root node
@@ -218,7 +218,7 @@ class GpuWorker:
                 stop_event.set()
                 if super_branching is not None: super_branching.stop()
                 break
-            job.join()  # the previous level is finished before the analyzer sends the next one
+            job.join()  # the previous level is finished before the verifier sends the next one
             super_branching = None
             if message[0] == P.SPLIT_PRUNE_CHECK:
                 new_combs, reference_bitmasks, target_s_cnt = prepare4pruning(torch.from_numpy(message[1]), engine.num_pixels)
@@ -237,6 +237,38 @@ class GpuWorker:
 
     def __check_concrete(self, combs: torch.Tensor, stop_event: threading.Event):
         self.send(self.engine.unknown_concrete(combs, stop_event))
+
+
+class GpuWorkerPool:
+    """The connections to the GPU workers, ordered by worker id."""
+
+    def __init__(self, workers: list[Connection]):
+        self.workers = workers
+
+    def __len__(self) -> int:
+        return len(self.workers)
+
+    def broadcast(self, message):
+        for worker in self.workers:
+            worker.send(message)
+
+    def gather(self) -> list:
+        return [worker.recv() for worker in self.workers]
+
+    def scatter(self, tag: str, rows: np.ndarray | torch.Tensor):
+        """Split rows evenly (the remainder goes to the last worker) and send (tag, rows_i) to worker i."""
+        rows = rows.numpy() if isinstance(rows, torch.Tensor) else rows
+        each = rows.shape[0] // len(self.workers)
+        for i, worker in enumerate(self.workers):
+            worker.send((tag, rows[i * each:] if i == len(self.workers) - 1 else rows[i * each:(i + 1) * each]))
+
+    def gather_rows(self) -> np.ndarray:
+        return np.vstack(self.gather())
+
+    def wait_stopped(self):
+        for worker in self.workers:
+            while not (isinstance(message := worker.recv(), str) and message == P.STOPPED):
+                pass  # results of abandoned work
 
 
 if __name__ == '__main__':

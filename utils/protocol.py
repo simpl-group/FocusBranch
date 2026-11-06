@@ -1,4 +1,4 @@
-"""Message tags exchanged between the analyzer (main process) and its GPU / MILP workers.
+"""Message tags exchanged between the verifier (main process) and its GPU / MILP workers.
 
 Every message is either a bare tag or a tuple whose first element is a tag."""
 

@@ -3,7 +3,7 @@ import sys
 import os
 import argparse
 import warnings
-from l0_robustness_analyzer import LZeroRobustnessAnalyzer
+from verifier import Verifier
 from multiprocessing.connection import Listener
 from subprocess import Popen
 import json
@@ -93,9 +93,9 @@ if __name__ == '__main__':
         gpu_workers.sort(key=lambda w: w.recv())
         print("Done.")
 
-    verifier, data_loader = get2(args)
-    analyzer = LZeroRobustnessAnalyzer(
-        verifier=verifier,
+    engine, data_loader = get2(args)
+    verifier = Verifier(
+        engine=engine,
         gpu_workers=gpu_workers,
         cpu_workers=cpu_workers,
         plan_only=args.plan_only,
@@ -115,7 +115,7 @@ if __name__ == '__main__':
         numpy_img = image.reshape(-1).numpy()  # shape (1, C, H, W) -> (C*H*W)
         label = true_label.item()
         start = time.time()
-        is_correctly_classified = verifier.torch_net(image).argmax(dim=1).eq(true_label).all().item()
+        is_correctly_classified = engine.torch_net(image).argmax(dim=1).eq(true_label).all().item()
         image_results = {}
         image_results['is_correctly_classified'] = is_correctly_classified
         image_results['true_label'] = label
@@ -129,15 +129,15 @@ if __name__ == '__main__':
         if not skip or args.force_store or args.demo:
             if is_correctly_classified:
                 tried_images += 1
-                if analyzer.mean_boundconcrete_time == None:
-                    verifier.adapt_target_images(image, label)
-                    analyzer.mean_boundconcrete_time = verifier.estimate_mean_boundconcrete_time(netname=args.net, force_reestimate=args.force_reestimate)
+                if verifier.mean_boundconcrete_time == None:
+                    engine.adapt_target_images(image, label)
+                    verifier.mean_boundconcrete_time = engine.estimate_mean_boundconcrete_time(netname=args.net, force_reestimate=args.force_reestimate)
                 print(f'Starting to analyze image {i}, label {label}')
 
                 random.seed(args.base_seed + i)
-                analyzer.update_image(numpy_img, label)
+                verifier.update_image(numpy_img, label)
                 start = time.time()
-                analysis_summary = analyzer.analyze()
+                analysis_summary = verifier.verify()
                 exec_details = analysis_summary.pop('exec_details', None)
                 if exec_details is not None and args.detail:
                     pd.DataFrame(exec_details).to_excel(ilogname + f"i{i}.xlsx", engine='openpyxl', index_label="Row")
