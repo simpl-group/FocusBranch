@@ -5,16 +5,13 @@ from coverd_finite_geometries import Geometry
 from covering_generator import CVD_MIN_T, CVD_MAX_T
 from covering_generator.estimator import estimate_generator_speed, estimate_extra_time
 from split_and_prune import estimate_SaP_speed, estimate_SaP_time, prepare4pruning, prune, canonical_split
-from bimm import combs2bitmasks, bitmasks2combs, superset_sum
+from milp_dispatcher import MilpDispatcher
 from verifier import Verifier
 import planner
-import threading
-import queue
 import math
 import time
 import random
 import sys
-from itertools import chain
 from collections import defaultdict
 from multiprocessing.connection import Connection
 import torch
@@ -30,14 +27,13 @@ class LZeroRobustnessAnalyzer:
         self.verifier = verifier
         self.__gpu_workers = gpu_workers
         self.__num_gpu_workers = len(gpu_workers)
-        self.__cpu_workers = cpu_workers
-        self.__num_cpu_workers = len(cpu_workers)
         self.__plan_only = plan_only
         self.__strategy = strategy
         self.__probe_thickness = probe_thickness
         self.__until_timedout = until_timedout
         self.__e, self.__v, self.__timeout, self.__channel_size = verifier.eps, verifier.num_pixels, verifier.timeout, verifier.bounded_x0.channel_size
         self.__refinement_db_max_v = verifier.max_k
+        self.__milp = MilpDispatcher(cpu_workers, self.__v, self.__channel_size, self.__e, self.__timeout)
 
         self.covering_sizes = {t:load_covering_sizes(t, clipping_size=500000) for t in range(CVD_MIN_T, min(self.__e + 1, CVD_MAX_T + 1))}
         generator_launch_time, skipping_iter_speed, normal_iter_speed = estimate_generator_speed(num_workers=self.__num_gpu_workers, num_pixels=self.__v, force_reestimate=force_reestimate)
@@ -48,12 +44,10 @@ class LZeroRobustnessAnalyzer:
         self.mean_concretecheck_time: list[float]|None = None
 
     def update_image(self, image: np.ndarray, label: int):
-        self.__deduplicated = False
         for gpu_worker in self.__gpu_workers:
             worker_seed = random.randint(0, 2 ** 32 - 1)
             gpu_worker.send((worker_seed, image, label))
-        for cpu_worker in self.__cpu_workers:
-            cpu_worker.send((image, label))
+        self.__milp.update_image(image, label)
 
     def timed_out(self, estimated_more: float=0.0) -> bool:
         return time.time() - self.analyzer_start_time + estimated_more > self.__timeout
@@ -218,17 +212,10 @@ class LZeroRobustnessAnalyzer:
             if results['verified']: results['end_level'] = results['starting_level']
             return results
 
-        self.unk_combs_settled = threading.Event()
-        self.waiting_suspects: set[tuple[int]] = set()
-        self.innocent_suspects: set[tuple[int]] = set()
-        self.milp_job_queue = queue.Queue()
-        self.milp_found_adversarial = threading.Event()
-        self.adversarial_results = {'adversarial_pixels': None, 'adversarial_example': None, 'adversarial_label': None}
-        cpu_handler_thread = threading.Thread(target=self.__handle_cpu_workers_messages, args=(self.analyzer_start_time,))
-        cpu_handler_thread.start()
+        # the level-eps unknown nodes of super branching may repeat, so deduplicate them once they are all known
+        self.__milp.start(self.analyzer_start_time, deduplicate=best_strategy[1] == 'SCSaP' and self.__level == self.__e)
 
         if best_strategy[1] == 'CCSaP':
-            self.__deduplicated = True  # SaP won't create duplicates
             self.__gpu_workers_send_all(('CCSaP', self.__level))  # no geometry, no refinement strategy
             current_level_start_time = time.time()
             if self.__level == 1:
@@ -241,7 +228,6 @@ class LZeroRobustnessAnalyzer:
             print(f'Level {self.__level} finished, unk_combs/all: {unk_combs.shape[0]}/{math.comb(self.__v, self.__level)}'
                 f' using {round(time.time() - current_level_start_time, 3)} s')
         elif best_strategy[1] == 'SCSaP':
-            self.__deduplicated = self.__level < self.__e  # SaP won't be used on the last level, so we might have duplicates on the last level
             chosen_geometry, refinement_strategy = chosen_geometries[self.__level], refinement_strategies[self.__level]
             mean_size = int(chosen_geometry.block_size() * self.__v / chosen_geometry.number_of_points()) + 1
             step_to_level = 0
@@ -268,8 +254,8 @@ class LZeroRobustnessAnalyzer:
             iterating_covering_duration = round(time.time() - iterating_covering_start_time, 3)
             summed_duration = round(sum(stats['total_duration'] for stats in supercheck_stats_by_size.values()), 3)
             print(f'GPU iterating coverings took {iterating_covering_duration} s, Summed duration (all gpu workers): {summed_duration} s', flush=True)
-            if self.milp_job_queue.unfinished_tasks > 0:
-                print(f'Waiting for MILP jobs to finish, remaining: {self.milp_job_queue.unfinished_tasks}, finished: {len(self.innocent_suspects)}', flush=True)
+            if self.__milp.unfinished > 0:
+                print(f'Waiting for MILP jobs to finish, remaining: {self.__milp.unfinished}, finished: {len(self.__milp.innocent)}', flush=True)
             results['SCSaP'] = {
                 'chosen_geometry': chosen_geometries_info[self.__level],
                 'iterating_covering_duration': iterating_covering_duration,
@@ -290,35 +276,34 @@ class LZeroRobustnessAnalyzer:
             }
         else: assert False, f'Unknown best strategy: {best_strategy}'
 
-        if self.timed_out():
-            results['timed_out'] = True
-            self.unk_combs_settled.set()
+        if self.timed_out() or self.__milp.done():
+            results['timed_out'] = self.timed_out()
         else:
             handle_unk_combs_start = time.time()
             results['timed_out'] = self.__handle_unk_combs(unk_combs, deduplicate=best_strategy[1] == 'SCSaP')
-            self.unk_combs_settled.set()
             handle_unk_combs_duration = round(time.time() - handle_unk_combs_start, 3)
             if handle_unk_combs_duration > 0.01:
                 print(f'Handling unk_combs duration: {handle_unk_combs_duration} s.')
                 results['handle_unk_combs_duration'] = handle_unk_combs_duration
+        self.__milp.settle()
 
         waiting_milp_start = time.time()
-        cpu_handler_thread.join()
+        self.__milp.join()
         waiting_milp_duration = round(time.time() - waiting_milp_start, 3)
         if not results['timed_out']: results['timed_out'] = self.timed_out()
         results['running_time'] = round(time.time() - self.analyzer_start_time, 3)
-        if self.milp_job_queue.unfinished_tasks > 0:
-            print(f'MILP jobs unfinished: {self.milp_job_queue.unfinished_tasks}, finished: {len(self.innocent_suspects)}')
+        if self.__milp.unfinished > 0:
+            print(f'MILP jobs unfinished: {self.__milp.unfinished}, finished: {len(self.__milp.innocent)}')
         if waiting_milp_duration > 0.1:
             print(f'Waiting for MILP duration: {waiting_milp_duration} s.')
             results['waiting_milp_duration'] = waiting_milp_duration
-        if self.milp_found_adversarial.is_set():
-            results['adversarial_results'] = self.adversarial_results
+        if self.__milp.found_adversarial.is_set():
+            results['adversarial_results'] = self.__milp.adversarial_results
         elif not results['timed_out']:
             results['verified'] = True
-        if len(self.innocent_suspects) + len(self.waiting_suspects) > 0:
-            results['proved_with_milp'] = len(self.innocent_suspects)
-            results['waiting_for_milp'] = len(self.waiting_suspects)
+        if len(self.__milp.innocent) + len(self.__milp.waiting) > 0:
+            results['proved_with_milp'] = len(self.__milp.innocent)
+            results['waiting_for_milp'] = len(self.__milp.waiting)
         results['end_level'] = self.__level
         self.__stop_workers()
         return results
@@ -337,7 +322,7 @@ class LZeroRobustnessAnalyzer:
         last_print_time = time.time()
         unk_combs_lst: list[list[int]] = []
         while done_count < self.__num_gpu_workers \
-            and not self.milp_found_adversarial.is_set() \
+            and not self.__milp.done() \
             and not self.timed_out():
             last_print_time = self.__print_progress(pbar, total_covering_size, num_finished, last_print_time)
 
@@ -345,8 +330,7 @@ class LZeroRobustnessAnalyzer:
                 if gpu_worker.poll():
                     message = gpu_worker.recv()
                     if isinstance(message, str) and message == 'adversarial-example-suspects':
-                        for suspect in gpu_worker.recv().tolist():
-                            self.milp_job_queue.put(suspect)
+                        self.__milp.submit(gpu_worker.recv())
                     elif isinstance(message, str) and message == 'unknown-combs':
                         unk_combs_lst.append(gpu_worker.recv())
                     elif isinstance(message, str) and message == 'done':
@@ -424,8 +408,7 @@ class LZeroRobustnessAnalyzer:
                 f' using {round(time.time() - new_level_start_time, 3)} s, checking duration: {round(time.time() - concretecheck_start_time, 3)} s')
         if self.__level == self.__e and unk_combs.shape[0] > 0:
             print(f'Checked deepest level {self.__e}, remaining unk_combs size: {unk_combs.shape[0]}')
-            for combs in unk_combs.tolist():
-                self.milp_job_queue.put(combs)
+            self.__milp.submit(unk_combs.numpy())
         return self.timed_out()
 
     def __print_progress(self, pbar: tqdm, total_covering_size: int, num_finished: int, last_print_time: float) -> float:
@@ -436,105 +419,18 @@ class LZeroRobustnessAnalyzer:
         pbar.set_postfix({'FNS/AGG': f'{num_finished}/{int(total_covering_size)}'})
         return current
 
-    def __deduplicate_milp_jobs(self):
-        # Deduplicate suspects in the jobs queue before showing progress bar.
-        queued_jobs: list[list[int]] = []
-        while True:
-            try:
-                queued_jobs.append(self.milp_job_queue.get_nowait())
-                self.milp_job_queue.task_done()
-            except queue.Empty:
-                break
-        if len(queued_jobs) > 0:
-            known_suspects = self.innocent_suspects.union(self.waiting_suspects)
-            unique_jobs = torch.tensor(queued_jobs, device="cuda").unique(dim=0)
-            if len(known_suspects) > 0:
-                bitmask_length = (self.__v + 63) // 64
-                known_suspects_bm = combs2bitmasks(torch.tensor(list(known_suspects), device="cuda"), bitmask_length)
-                unique_jobs_bm = combs2bitmasks(unique_jobs, bitmask_length)
-                unique_jobs = bitmasks2combs(unique_jobs_bm[superset_sum(unique_jobs_bm, known_suspects_bm)==0], self.__e)
-            unique_jobs = unique_jobs.tolist()  # plain lists: suspects are tracked as hashable tuples of ints and sent to MILP workers
-            removed = len(queued_jobs) - len(unique_jobs)
-            for job in unique_jobs:
-                self.milp_job_queue.put(job)
-            if removed > 0:
-                assert self.milp_job_queue.unfinished_tasks == len(unique_jobs) + len(self.waiting_suspects), f"Unfinished tasks in queue {self.milp_job_queue.unfinished_tasks} doesn't match expected {len(unique_jobs) + len(self.waiting_suspects)} after deduplication."
-                print(f"Deduplicated MILP jobs queue, removed {removed} duplicates, remaining jobs: {self.milp_job_queue.unfinished_tasks}")
-        self.__deduplicated = True
-
-    def __handle_cpu_workers_messages(self, analyzer_start_time: float):
-        jobs_limit = 3
-        jobs_each_worker = np.zeros(self.__num_cpu_workers, dtype=int)
-        def get_first_avail_worker_id():
-            min_jobs = int(jobs_each_worker.min())
-            if min_jobs >= jobs_limit:
-                return None
-            return int(jobs_each_worker.argmin())
-        pbar = None
-        while not self.unk_combs_settled.is_set() or self.milp_job_queue.unfinished_tasks > 0:
-            if time.time() - analyzer_start_time >= self.__timeout:
-                if pbar is not None: pbar.close()
-                return
-            if pbar is None and self.unk_combs_settled.is_set():
-                if not self.__deduplicated:
-                    self.__deduplicate_milp_jobs()
-                pbar = tqdm(total=self.milp_job_queue.unfinished_tasks, desc="MILP jobs", bar_format=TQDM_BAR_FORMAT, mininterval=1.0, maxinterval=2.0, file=sys.stdout)
-            first_avail_worker_id = get_first_avail_worker_id()
-            if first_avail_worker_id is not None:
-                try:
-                    pixel_indices = self.milp_job_queue.get(timeout=0.0001)
-                    suspect = tuple(pixel_indices)
-                    if not self.__deduplicated and (suspect in self.innocent_suspects or suspect in self.waiting_suspects):
-                        self.milp_job_queue.task_done()
-                    else:
-                        self.waiting_suspects.add(suspect)
-                        self.__cpu_workers[first_avail_worker_id].send(pixel_indices)
-                        jobs_each_worker[first_avail_worker_id] += 1
-                except queue.Empty:
-                    ...
-
-            for i, cpu_worker in enumerate(self.__cpu_workers):
-                if cpu_worker.poll():
-                    pixel_indices, verified, adversarial_example, adversarial_label = cpu_worker.recv()
-                    self.milp_job_queue.task_done()
-                    jobs_each_worker[i] -= 1
-                    if pbar is not None: pbar.update(1)
-                    if verified:
-                        self.waiting_suspects.remove(tuple(pixel_indices))
-                        self.innocent_suspects.add(tuple(pixel_indices))
-                    else:
-                        self.milp_found_adversarial.set()
-                        self.adversarial_results['adversarial_pixels'] = str(pixel_indices)
-                        # adversarial_example: list[int]
-                        # pixel_indices: list[int]
-                        if self.__channel_size > 1:
-                            indices = []
-                            for pixel in pixel_indices:
-                                for i in range(self.__channel_size):
-                                    indices.append(pixel + i * self.__v)
-                            pixel_indices = indices
-                        delta_dict = dict((i, adversarial_example[i]) for i in pixel_indices)
-                        print(f'\nAdversarial example found, changing label to "{adversarial_label}" while perturbing pixels: {delta_dict}')
-                        self.adversarial_results['adversarial_pixel_values'] = str(delta_dict)
-                        self.adversarial_results['adversarial_example'] = str(adversarial_example)
-                        self.adversarial_results['adversarial_label'] = adversarial_label
-                        if pbar is not None: pbar.close()
-                        return
-
     def __stop_workers(self):
-        for worker in chain(self.__gpu_workers, self.__cpu_workers):
-            worker.send('stop')
-        for worker in chain(self.__gpu_workers, self.__cpu_workers):
-            message = worker.recv()
+        """Abandon the current image on every worker, and wait until they all acknowledged it."""
+        for gpu_worker in self.__gpu_workers:
+            gpu_worker.send('stop')
+        self.__milp.send_stop()
+        for gpu_worker in self.__gpu_workers:
+            message = gpu_worker.recv()
             while not isinstance(message, str) or message != 'stopped':
-                message = worker.recv()
+                message = gpu_worker.recv()
+        self.__milp.wait_stopped()
 
     def __skip_this_image(self):
         for gpu_worker in self.__gpu_workers:
             gpu_worker.send(('skip', 0))
-        for cpu_worker in self.__cpu_workers:
-            cpu_worker.send('stop')
-        for cpu_worker in self.__cpu_workers:
-            message = cpu_worker.recv()
-            while not isinstance(message, str) or message != 'stopped':
-                message = cpu_worker.recv()
+        self.__milp.stop()
