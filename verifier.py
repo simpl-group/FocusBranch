@@ -60,7 +60,7 @@ class Verifier:
 
     # ------------------------------------------------------------------ planning
     def __probe(self) -> tuple[int, float, torch.Tensor]:
-        """Bound level by level, following the probe_thickness least safe unknown nodes (Appendix F.5).
+        """Bound level by level, following the probe_thickness least safe unknown nodes (Appendix F.4).
         Returns the first level whose probed nodes are all safe, the smallest bound seen last and the unknown level-1 nodes."""
         level = 0
         unk_combs1 = torch.empty((0, 1), dtype=torch.int64)

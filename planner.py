@@ -1,5 +1,5 @@
 """
-Strategy planning by node sampling (Section 3.4 and Appendix F.3 of the paper): from sampled safe rates and bounding
+Verification planning by node sampling (Section 3.5 and Appendix F.2 of the paper): from sampled safe rates and bounding
 times, pick the super branching strategy R (refinement size for every focus-set size) and the covering verification design
 (finite geometry) with the smallest estimated verification time at a level.
 """
