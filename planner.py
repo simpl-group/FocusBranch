@@ -5,25 +5,63 @@ times, pick the super branching strategy R (refinement size for every focus-set 
 """
 # Reference: https://github.com/YuvShap/CoVerD/blob/main/tf_verify/calzone_robustness_analyzer.py
 import math
-import random
 import numpy as np
-from scipy.stats import norm
+from scipy.optimize import minimize
+from scipy.special import expit, log_expit
+from scipy.stats import norm, theilslopes
 from coverd_finite_geometries import get_possible_geometries, Geometry
 
 
+def fit_safe_rate(sizes: np.ndarray, counts: np.ndarray, successes: np.ndarray) -> np.ndarray:
+    """
+    P(a size-k super node is safe), fitted as a logistic curve in log k, sigma(a + b log k) with b <= 0, by maximum
+    likelihood over the binomial samples of every size.
+
+    The raw per-size rates are 1.0 wherever no sampled node failed (e.g. 400/400), and the refinement planning then
+    assumes such nodes never fail, so the refinement sizes below them are decided by timing noise. The fit pools the
+    samples of all sizes: it is smooth, strictly decreasing and gives small but nonzero failure rates there.
+    """
+    if successes.sum() == counts.sum(): return np.ones(len(sizes))
+    if successes.sum() == 0: return np.zeros(len(sizes))
+    x = np.log(sizes)
+    x = x - x.mean()
+
+    def nll(theta: np.ndarray) -> tuple[float, np.ndarray]:
+        z = theta[0] + theta[1] * x
+        p = expit(z)
+        loss = -(successes * log_expit(z) + (counts - successes) * log_expit(-z)).sum()
+        r = successes - counts * p
+        return float(loss), -np.array([r.sum(), (r * x).sum()])
+
+    # bounded slope: perfectly separated samples would push it to -inf
+    theta = minimize(nll, np.zeros(2), jac=True, method='L-BFGS-B', bounds=[(None, None), (-1e3, 0.)]).x
+    return expit(theta[0] + theta[1] * x)
+
+
+def fit_node_time(sizes: np.ndarray, counts: np.ndarray, durations: np.ndarray) -> np.ndarray:
+    """
+    Bounding time of one size-k super node, fitted as a + b k (b >= 0, Theil-Sen) on the sizes that were sampled with
+    the full sample count. Sizes sampled after a size without any safe node get far fewer samples, and their time per
+    node is dominated by the per-batch overhead; the first size also pays the warm-up.
+    """
+    full = np.nonzero(counts == counts.max())[0][1:]  # skip the first size (warm-up)
+    if len(full) < 2:
+        return np.full(len(sizes), float(np.median(durations / counts)))
+    per_node = durations[full] / counts[full]
+    slope = max(float(theilslopes(per_node, sizes[full])[0]), 0.)
+    intercept = float(np.median(per_node - slope * sizes[full]))
+    return np.maximum(intercept + slope * sizes, 0.5 * float(per_node.min()))
+
+
 def aggregate_super_samples(per_worker: list[tuple[list[int], list[int], list[float]]], level: int) -> tuple[dict[int, float], dict[int, float]]:
-    """Safe rate and mean bounding time of super nodes per focus-set size, from every worker's samples."""
-    counts = np.sum([np.array(c) for c, _, _ in per_worker], axis=0)
-    successes = np.sum([np.array(s) for _, s, _ in per_worker], axis=0)
-    durations = np.sum([np.array(t) for _, _, t in per_worker], axis=0)
-    sr = successes / counts
-    mean_time = durations / counts
-    mean_time[0] = mean_time[1]
-    # The fraction-robust estimate needs sr[i - 1] > sr[i]: enforce a monotone decrease by interpolating offending entries.
-    for i in range(1, len(sr) - 1):
-        if sr[i] >= sr[i - 1]:
-            sr[i] = min((sr[i - 1] + sr[i + 1]) / 2, sr[i - 1])
-    return {k + level: v for k, v in enumerate(sr)}, {k + level: v for k, v in enumerate(mean_time)}
+    """Safe rate and bounding time of a super node per focus-set size, fitted from every worker's samples."""
+    counts = np.sum([np.array(c) for c, _, _ in per_worker], axis=0).astype(float)
+    successes = np.sum([np.array(s) for _, s, _ in per_worker], axis=0).astype(float)
+    durations = np.sum([np.array(t) for _, _, t in per_worker], axis=0).astype(float)
+    sizes = np.arange(level, level + len(counts), dtype=float)
+    sr = fit_safe_rate(sizes, counts, successes)
+    mean_time = fit_node_time(sizes, counts, durations)
+    return {k + level: float(v) for k, v in enumerate(sr)}, {k + level: float(v) for k, v in enumerate(mean_time)}
 
 
 def fraction_robust(safe_rate: dict[int, float], level: int, max_size: int) -> dict[int, dict[int, float]]:
@@ -80,12 +118,8 @@ def choose_geometry(VT: dict[int, float], num_pixels: int, level: int, max_size:
         cdf_before = norm.cdf(level - 0.5, mean_size, std_dev)
         for block_size in range(level, max_size + 1):
             cdf_after = norm.cdf(block_size + 0.5, mean_size, std_dev)
-            expected = (cdf_after - cdf_before) * total_blocks  # expected number of blocks of this size
+            estimated_time += (cdf_after - cdf_before) * total_blocks * VT[block_size]  # expected number of blocks of this size
             cdf_before = cdf_after
-            count = math.floor(expected)
-            if random.random() < expected - count:
-                count += 1
-            estimated_time += count * VT[block_size]
         candidates.append({str(geometry): f"{total_blocks} blocks, mean size {round(mean_size, 3)}",
                            "estimated_summed_duration": round(float(estimated_time), 3)})
         if estimated_time < best_time:
