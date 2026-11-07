@@ -1,6 +1,5 @@
 # -*- coding:utf-8 -*-
 
-from covering_generator import CVD_MIN_T, CVD_MAX_T
 from pathlib import Path
 from enum import Enum, auto
 from dataclasses import dataclass
@@ -10,29 +9,6 @@ from torchvision.transforms import ToTensor, Compose, Normalize
 import torch
 import csv
 import numpy as np
-
-class Strategy(Enum):
-    FocusBranch = auto()
-    ConcreteOnly  = auto()
-    ForceCVD  = auto()
-    toptCoVerD = auto()
-
-    def __str__(self) -> str:
-        if self is Strategy.toptCoVerD: return "w/o policy 2"
-        if self is Strategy.ConcreteOnly: return "w/o policy 1"
-        if self is Strategy.ForceCVD: return "force CVD"
-        if self is Strategy.FocusBranch: return "FocusBranch"
-
-    def require_supercheck(self) -> bool:
-        return self in {Strategy.ForceCVD, Strategy.toptCoVerD}
-
-    def assert_strategy_applicable(self, epsilon: int):
-        if self == Strategy.ForceCVD:
-            assert epsilon >= CVD_MIN_T, f"Strategy {self} inapplicable for epsilon {epsilon}. Covering generator requires epsilon >= {CVD_MIN_T}."
-        elif self == Strategy.toptCoVerD:
-            assert CVD_MIN_T <= epsilon <= CVD_MAX_T, f"Strategy {self} inapplicable for epsilon {epsilon}. Covering generator requires {CVD_MIN_T} <= epsilon <= {CVD_MAX_T}."
-        else:
-            assert epsilon >= 1, f"Strategy {self} inapplicable for epsilon {epsilon}. It requires epsilon >= 1."
 
 class DatasetName(Enum):
     MNIST   = auto()

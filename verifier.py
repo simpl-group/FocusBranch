@@ -1,7 +1,7 @@
 # Reference: https://github.com/YuvShap/CoVerD/blob/main/tf_verify/calzone_robustness_analyzer.py
 from utils import TQDM_BAR_FORMAT
 from utils import protocol as P
-from data import load_covering_sizes, Strategy
+from data import load_covering_sizes
 from coverd_finite_geometries import Geometry
 from covering_generator import CVD_MIN_T, CVD_MAX_T
 from covering_generator.estimator import estimate_generator_speed, estimate_extra_time
@@ -26,12 +26,16 @@ MAX_MEAN_SIZE_NOT_ALL_SAFE = 15
 
 
 class Verifier:
-    def __init__(self, engine: BoundingEngine, gpu_workers: list[Connection], cpu_workers: list[Connection], plan_only: bool, strategy: Strategy, probe_thickness: int, until_timedout: bool, force_reestimate: bool):
+    def __init__(self, engine: BoundingEngine, gpu_workers: list[Connection], cpu_workers: list[Connection], plan_only: bool, probe_thickness: int, until_timedout: bool, force_reestimate: bool,
+                 concrete_only: bool = False, level_eps_only: bool = False):
         self.engine = engine
         self.__gpus = GpuWorkerPool(gpu_workers)
         self.__num_gpu_workers = len(gpu_workers)
         self.__plan_only = plan_only
-        self.__strategy = strategy
+        self.__concrete_only = concrete_only
+        """--concrete-only: concrete branching only (ablation, w/o policy 1)"""
+        self.__level_eps_only = level_eps_only
+        """--level-eps-only: no probing or concrete sampling, super branching from level eps only (ablation, w/o policy 2)"""
         self.__probe_thickness = probe_thickness
         self.__until_timedout = until_timedout
         self.__e, self.__v, self.__timeout, self.__channel_size = engine.eps, engine.num_pixels, engine.timeout, engine.bounded_x0.channel_size
@@ -82,7 +86,7 @@ class Verifier:
         super_safe_rate, mean_supercheck_time = {}, {}
         mean_size_limits = {l: self.__refinement_db_max_v for l in range(CVD_MIN_T, min(self.__e + 1, CVD_MAX_T + 1))}
         unk_combs1 = torch.empty((0, 1), dtype=torch.int64)
-        if not self.__strategy == Strategy.toptCoVerD:
+        if not self.__level_eps_only:
             first_all_safe_level, min_lb_l, unk_combs1 = self.__probe()
             print(f'Finished probing, first_all_safe_level: {first_all_safe_level}, min_lb_l: {min_lb_l:.4f}, took {round(time.time() - self.verifier_start_time, 3)} s')
             self.__gpus.broadcast((P.PROBE_DONE, first_all_safe_level))
@@ -94,19 +98,19 @@ class Verifier:
                     if l < first_all_safe_level:
                         mean_size_limits[l] = MAX_MEAN_SIZE_NOT_ALL_SAFE
                 sample_counts[:2] = [1, self.__v]
-                sample_successes[:2] = [0, 0 if self.__strategy.require_supercheck() else self.__v - unk_combs1.shape[0]]
+                sample_successes[:2] = [0, self.__v - unk_combs1.shape[0]]
                 for sc, ss in self.__gpus.gather():
                     sample_counts = [a + b for a, b in zip(sample_counts, sc)]
                     sample_successes = [a + b for a, b in zip(sample_successes, ss)]
         concrete_safe_rate = [s / c if c > 0 else 0. for s, c in zip(sample_successes, sample_counts)]
         print(f'Sampled concrete safe rates: {concrete_safe_rate}')
-        if self.__strategy.require_supercheck() \
-            or self.__strategy == Strategy.FocusBranch and sum(concrete_safe_rate[:2]) == 0:  # if level 0 safe or any level 1 safe, go CCSaP directly
+        if self.__level_eps_only \
+            or not self.__concrete_only and sum(concrete_safe_rate[:2]) == 0:  # if level 0 safe or any level 1 safe, go CCSaP directly
             print(f'Sampling super-nodes on level', end='', flush=True)
             # Sample super-nodes at levels with high concrete safe rate
             sample_all_k_end_level = min(self.__e, CVD_MAX_T)
             for l in range(CVD_MIN_T, sample_all_k_end_level + 1):
-                if self.__strategy != Strategy.toptCoVerD and concrete_safe_rate[l] >= SR_THRES_TO_SAMPLE_SUPER[l] or l == sample_all_k_end_level:
+                if not self.__level_eps_only and concrete_safe_rate[l] >= SR_THRES_TO_SAMPLE_SUPER[l] or l == sample_all_k_end_level:
                     print(f' {l}', end='\n' if l == sample_all_k_end_level else '', flush=True)
                     self.__gpus.broadcast((P.SAMPLE_SUPER, l))
                     super_safe_rate[l], mean_supercheck_time[l] = planner.aggregate_super_samples(self.__gpus.gather(), l)
@@ -144,13 +148,13 @@ class Verifier:
 
         choosing_strategy_start = time.time()
         for l in range(first_any_safe_level, self.__e + 1):
-            if sample_successes[l] == math.comb(self.__v, l) and not self.__strategy.require_supercheck():  # all nodes are safe, skip this level
+            if sample_successes[l] == math.comb(self.__v, l) and not self.__level_eps_only:  # all nodes are safe, skip this level
                 candidate_strategies.append((estimated_CC_time_per_l[l], 'skip', l))
                 break
             tail_CC_time = sum(estimated_CC_time_per_l[l + 1:])
             tail_SaP_time = sum(estimated_SaP_time_per_l[l:])
             if tail_SaP_time > 1.0: tail_SaP_time /= self.__num_gpu_workers
-            if not self.__strategy.require_supercheck():
+            if not self.__level_eps_only:
                 CCSaP_time = (self.mean_boundconcrete_time[l] * math.comb(self.__v, l) + tail_CC_time) / self.__num_gpu_workers + tail_SaP_time
                 candidate_strategies.append((CCSaP_time, 'CCSaP', l))
             if l in super_safe_rate:

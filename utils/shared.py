@@ -1,6 +1,5 @@
 from models import MODEL_SPECS, get_network_and_dataset_utils
 from data.prepare import build_loader
-from data import Strategy
 from data.db import DB_PATH
 from AbstractInterpreter import L0BoundedInput, SequentialAT
 from bounding_engine import BoundingEngine
@@ -26,7 +25,9 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-rk", "--rep-each-k", type=int, default=200, help="Sample size of super nodes of each focus set size, per GPU worker.")
     parser.add_argument("-rl", "--rep-each-level", type=int, default=5000, help="Sample size of each level's concrete nodes, per GPU worker.")
     parser.add_argument("-pf", "--pool-factor", type=int, default=2, help="The super nodes of a focus-set size are bounded once pool-factor x -sb of them are pooled (the pool size).")
-    parser.add_argument("--strategy", type=lambda s: Strategy[s], choices=list(Strategy), default=Strategy.FocusBranch, help="Strategy to use for verification.")
+    ablation = parser.add_mutually_exclusive_group()
+    ablation.add_argument("--concrete-only", action="store_true", help="Ablation (w/o policy 1): branch and bound concrete nodes only, no super node is sampled or bounded. Turned off by default.")
+    ablation.add_argument("--level-eps-only", action="store_true", help="Ablation (w/o policy 2, recovers CoVerD+top-t-GP decomposition): no probing or concrete sampling, super branching from level eps only (eps between 3 and 6). Turned off by default.")
     parser.add_argument("-db", "--database", type=str, default=DB_PATH, help="Path to the SQLite database file to use for storing results. If not specified, the default database will be used.")
     parser.add_argument("--solver", type=str, choices=["gurobi", "abcrown"], default="gurobi", help="The solver to use for optimization.")
 

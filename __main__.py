@@ -17,6 +17,7 @@ import pandas as pd
 from utils.shared import add_shared_arguments, get2
 from data.db import set_database, store_ours_result, ours_should_skip, ours_config_consistent, sigma0_min_eps, insert_ours
 from solver_check import __file__ as solver_file
+from covering_generator import CVD_MIN_T, CVD_MAX_T
 from gpu_worker import __file__ as gpu_worker_file
 
 
@@ -48,7 +49,9 @@ if __name__ == '__main__':
     parser.add_argument("--force-reestimate", action="store_true", help="Force a re-estimation of covering generator speed and SaP (concrete branching & pruning) speed even if existing estimates are found in the database.")
     args = parser.parse_args()
     set_database(args.database)
-    args.strategy.assert_strategy_applicable(args.epsilon)
+    if args.level_eps_only:
+        assert CVD_MIN_T <= args.epsilon <= CVD_MAX_T, f"--level-eps-only needs {CVD_MIN_T} <= epsilon <= {CVD_MAX_T} (covering verification designs)"
+    assert args.epsilon >= 1, "epsilon must be at least 1"
     config_params = signature(ours_config_consistent).parameters.keys()
     config_kwargs = {name: getattr(args, name) for name in config_params if hasattr(args, name)}
     consistent, warning_msg = ours_config_consistent(img=args.start_idx+args.test_batches-1, **config_kwargs)
@@ -77,7 +80,7 @@ if __name__ == '__main__':
             my_env["CUDA_VISIBLE_DEVICES"] = str(available_gpus[worker_id % len(available_gpus)])
             gpu_processes.append(Popen([
                 sys.executable, gpu_worker_file,
-                "--strategy", args.strategy.name,
+                *(["--level-eps-only"] if args.level_eps_only else []),
                 "--worker_id", str(worker_id),
                 "--num-workers", str(args.gpu_num),
                 "--port", str(gpu_listener.address[1]),
@@ -116,7 +119,8 @@ if __name__ == '__main__':
         gpu_workers=gpu_workers,
         cpu_workers=cpu_workers,
         plan_only=args.plan_only,
-        strategy=args.strategy,
+        concrete_only=args.concrete_only,
+        level_eps_only=args.level_eps_only,
         probe_thickness=args.probe_thickness,
         until_timedout=args.until_timedout,
         force_reestimate=args.force_reestimate

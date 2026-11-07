@@ -83,6 +83,8 @@ some command line arguments:
 some flags:
 - `--demo`: If set, it bypass the local database and force a demo verification on a single image
 - `-ut`: If set, we don't skip the verification until timedout, even if the estimated verification time is larger than timedout.
+- `--concrete-only`: If set, run the ablation "w/o policy 1" (Section 4.4): super-node branching is disabled and verification always starts from the initial node $\Theta_0$, so only concrete nodes are branched and bounded, and no super node is sampled or bounded
+- `--level-eps-only`: If set, run the ablation "w/o policy 2" (Section 4.4), which recovers the CoVerD+top-t-GP decomposition: concrete-node branching is disabled and verification always starts from level $\epsilon$ (requires $3 \le \epsilon \le 6$), without probing or concrete sampling. The two ablation flags are mutually exclusive; by default both are off and the starting level is chosen by the verification planner
 
 For detailed command line args usage, please refer to `python . -h`.
 

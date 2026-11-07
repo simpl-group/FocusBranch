@@ -12,9 +12,9 @@ import threading
 import traceback
 import numpy as np
 import torch
-from covering_generator import launch_covering_generator, CVD_MIN_T
+from covering_generator import launch_covering_generator
 from coverd_finite_geometries import Geometry
-from data import load_covering, Strategy
+from data import load_covering
 from split_and_prune import prepare4pruning, prune
 from utils import protocol as P
 from bounding_engine import BoundingEngine, batched_randsample, selected_indices_sample
@@ -143,12 +143,7 @@ class GpuWorker:
         engine = self.engine
         assert engine.bounded_x0.level is None, "bounded_x0.level must be None since we are using engine.bounded_x0.selecting"
         sample_counts, sample_successes = [0] * (engine.eps + 1), [0] * (engine.eps + 1)
-        if not engine.strategy.require_supercheck():
-            start_level = 2
-        elif engine.strategy == Strategy.ForceCVD:
-            start_level = CVD_MIN_T
-        else: assert False, f"Unsupported strategy {engine.strategy}"
-        for level in range(start_level, engine.eps + 1):
+        for level in range(2, engine.eps + 1):
             focus_sets = selected_indices_sample(engine.num_pixels, level, engine.rep_each_level, num_workers=self.num_workers, worker_id=self.worker_id)
             sample_counts[level] = focus_sets.shape[0]
             sample_successes[level] = int(engine.bound_nodes(focus_sets).sum().item())
@@ -178,7 +173,7 @@ class GpuWorker:
     def __plan(self):
         """Answer the verifier's probing and sampling requests; returns the first message of the verification stage."""
         engine = self.engine
-        if engine.strategy != Strategy.toptCoVerD:
+        if not engine.level_eps_only:
             if self.worker_id == 0:  # the root node
                 self.send(1. if bool(engine.bound_nodes(torch.empty((1, 0), dtype=torch.int64)).item()) else -1.)
             message = self.conn.recv()

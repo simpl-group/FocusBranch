@@ -1,5 +1,4 @@
 from AbstractInterpreter import L0BoundedInput, SequentialAT
-from data import Strategy
 from data.db import insert_mean_concretecheck_time, get_mean_concretecheck_time
 from utils import DEVICE
 from time import perf_counter
@@ -49,7 +48,7 @@ class BoundingEngine:
         rep_each_level: int=5000,
         pool_factor: int=2,  # pool size = supercheck_batch x pool_factor
         timeout: int=0,
-        strategy: Strategy=Strategy.FocusBranch,
+        level_eps_only: bool=False,
         demo: bool=False
     ) -> None:
         self.torch_net = torch_net.cpu()
@@ -67,7 +66,8 @@ class BoundingEngine:
         self.demo = demo
         assert pool_factor >= 1, "--pool-factor must be at least 1"
         self.pool_size = supercheck_batch * pool_factor
-        self.strategy = strategy
+        self.level_eps_only = level_eps_only
+        """--level-eps-only: no probing or concrete sampling in planning, super branching from level eps only"""
         self.max_batch_size = max(concretecheck_batch, supercheck_batch)  # lowered when the GPU runs out of memory
 
     def bound_current_batch(self) -> torch.Tensor:
