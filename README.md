@@ -15,25 +15,22 @@ First, clone the repo and `cd` into it
 git clone --depth 1 https://github.com/simpl-group/FocusBranch.git
 cd FocusBranch
 ```
+To reproduce the results in the paper, check out the tag `v0.9.0` (for a shallow clone: `git clone --depth 1 --branch v0.9.0 https://github.com/simpl-group/FocusBranch.git`).
 
 ### Download the Covering Design Database
-Make sure you create the following folders
+Create the folders for the coverings:
 ```bash
-mkdir ../coverings
-mkdir data/refinement_coverings/3
-mkdir data/refinement_coverings/4
-mkdir data/refinement_coverings/5
-mkdir data/refinement_coverings/6
+mkdir -p ../coverings data/refinement_coverings/{3..6}
 ```
 
-Download `refinement_coverings3.zip` ~ `refinement_coverings6.zip` into `../coverings`. The zip files can be obtained following the instructions from [`CoVerD`'s (one of our baseline) github repository](https://github.com/YuvShap/CoVerD).
+Download `refinement_coverings3.zip` to `refinement_coverings6.zip` into `../coverings`, following the instructions in the [GitHub repository of CoVerD](https://github.com/YuvShap/CoVerD) (one of our baselines), then unzip each into its folder under `data/refinement_coverings/`:
 
 ```bash
-unzip -q ../coverings/refinement_coverings3.zip -d data/refinement_coverings/3
-unzip -q ../coverings/refinement_coverings4.zip -d data/refinement_coverings/4
-unzip -q ../coverings/refinement_coverings5.zip -d data/refinement_coverings/5
-unzip -q ../coverings/refinement_coverings6.zip -d data/refinement_coverings/6
+for i in {3..6}; do
+  unzip -q ../coverings/refinement_coverings$i.zip -d data/refinement_coverings/$i
+done
 ```
+
 ### Other tools
 Make sure CUDA is available and its version `>=12.2`. You can check your CUDA version via `nvcc --version`
 
@@ -87,6 +84,25 @@ some flags:
 - `--level-eps-only`: If set, run the ablation "w/o policy 2" (Section 4.4), which recovers the CoVerD+top-t-GP decomposition: concrete-node branching is disabled and verification always starts from level $\epsilon$ (requires $3 \le \epsilon \le 6$), without probing or concrete sampling. The two ablation flags are mutually exclusive; by default both are off and the starting level is chosen by the verification planner
 
 For detailed command line args usage, please refer to `python . -h`.
+
+## Code overview
+
+| File | Role |
+| --- | --- |
+| `__main__.py` | Entry point: spawns the GPU and MILP worker processes and runs the verifier image by image |
+| `verifier.py` | The verifier (main process): planning (Algorithms 2/3), super branching coordination, concrete branching and pruning (Algorithm 6) |
+| `planner.py` | Pure verification-planning functions: safe-rate aggregation, refinement-strategy DP, choice of the covering verification design |
+| `gpu_worker.py` | GPU worker process, launched by `__main__.py`: samples nodes for planning; `SuperBranching` verifies the worker's share of the covering verification design (pooled, batched bounding and refinement of super nodes) |
+| `milp_dispatcher.py` | Sends unbranchable unknown nodes to the MILP workers and collects their verdicts |
+| `bounding_engine.py` | Bounding of nodes on one GPU (`BoundingEngine.bound_nodes`) |
+| `AbstractInterpreter.py` | Linear relaxations and back-substitution; `L0BoundedInput` bounds concrete nodes (`selecting`) and super nodes (`partial` at a level) (Section 3.4) |
+| `l0bound/` | CUDA kernels of the node-constrained concretization (Eq. (10)/(12)): sums of the top-k contributions |
+| `split_and_prune.py`, `bimm/` | Concrete branching and pruning of the next level, with CUDA bitmask kernels |
+| `covering_generator/` | Blocks of the finite-geometry covering verification designs, streamed to the GPU workers by a generator process |
+| `solver_check.py` | MILP worker (Gurobi), and the complete-MILP baseline |
+| `utils/protocol.py` | Message tags between the verifier and its workers |
+
+Tests: `python -m pytest tests` (the refinement-covering checks need the downloaded coverings).
 
 #### If you want to use ABCrown as MILP solver, instead of Gurobi
 1. build another venv with python 3.11, with all `requirements.txt` installed, activate it, run `python setup.py build_ext --inplace` again
