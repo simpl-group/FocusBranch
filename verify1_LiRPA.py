@@ -30,8 +30,9 @@ if __name__ == "__main__":
     parser.add_argument("--method", type=str, default="CROWN-Optimized", choices=["CROWN-Optimized", 'backward'])
     args = parser.parse_args()
 
-    if not lirpa_config_consistent(net=args.net, eps=args.epsilon, img=args.start_idx+args.test_batches-1, method=args.method, timeout=args.timeout, max_iteration=args.max_iteration):
-        warnings.warn(f"Configuration inconsistent: net={args.net}, img={args.start_idx+args.test_batches-1}, eps={args.epsilon}, timeout={args.timeout}, max_iteration={args.max_iteration}, method={args.method}.")
+    if not lirpa_config_consistent(net=args.net, eps=args.epsilon, first_img=args.start_idx, last_img=args.start_idx + args.test_batches - 1, method=args.method,
+                                   timeout=args.timeout, max_iteration=args.max_iteration):
+        warnings.warn(f"Configuration inconsistent: net={args.net}, images {args.start_idx}..{args.start_idx + args.test_batches - 1}, eps={args.epsilon}, timeout={args.timeout}, max_iteration={args.max_iteration}, method={args.method}.")
         if not args.force_store and not args.demo:
             exit(1)
 

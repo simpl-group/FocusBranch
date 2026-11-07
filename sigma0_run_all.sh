@@ -5,7 +5,7 @@ seed_end=${2:-10}
 logpath="logs/sigma0"
 mkdir -p $logpath
 
-nets=(bfc1 bafc1 afc1 afc2 afc3 fc4 bcv1 bcv2 bcv3 bcv6 bcv7)
+nets=(bfc1 afc5 afc1 afc2 afc3 afc4 bcv1 bcv2 bcv3 bcv6 bcv7)
 
 for net in "${nets[@]}"; do
     for seed in $(seq $seed_start $seed_end); do

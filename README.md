@@ -67,7 +67,7 @@ python . --net afc1 -e 5 -s 0 -tb 100 -to 1800 -g 4 -m 5 -rk 200 -rl 5000 -cb 40
 ```
 
 some command line arguments:
-- `--net` choose a short nickname from afc1,afc2,afc3,fc4,bafc1,bfc1,bcv1, bcv2,...,bcv7. Note that afc4 in the paper refers to fc4 and afc5 refers to bafc1
+- `--net` choose a short nickname from afc1,...,afc5,bfc1,bcv1,...,bcv7
 - `-e` or `--eps`: perturbation budgets. choose from 1 to 6
 - `-s` or `--start-idx`: the image index to start verificaiton, default to 0
 - `-n` or `--num-images`: the total number of images to verify starting from the starting image index, default to 1

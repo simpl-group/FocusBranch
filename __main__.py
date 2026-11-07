@@ -54,7 +54,7 @@ if __name__ == '__main__':
     assert args.epsilon >= 1, "epsilon must be at least 1"
     config_params = signature(ours_config_consistent).parameters.keys()
     config_kwargs = {name: getattr(args, name) for name in config_params if hasattr(args, name)}
-    consistent, warning_msg = ours_config_consistent(img=args.start_idx+args.test_batches-1, **config_kwargs)
+    consistent, warning_msg = ours_config_consistent(first_img=args.start_idx, last_img=args.start_idx + args.test_batches - 1, **config_kwargs)
     if not consistent:
         warnings.warn(f"Configuration inconsistent:\n{warning_msg}.")
         if not args.force_store and not args.demo:

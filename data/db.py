@@ -91,7 +91,7 @@ def insert_lirpa(net: str, img: int, eps: int, cc=True, verified=False, total_du
     _insert_row("lirpa", columns, values, db=db)
     if not verified:
         with sqlite3.connect(db) as conn:
-            result = conn.execute("SELECT max(eps) FROM lirpa_config WHERE net = ?", (net,)).fetchone()
+            result = conn.execute("SELECT end_eps FROM lirpa_config WHERE net = ?", (net,)).fetchone()
         if result and result[0] is not None:
             max_eps = result[0]
             for higher_eps in range(eps + 1, max_eps + 1):
@@ -105,7 +105,7 @@ def insert_milp(net: str, img: int, eps: int, cc=True, verified=False, timed_out
     _insert_row("milp", columns, values, db=db)
     if not verified:
         with sqlite3.connect(db) as conn:
-            result = conn.execute("SELECT max(eps) FROM milp_config WHERE net = ?", (net,)).fetchone()
+            result = conn.execute("SELECT end_eps FROM milp_config WHERE net = ?", (net,)).fetchone()
         if result and result[0] is not None:
             max_eps = result[0]
             for higher_eps in range(eps + 1, max_eps + 1):
@@ -117,7 +117,7 @@ def insert_ours(net: str, img: int, eps: int, cc=True, estimated_time=0.0, use_c
     """skip: equivalent to actually ran"""
     if not skip:  # plan_only
         with sqlite3.connect(db) as conn:
-            result = conn.execute("SELECT time_limit_seconds FROM ours_config WHERE net = ? AND eps = ?", (net, eps)).fetchone()
+            result = conn.execute("SELECT time_limit_seconds FROM ours_config WHERE net = ?", (net,)).fetchone()
         if estimated_time > result[0] * 2 or verified: # estimated_timed_out skip or end_level 0 or 1 skip -> equivalent to actually ran
             skip = True
     _use_cvd = int(use_cvd) if cc else -1
@@ -126,7 +126,7 @@ def insert_ours(net: str, img: int, eps: int, cc=True, estimated_time=0.0, use_c
     _insert_row("ours", columns, values, db=db)
     if timed_out or found_adv or not cc:  # keep timed_out here for now
         with sqlite3.connect(db) as conn:
-            result = conn.execute("SELECT max(eps) FROM ours_config WHERE net = ?", (net,)).fetchone()
+            result = conn.execute("SELECT end_eps FROM ours_config WHERE net = ?", (net,)).fetchone()
         assert result and result[0] is not None
         max_eps = result[0]
         for higher_eps in range(eps + 1, max_eps + 1):
@@ -193,10 +193,10 @@ def store_ours_result(net: str, eps: int, img: int, result: dict, skip=True, db:
         adversarial_pixel_values = adv_results.get('adversarial_pixel_values', '')
         adversarial_label = adv_results.get('adversarial_label', -1)
 
-    # Extract chosen geometry from coverd
+    # Extract the chosen geometry of super branching
     chosen_geometry = ""
-    coverd_info = summary.get('SCSaP', {})
-    chosen_geom_dict = coverd_info.get('chosen_geometry', {})
+    scsap_info = summary.get('SCSaP', {})
+    chosen_geom_dict = scsap_info.get('chosen_geometry', {})
     if chosen_geom_dict:
         geom_key = list(chosen_geom_dict.keys())[0] if chosen_geom_dict.keys() else ""
         if geom_key.startswith('Geometry('):
@@ -238,71 +238,77 @@ ours_should_skip = _make_should_skip("ours")
 milp_should_skip = _make_should_skip("milp")
 lirpa_should_skip = _make_should_skip("lirpa")
 
-def ours_config_consistent(net: str, epsilon: int, img: int, gpu_num: int, milp_num: int, timeout:int, rep_each_k: int, rep_each_level: int, concretecheck_batch: int, supercheck_batch: int, pool_factor: int, probe_thickness: int, db: str="") -> tuple[bool, str]:
-    if not db: db = __db
-    query = "SELECT * FROM ours_config WHERE net = ? AND eps = ?"
+def _config(table: str, net: str, db: str) -> dict | None:
+    """The configuration row of a network (one per network, see schema.sql)."""
     with sqlite3.connect(db) as c:
         c.row_factory = sqlite3.Row
-        result = c.execute(query, (net, epsilon)).fetchone()
-    if not result:
-        return False, f"No config found for net={net}, eps={epsilon} in ours_config table"
-    config = dict(result)
-    # report inconsistent args:
-    inconsistent_args = []
-    if config['num_img'] <= img:
-        inconsistent_args.append(f"maximum img_idx \r\t\t\t(config: {config['num_img']} <= {img})")
-    if config['milp_num'] != milp_num:
-        inconsistent_args.append(f"--milp_num \r\t\t\t(config: {config['milp_num']} != {milp_num})")
-    if config['gpu_num'] != gpu_num:
-        inconsistent_args.append(f"--gpu_num \r\t\t\t(config: {config['gpu_num']} != {gpu_num})")
-    if config['time_limit_seconds'] != timeout:
-        inconsistent_args.append(f"--timeout \r\t\t\t(config: {config['time_limit_seconds']} != {timeout})")
-    if config['rep_each_k'] != rep_each_k:
-        inconsistent_args.append(f"--rep_each_k \r\t\t\t(config: {config['rep_each_k']} != {rep_each_k})")
-    if config['rep_each_level'] != rep_each_level:
-        inconsistent_args.append(f"--rep_each_level \r\t\t\t(config: {config['rep_each_level']} != {rep_each_level})")
-    if config['probe_thickness'] != probe_thickness:
-        inconsistent_args.append(f"--probe_thickness \r\t\t\t(config: {config['probe_thickness']} != {probe_thickness})")
-    if config['concretecheck_batch'] != 0 and config['concretecheck_batch'] != concretecheck_batch:
-        inconsistent_args.append(f"--concretecheck_batch \r\t\t\t(config: {config['concretecheck_batch']} != {concretecheck_batch})")
-    if config['supercheck_batch'] != 0 and config['supercheck_batch'] != supercheck_batch:
-        inconsistent_args.append(f"--supercheck_batch \r\t\t\t(config: {config['supercheck_batch']} != {supercheck_batch})")
-    if 'pool_factor' not in config:  # databases made before --pool-size became --pool-factor
-        config['pool_factor'] = config['pool_size'] // config['supercheck_batch'] if config['pool_size'] and config['supercheck_batch'] else 0
-    if config['pool_factor'] != 0 and config['pool_factor'] != pool_factor:
-        inconsistent_args.append(f"--pool_factor \r\t\t\t(config: {config['pool_factor']} != {pool_factor})")
+        row = c.execute(f"SELECT * FROM {table} WHERE net = ?", (net,)).fetchone()
+    return dict(row) if row else None
+
+def _range_problems(config: dict, eps: int, first_img: int, last_img: int) -> list[str]:
+    """The run's eps and images outside the configured (inclusive) ranges."""
+    problems = []
+    if not config['start_eps'] <= eps <= config['end_eps']:
+        problems.append(f"-e {eps} \r\t\t\t(config: eps {config['start_eps']}..{config['end_eps']})")
+    if first_img < config['start_img'] or last_img > config['end_img']:
+        problems.append(f"images {first_img}..{last_img} \r\t\t\t(config: images {config['start_img']}..{config['end_img']})")
+    return problems
+
+def ours_config_consistent(net: str, epsilon: int, first_img: int, last_img: int, gpu_num: int, milp_num: int, timeout: int, rep_each_k: int,
+                           rep_each_level: int, concretecheck_batch: int, supercheck_batch: int, pool_factor: int, probe_thickness: int, db: str="") -> tuple[bool, str]:
+    """Whether a run (images first_img..last_img at eps `epsilon`) matches the network's row of ours_config; else the
+    inconsistent arguments."""
+    if not db: db = __db
+    config = _config("ours_config", net, db)
+    if config is None:
+        return False, f"No config found for net={net} in ours_config table"
+    inconsistent_args = _range_problems(config, epsilon, first_img, last_img)
+    for arg, column, value in (("--num-milps", "num_milp", milp_num), ("--num-gpus", "num_gpus", gpu_num), ("--timeout", "time_limit_seconds", timeout),
+                               ("--rep-each-k", "rep_each_k", rep_each_k), ("--rep-each-level", "rep_each_level", rep_each_level),
+                               ("--probe-thickness", "probe_thickness", probe_thickness)):
+        if config[column] != value:
+            inconsistent_args.append(f"{arg} \r\t\t\t(config: {config[column]} != {value})")
+    for arg, column, value in (("--concretecheck-batch", "concretecheck_batch", concretecheck_batch), ("--supercheck-batch", "supercheck_batch", supercheck_batch),
+                               ("--pool-factor", "pool_factor", pool_factor)):
+        if config[column] != 0 and config[column] != value:  # 0: any
+            inconsistent_args.append(f"{arg} \r\t\t\t(config: {config[column]} != {value})")
     return len(inconsistent_args) == 0, "\n".join(inconsistent_args)
 
-def milp_config_consistent(net: str, eps: int, img: int, timeout:int, db: str="") -> bool:
+def milp_config_consistent(net: str, eps: int, first_img: int, last_img: int, timeout: int, db: str="") -> bool:
     if not db: db = __db
-    query = "SELECT * FROM milp_config WHERE net = ? AND eps = ?"
-    with sqlite3.connect(db) as c:
-        c.row_factory = sqlite3.Row
-        result = c.execute(query, (net, eps)).fetchone()
-    if not result:
-        return False
-    config = dict(result)
-    return (config['num_img'] > img and
-            config['time_limit_seconds'] == timeout)
+    config = _config("milp_config", net, db)
+    return config is not None and not _range_problems(config, eps, first_img, last_img) and config['time_limit_seconds'] == timeout
 
-def lirpa_config_consistent(net: str, eps: int, img: int, method: str, timeout:int, max_iteration:int, db: str="") -> bool:
+def lirpa_config_consistent(net: str, eps: int, first_img: int, last_img: int, method: str, timeout: int, max_iteration: int, db: str="") -> bool:
     if not db: db = __db
-    query = "SELECT * FROM lirpa_config WHERE net = ? AND eps = ?"
+    config = _config("lirpa_config", net, db)
+    return (config is not None and not _range_problems(config, eps, first_img, last_img) and config['method'] == method and
+            config['time_limit_seconds'] == timeout and config['max_iteration'] == max_iteration)
+
+def migrate(db: str):
+    """
+    Bring a database made with an older schema.sql to the current one: fc4 and bafc1 renamed to afc4 and afc5 in every
+    table, the `tag` column added to ours, the coverd tables dropped, and the configuration tables (ours_config,
+    lirpa_config, milp_config: one row per network, ranges of eps and images) re-created from the rows of schema.sql.
+    The results and the cached measurements are kept.
+    """
     with sqlite3.connect(db) as c:
-        c.row_factory = sqlite3.Row
-        result = c.execute(query, (net, eps)).fetchone()
-    if not result:
-        return False
-    config = dict(result)
-    return (config['num_img'] > img and
-            config['method'] == method and
-            config['time_limit_seconds'] == timeout and
-            config['max_iteration'] == max_iteration)
+        tables = [row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")]
+        for table in tables:
+            if "net" in [col[1] for col in c.execute(f"PRAGMA table_info({table})")]:
+                c.execute(f"UPDATE {table} SET net = 'afc4' WHERE net = 'fc4'")
+                c.execute(f"UPDATE {table} SET net = 'afc5' WHERE net = 'bafc1'")
+        if "ours" in tables and "tag" not in [col[1] for col in c.execute("PRAGMA table_info(ours)")]:
+            c.execute("ALTER TABLE ours ADD COLUMN tag TEXT DEFAULT ''")
+        for table in ("coverd", "coverd_config", "ours_config", "lirpa_config", "milp_config"):
+            c.execute(f"DROP TABLE IF EXISTS {table}")
+        c.executescript(open(Path(__file__).parent / "schema.sql").read())
 
 def main():
     parser = argparse.ArgumentParser(description="DB helper")
     parser.add_argument("--database", "-db", metavar="FILE", default=DB_PATH, help="Path to SQLite database file")
     parser.add_argument("--init", action="store_true", help="Initialize database schema")
+    parser.add_argument("--migrate", action="store_true", help="Bring a database made with an older schema to the current one (see `migrate`)")
     parser.add_argument("--select", '-s', metavar="COLUMNS", default="*", help="Columns to select")
     parser.add_argument("--from", '-f', dest="from_table", metavar="TABLE", help="Table to select from")
     parser.add_argument("--where", '-w', metavar="CLAUSE", help="Optional WHERE clause")
@@ -318,6 +324,11 @@ def main():
     if args.init:
         with sqlite3.connect(__db) as c:
             c.executescript(open(Path(__file__).parent / "schema.sql").read())
+        return None
+
+    if args.migrate:
+        migrate(__db)
+        print(f"Migrated {__db}")
         return None
 
     if args.drop:

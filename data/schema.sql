@@ -38,18 +38,20 @@ CREATE TABLE IF NOT EXISTS sigma0 (
 
 CREATE TABLE IF NOT EXISTS ours_config (
     net TEXT,
-    eps INTEGER,
-    gpu_num INTEGER,
-    milp_num INTEGER,
+    start_eps INTEGER,  -- the eps verified, start_eps..end_eps (inclusive)
+    end_eps INTEGER,
+    start_img INTEGER,  -- the images verified, start_img..end_img (inclusive)
+    end_img INTEGER,
+    num_gpus INTEGER,
+    num_milp INTEGER,
     time_limit_seconds INTEGER DEFAULT 1800,
     rep_each_k INTEGER,
     rep_each_level INTEGER,
-    num_img INTEGER,
-    concretecheck_batch INTEGER DEFAULT 0,
-    supercheck_batch INTEGER DEFAULT 0,
+    concretecheck_batch INTEGER DEFAULT 0,  -- 0: any
+    supercheck_batch INTEGER DEFAULT 0,  -- 0: any
     pool_factor INTEGER DEFAULT 0, -- pool size = supercheck_batch * pool_factor; 0: any
     probe_thickness INTEGER DEFAULT 50,
-    PRIMARY KEY (net, eps)
+    PRIMARY KEY (net)
 );
 
 -- DROP TABLE IF EXISTS ours;
@@ -66,6 +68,7 @@ CREATE TABLE IF NOT EXISTS ours (
     found_adv INTEGER DEFAULT 0,
     total_duration REAL DEFAULT 0,
     skip INTEGER DEFAULT 0,
+    tag TEXT DEFAULT '',  -- free label of the run
     PRIMARY KEY (net, img, eps)
 );
 
@@ -142,8 +145,8 @@ CREATE VIEW ours_digest AS
       WHEN 'afc1' THEN 1
       WHEN 'afc2' THEN 2
       WHEN 'afc3' THEN 3
-      WHEN 'fc4' THEN 4
-      WHEN 'bafc1' THEN 5
+      WHEN 'afc4' THEN 4
+      WHEN 'afc5' THEN 5
       WHEN 'bfc1' THEN 6
       WHEN 'bcv1' THEN 7
       WHEN 'bcv2' THEN 8
@@ -179,12 +182,14 @@ CREATE TABLE IF NOT EXISTS candidate_geometries (
 
 CREATE TABLE IF NOT EXISTS lirpa_config (
     net TEXT,
-    eps INTEGER,
+    start_eps INTEGER,  -- inclusive ranges, as in ours_config
+    end_eps INTEGER,
+    start_img INTEGER,
+    end_img INTEGER,
     method TEXT,
     time_limit_seconds INTEGER DEFAULT 1800,
     max_iteration INTEGER,
-    num_img INTEGER,
-    PRIMARY KEY (net, eps)
+    PRIMARY KEY (net)
 );
 
 CREATE TABLE IF NOT EXISTS lirpa (
@@ -200,10 +205,12 @@ CREATE TABLE IF NOT EXISTS lirpa (
 
 CREATE TABLE IF NOT EXISTS milp_config (
     net TEXT,
-    eps INTEGER,
+    start_eps INTEGER,  -- inclusive ranges, as in ours_config
+    end_eps INTEGER,
+    start_img INTEGER,
+    end_img INTEGER,
     time_limit_seconds INTEGER DEFAULT 1800,
-    num_img INTEGER,
-    PRIMARY KEY (net, eps)
+    PRIMARY KEY (net)
 );
 
 CREATE TABLE IF NOT EXISTS milp (
@@ -219,263 +226,41 @@ CREATE TABLE IF NOT EXISTS milp (
     PRIMARY KEY (net, img, eps)
 );
 
-CREATE TABLE IF NOT EXISTS coverd_config (
-    net TEXT,
-    eps INTEGER,
-    time_limit_seconds INTEGER DEFAULT 1800,
-    gpu_num INTEGER,
-    num_img INTEGER,
-    PRIMARY KEY (net, eps)
-);
-
-CREATE TABLE IF NOT EXISTS coverd (
-    net TEXT,
-    img INTEGER,
-    eps INTEGER,
-    cc INTEGER DEFAULT 1,
-    verified INTEGER DEFAULT 0,
-    timed_out INTEGER DEFAULT 0,
-    found_adv INTEGER DEFAULT 0,
-    estimated_time REAL DEFAULT 0,
-    total_duration REAL DEFAULT 0,
-    planning_duration REAL DEFAULT 0,
-    skip INTEGER DEFAULT 0,
-    PRIMARY KEY (net, img, eps)
-);
-
 INSERT OR REPLACE INTO ours_config
-(net, eps, gpu_num, milp_num, time_limit_seconds, rep_each_k, rep_each_level, num_img, concretecheck_batch, supercheck_batch, pool_factor, probe_thickness) VALUES
-('bfc1', 1, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bfc1', 2, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bfc1', 3, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bfc1', 4, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bfc1', 5, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bfc1', 6, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bfc1', 7, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bfc1', 8, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bafc1',1, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bafc1',2, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bafc1',3, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bafc1',4, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bafc1',5, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bafc1',6, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bafc1',7, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bafc1',8, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc1', 1, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc1', 2, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc1', 3, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc1', 4, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc1', 5, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc1', 6, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc1', 7, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc1', 8, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc2', 1, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc2', 2, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc2', 3, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc2', 4, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc2', 5, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc2', 6, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc2', 7, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc2', 8, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc3', 1, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc3', 2, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc3', 3, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc3', 4, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc3', 5, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc3', 6, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc3', 7, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('afc3', 8, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('fc4',  1, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('fc4',  2, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('fc4',  3, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('fc4',  4, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('fc4',  5, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('fc4',  6, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('fc4',  7, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('fc4',  8, 4, 5, 1800, 200, 5000, 100, 4000, 800, 2, 50),
-('bcv1', 1, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv1', 2, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv1', 3, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv1', 4, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv1', 5, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv1', 6, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv2', 1, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv2', 2, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv2', 3, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv2', 4, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv2', 5, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv2', 6, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv3', 1, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv3', 2, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv3', 3, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv3', 4, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv3', 5, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv3', 6, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv4', 3, 4, 5, 3600, 100, 100,  10, 5,   5, 4, 1),
-('bcv5', 3, 4,50, 1800, 200, 500,  10, 0, 400, 2, 5),
-('bcv6', 1, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv6', 2, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv6', 3, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv6', 4, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv6', 5, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv6', 6, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv7', 1, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv7', 2, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv7', 3, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv7', 4, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv7', 5, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5),
-('bcv7', 6, 4, 5, 1800, 200, 500, 100, 0, 400, 2, 5);
+(net, start_eps, end_eps, start_img, end_img, num_gpus, num_milp, time_limit_seconds, rep_each_k, rep_each_level, concretecheck_batch, supercheck_batch, pool_factor, probe_thickness) VALUES
+('bfc1', 1, 8, 0, 99, 4, 5, 1800, 200, 5000, 4000, 800, 2, 50),
+('afc5', 1, 8, 0, 99, 4, 5, 1800, 200, 5000, 4000, 800, 2, 50),
+('afc1', 1, 8, 0, 99, 4, 5, 1800, 200, 5000, 4000, 800, 2, 50),
+('afc2', 1, 8, 0, 99, 4, 5, 1800, 200, 5000, 4000, 800, 2, 50),
+('afc3', 1, 8, 0, 99, 4, 5, 1800, 200, 5000, 4000, 800, 2, 50),
+('afc4', 1, 8, 0, 99, 4, 5, 1800, 200, 5000, 4000, 800, 2, 50),
+('bcv1', 1, 6, 0, 99, 4, 5, 1800, 200, 500, 0, 400, 2, 5),
+('bcv2', 1, 6, 0, 99, 4, 5, 1800, 200, 500, 0, 400, 2, 5),
+('bcv3', 1, 6, 0, 99, 4, 5, 1800, 200, 500, 0, 400, 2, 5),
+('bcv4', 3, 3, 0, 9, 4, 5, 3600, 100, 100, 5, 5, 4, 1),
+('bcv5', 3, 3, 0, 9, 4, 50, 1800, 200, 500, 0, 400, 2, 5),
+('bcv6', 1, 6, 0, 99, 4, 5, 1800, 200, 500, 0, 400, 2, 5),
+('bcv7', 1, 6, 0, 99, 4, 5, 1800, 200, 500, 0, 400, 2, 5);
 
-INSERT OR REPLACE INTO lirpa_config (net, eps, method, time_limit_seconds, max_iteration, num_img) VALUES
-('bfc1', 1, 'CROWN-Optimized', 1800, 1000, 100),
-('bfc1', 2, 'CROWN-Optimized', 1800, 1000, 100),
-('bfc1', 3, 'CROWN-Optimized', 1800, 1000, 100),
-('bfc1', 4, 'CROWN-Optimized', 1800, 1000, 100),
-('bfc1', 5, 'CROWN-Optimized', 1800, 1000, 100),
-('bfc1', 6, 'CROWN-Optimized', 1800, 1000, 100),
-('bfc1', 7, 'CROWN-Optimized', 1800, 1000, 100),
-('bfc1', 8, 'CROWN-Optimized', 1800, 1000, 100),
-('bafc1', 1, 'CROWN-Optimized', 1800, 1000, 100),
-('bafc1', 2, 'CROWN-Optimized', 1800, 1000, 100),
-('bafc1', 3, 'CROWN-Optimized', 1800, 1000, 100),
-('bafc1', 4, 'CROWN-Optimized', 1800, 1000, 100),
-('bafc1', 5, 'CROWN-Optimized', 1800, 1000, 100),
-('bafc1', 6, 'CROWN-Optimized', 1800, 1000, 100),
-('bafc1', 7, 'CROWN-Optimized', 1800, 1000, 100),
-('bafc1', 8, 'CROWN-Optimized', 1800, 1000, 100),
-('afc1', 1, 'CROWN-Optimized', 1800, 1000, 100),
-('afc1', 2, 'CROWN-Optimized', 1800, 1000, 100),
-('afc1', 3, 'CROWN-Optimized', 1800, 1000, 100),
-('afc1', 4, 'CROWN-Optimized', 1800, 1000, 100),
-('afc1', 5, 'CROWN-Optimized', 1800, 1000, 100),
-('afc1', 6, 'CROWN-Optimized', 1800, 1000, 100),
-('afc1', 7, 'CROWN-Optimized', 1800, 1000, 100),
-('afc1', 8, 'CROWN-Optimized', 1800, 1000, 100),
-('afc2', 1, 'CROWN-Optimized', 1800, 1000, 100),
-('afc2', 2, 'CROWN-Optimized', 1800, 1000, 100),
-('afc2', 3, 'CROWN-Optimized', 1800, 1000, 100),
-('afc2', 4, 'CROWN-Optimized', 1800, 1000, 100),
-('afc2', 5, 'CROWN-Optimized', 1800, 1000, 100),
-('afc2', 6, 'CROWN-Optimized', 1800, 1000, 100),
-('afc2', 7, 'CROWN-Optimized', 1800, 1000, 100),
-('afc2', 8, 'CROWN-Optimized', 1800, 1000, 100),
-('afc3', 1, 'CROWN-Optimized', 1800, 1000, 100),
-('afc3', 2, 'CROWN-Optimized', 1800, 1000, 100),
-('afc3', 3, 'CROWN-Optimized', 1800, 1000, 100),
-('afc3', 4, 'CROWN-Optimized', 1800, 1000, 100),
-('afc3', 5, 'CROWN-Optimized', 1800, 1000, 100),
-('afc3', 6, 'CROWN-Optimized', 1800, 1000, 100),
-('afc3', 7, 'CROWN-Optimized', 1800, 1000, 100),
-('afc3', 8, 'CROWN-Optimized', 1800, 1000, 100),
-('fc4', 1, 'CROWN-Optimized', 1800, 1000, 100),
-('fc4', 2, 'CROWN-Optimized', 1800, 1000, 100),
-('fc4', 3, 'CROWN-Optimized', 1800, 1000, 100),
-('fc4', 4, 'CROWN-Optimized', 1800, 1000, 100),
-('fc4', 5, 'CROWN-Optimized', 1800, 1000, 100),
-('fc4', 6, 'CROWN-Optimized', 1800, 1000, 100),
-('fc4', 7, 'CROWN-Optimized', 1800, 1000, 100),
-('fc4', 8, 'CROWN-Optimized', 1800, 1000, 100);
+INSERT OR REPLACE INTO lirpa_config (net, start_eps, end_eps, start_img, end_img, method, time_limit_seconds, max_iteration) VALUES
+('bfc1', 1, 8, 0, 99, 'CROWN-Optimized', 1800, 1000),
+('afc5', 1, 8, 0, 99, 'CROWN-Optimized', 1800, 1000),
+('afc1', 1, 8, 0, 99, 'CROWN-Optimized', 1800, 1000),
+('afc2', 1, 8, 0, 99, 'CROWN-Optimized', 1800, 1000),
+('afc3', 1, 8, 0, 99, 'CROWN-Optimized', 1800, 1000),
+('afc4', 1, 8, 0, 99, 'CROWN-Optimized', 1800, 1000);
 
-INSERT OR REPLACE INTO milp_config (net, eps, time_limit_seconds, num_img) VALUES
-('bfc1', 1, 1800, 100),
-('bfc1', 2, 1800, 100),
-('bfc1', 3, 1800, 100),
-('bfc1', 4, 1800, 100),
-('bfc1', 5, 1800, 100),
-('bfc1', 6, 1800, 100),
-('bfc1', 7, 1800, 100),
-('bfc1', 8, 1800, 100),
-('bafc1', 1, 1800, 100),
-('bafc1', 2, 1800, 100),
-('bafc1', 3, 1800, 100),
-('bafc1', 4, 1800, 100),
-('bafc1', 5, 1800, 100),
-('bafc1', 6, 1800, 100),
-('bafc1', 7, 1800, 100),
-('bafc1', 8, 1800, 100),
-('afc1', 1, 1800, 100),
-('afc1', 2, 1800, 100),
-('afc1', 3, 1800, 100),
-('afc1', 4, 1800, 100),
-('afc1', 5, 1800, 100),
-('afc1', 6, 1800, 100),
-('afc1', 7, 1800, 100),
-('afc1', 8, 1800, 100),
-('afc2', 1, 1800, 100),
-('afc2', 2, 1800, 100),
-('afc2', 3, 1800, 100),
-('afc2', 4, 1800, 100),
-('afc2', 5, 1800, 100),
-('afc2', 6, 1800, 100),
-('afc2', 7, 1800, 100),
-('afc2', 8, 1800, 100),
-('afc3', 1, 1800, 100),
-('afc3', 2, 1800, 100),
-('afc3', 3, 1800, 100),
-('afc3', 4, 1800, 100),
-('afc3', 5, 1800, 100),
-('afc3', 6, 1800, 100),
-('afc3', 7, 1800, 100),
-('afc3', 8, 1800, 100),
-('fc4', 1, 1800, 100),
-('fc4', 2, 1800, 100),
-('fc4', 3, 1800, 100),
-('fc4', 4, 1800, 100),
-('fc4', 5, 1800, 100),
-('fc4', 6, 1800, 100),
-('fc4', 7, 1800, 100),
-('fc4', 8, 1800, 100),
-('bcv1', 1, 1800, 100),
-('bcv1', 2, 1800, 100),
-('bcv1', 3, 1800, 100),
-('bcv1', 4, 1800, 100),
-('bcv1', 5, 1800, 100),
-('bcv1', 6, 1800, 100),
-('bcv2', 1, 1800, 100),
-('bcv2', 2, 1800, 100),
-('bcv2', 3, 1800, 100),
-('bcv2', 4, 1800, 100),
-('bcv2', 5, 1800, 100),
-('bcv2', 6, 1800, 100),
-('bcv3', 1, 1800, 100),
-('bcv3', 2, 1800, 100),
-('bcv3', 3, 1800, 100),
-('bcv3', 4, 1800, 100),
-('bcv3', 5, 1800, 100),
-('bcv3', 6, 1800, 100),
-('bcv4', 3, 3600, 10),
-('bcv5', 3, 1800, 10),
-('bcv6', 1, 1800, 100),
-('bcv6', 2, 1800, 100),
-('bcv6', 3, 1800, 100),
-('bcv6', 4, 1800, 100),
-('bcv6', 5, 1800, 100),
-('bcv6', 6, 1800, 100),
-('bcv7', 1, 1800, 100),
-('bcv7', 2, 1800, 100),
-('bcv7', 3, 1800, 100),
-('bcv7', 4, 1800, 100),
-('bcv7', 5, 1800, 100),
-('bcv7', 6, 1800, 100);
-
-INSERT OR REPLACE INTO coverd_config (net, eps, time_limit_seconds, gpu_num, num_img) VALUES
-('bafc1', 3, 1800, 4, 100),
-('bafc1', 4, 1800, 4, 100),
-('bafc1', 5, 1800, 4, 100),
-('bafc1', 6, 1800, 4, 100),
-('afc1', 3, 1800, 4, 100),
-('afc1', 4, 1800, 4, 100),
-('afc1', 5, 1800, 4, 100),
-('afc1', 6, 1800, 4, 100),
-('afc2', 3, 1800, 4, 100),
-('afc2', 4, 1800, 4, 100),
-('afc2', 5, 1800, 4, 100),
-('afc2', 6, 1800, 4, 100),
-('afc3', 3, 1800, 4, 100),
-('afc3', 4, 1800, 4, 100),
-('afc3', 5, 1800, 4, 100),
-('afc3', 6, 1800, 4, 100),
-('fc4', 3, 1800, 4, 100),
-('fc4', 4, 1800, 4, 100),
-('fc4', 5, 1800, 4, 100),
-('fc4', 6, 1800, 4, 100);
+INSERT OR REPLACE INTO milp_config (net, start_eps, end_eps, start_img, end_img, time_limit_seconds) VALUES
+('bfc1', 1, 8, 0, 99, 1800),
+('afc5', 1, 8, 0, 99, 1800),
+('afc1', 1, 8, 0, 99, 1800),
+('afc2', 1, 8, 0, 99, 1800),
+('afc3', 1, 8, 0, 99, 1800),
+('afc4', 1, 8, 0, 99, 1800),
+('bcv1', 1, 6, 0, 99, 1800),
+('bcv2', 1, 6, 0, 99, 1800),
+('bcv3', 1, 6, 0, 99, 1800),
+('bcv4', 3, 3, 0, 9, 3600),
+('bcv5', 3, 3, 0, 9, 1800),
+('bcv6', 1, 6, 0, 99, 1800),
+('bcv7', 1, 6, 0, 99, 1800);

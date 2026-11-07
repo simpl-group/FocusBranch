@@ -120,7 +120,7 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         dataset_name=DatasetName.MNIST,
         need_normalization=False
     ),
-    'fc4': ModelSpec(
+    'afc4': ModelSpec(
         model_path=str(BASE_DIR / "adversarial/mlp_3layer_l0adv"),
         constructor=FCN,
         layer_params=[
@@ -195,7 +195,7 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         dataset_name=DatasetName.MNIST,
         need_normalization=True  # from line 97, coverd.py
     ),
-    'bafc1': ModelSpec(
+    'afc5': ModelSpec(
         model_path=str(BASE_DIR / "adversarial/MNIST_a_6x200_PGD"),
         constructor=FCN,
         layer_params=[
