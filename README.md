@@ -1,6 +1,6 @@
 # FocusBranch
 
-Official code repo for **FocusBranch: Combinatorial Branch-and-Bound for $\ell_0$ Neural Network Robustness Verification**, accepted at NeurIPS 2026. [[OpenReview](https://openreview.net/forum?id=VoRt2Q8ngL)] [[arXiv](#) (coming soon)]
+Official code repo for **FocusBranch: Combinatorial Branch-and-Bound for $\ell_0$ Neural Network Robustness Verification**, accepted at NeurIPS 2026. [[OpenReview](https://openreview.net/forum?id=VoRt2Q8ngL)] [[arXiv](https://arxiv.org/abs/2611.12024)]
 
 <img src="fig_node_branching.svg#gh-light-mode-only" alt="Node branching" width="900">
 <img src="fig_node_branching_dark.svg#gh-dark-mode-only" alt="Node branching" width="900">
